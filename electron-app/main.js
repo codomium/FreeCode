@@ -53,7 +53,11 @@ function findV2Src() {
     }
     throw new Error(
         'Cannot locate v2/src. Checked:\n' +
-        candidates.map(c => '  ' + c).join('\n')
+        candidates.map(c => '  ' + c).join('\n') + '\n\n' +
+        'To fix this:\n' +
+        '  • Development: ensure the v2/ directory exists as a sibling of electron-app/\n' +
+        '  • Packaged build: re-run `npm run build` from the electron-app/ directory\n' +
+        '    so that electron-builder copies v2/src into the app resources.'
     );
 }
 
@@ -310,9 +314,12 @@ function createWindow() {
         icon: path.join(__dirname, 'renderer', 'icon.ico'),
         webPreferences: {
             preload:           path.join(__dirname, 'preload.js'),
-            contextIsolation:  true,
-            nodeIntegration:   false,
-            sandbox:           false,   // required for preload to access require()
+            contextIsolation:  true,   // renderer cannot access Node/Electron directly
+            nodeIntegration:   false,  // renderer has no Node.js access
+            // sandbox:false is required so the preload script can call require('electron')
+            // to access ipcRenderer and contextBridge. contextIsolation:true above
+            // is the primary security boundary between renderer and main process.
+            sandbox:           false,
         },
         backgroundColor: '#1e1e1e',
         show: false,

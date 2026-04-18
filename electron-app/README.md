@@ -48,7 +48,12 @@ The app opens a window with the familiar chat UI. On first launch, the setup gui
 Set the appropriate variable before launching:
 
 ```powershell
+# PowerShell
 $env:ANTHROPIC_API_KEY = "sk-ant-..."
+npm start
+
+# cmd.exe
+set ANTHROPIC_API_KEY=sk-ant-...
 npm start
 ```
 
