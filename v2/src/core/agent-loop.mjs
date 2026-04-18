@@ -891,10 +891,14 @@ function detectRepetition(text) {
     for (let phraseLen = 20; phraseLen <= 300; phraseLen += 10) {
         if (phraseLen >= tail.length) break;
         const phrase = tail.slice(-phraseLen);
-        // Escape regex special chars so the phrase is matched literally
-        const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const occurrences = (tail.match(new RegExp(escaped, 'g')) || []).length;
-        if (occurrences >= 5) return true;
+        // Count non-overlapping occurrences using indexOf (no regex compilation)
+        let count = 0;
+        let pos = 0;
+        while ((pos = tail.indexOf(phrase, pos)) !== -1) {
+            count++;
+            pos += phraseLen; // skip past this match (non-overlapping)
+            if (count >= 5) return true;
+        }
     }
 
     return false;

@@ -67,7 +67,7 @@
     };
 
     /** Keywords that indicate a retryable rate-limit/overload error in the UI */
-    const RATE_LIMIT_PATTERN = /rate.?limit|overload|too.?many.?request|capacity|529|503|quota/i;
+    const RATE_LIMIT_PATTERN = /rate.?limit|overload|too.?many.?request|capacity|529|503|502|504|bad.?gateway|service.?unavailable|quota/i;
 
     // ── DOM refs ─────────────────────────────────────────────────────────────
     const messagesEl   = document.getElementById('messages');

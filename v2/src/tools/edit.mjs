@@ -11,6 +11,9 @@ import fs from 'fs';
 import path from 'path';
 import { hasBeenRead, markRead } from './read.mjs';
 
+/** Minimum length for a trimmed line to be used as a similarity search needle */
+const MIN_SEARCH_LINE_LENGTH = 4;
+
 /**
  * When old_string is not found verbatim, find lines in the file that contain
  * the first non-empty trimmed line of old_string. Returns a formatted hint
@@ -23,7 +26,7 @@ import { hasBeenRead, markRead } from './read.mjs';
  */
 function findSimilarLinesHint(content, oldString, filePath) {
     // Find the first non-empty, non-whitespace line of old_string as the needle
-    const needle = (oldString || '').split('\n').map(l => l.trim()).find(l => l.length >= 4);
+    const needle = (oldString || '').split('\n').map(l => l.trim()).find(l => l.length >= MIN_SEARCH_LINE_LENGTH);
     if (!needle) return '';
 
     const lines = content.split('\n');
