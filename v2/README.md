@@ -26,7 +26,7 @@ v2/src/
 │   └── scheduler.mjs        # Cron task scheduling
 ├── tools/                   # 25 tools
 │   ├── registry.mjs         # validateInput/call interface
-│   ├── bash.mjs             # Shell (sandboxed, timeout, background)
+│   ├── bash.mjs             # Shell (async-generator streaming, stdin injection, timeout, background)
 │   ├── read.mjs             # File read (PDF, binary detect, line nums)
 │   ├── edit.mjs             # Edit (replace_all, uniqueness check)
 │   ├── write.mjs            # Write (mkdir, overwrite protection)

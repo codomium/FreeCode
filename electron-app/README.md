@@ -6,6 +6,19 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New
+
+### ✏️ Edit diff view
+When the agent edits a file the tool card auto-expands and shows a red/green diff — removed lines in red, added lines in green — so you always see exactly what changed.
+
+### 📄 Read line-range preview
+The Read tool card header shows the filename and line range the agent inspected (e.g. `app.js · lines 1–50`).
+
+### ⚡ Bash live streaming + interactive stdin
+Bash output streams to the tool card in real-time as the process runs. While a command is running an input bar appears at the bottom of the card so you can type stdin input and interact with the process directly.
+
+---
+
 ## Quick Start (Development)
 
 ### Prerequisites

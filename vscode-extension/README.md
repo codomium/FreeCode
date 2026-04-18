@@ -4,6 +4,23 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
 
 ---
 
+## What's New in v1.5
+
+### ✏️ Edit diff view — see every change highlighted
+When the agent edits a file the tool card **auto-expands** and shows a full red/green diff, exactly like VS Code's built-in diff viewer:
+- 🔴 Removed lines are highlighted in red with a strikethrough
+- 🟢 Added lines are highlighted in green
+- The diff is computed from `old_string` vs `new_string` so you always see exactly what changed
+
+### 📄 Read tool — line-range preview
+The Read tool card header now shows `filename.js · lines 1–50`, so you can see at a glance exactly which part of a file the agent inspected.
+
+### ⚡ Bash live streaming + interactive stdin
+- **Live output** — Bash output streams token-by-token to the tool card as the process runs instead of appearing only after it exits.
+- **Interactive stdin** — while a command is running an input bar appears at the bottom of the card. Type and press **↵ Send** (or Enter) to send text to the process's standard input — great for CLIs that prompt for confirmation, passwords, or answers.
+
+---
+
 ## Features
 
 ### 🗂️ Proactive workspace analysis (new in v1.2)
@@ -22,6 +39,9 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
 - **Apply to file** — apply AI-suggested code directly to the active editor or pick a file
 - **Streaming responses** — see tokens arrive in real-time with animated cursor
 - **Tool visualization** — collapsible cards showing each tool execution and result
+    - **Edit cards** auto-expand with a red/green diff of every file change
+    - **Read cards** show filename and line range in the header
+    - **Bash cards** stream live output and expose an interactive stdin bar while the command is running
 - **Extended thinking** — expandable thinking blocks when the model reasons
 - **@file context** — type `@filename` in the input to inject file contents into the prompt
 - **File picker** — add any workspace file to context with the 📄 button
@@ -80,7 +100,7 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
    extension bundle so all functionality is available after installation.
 3. Install it in VSCode:
    ```bash
-   code --install-extension open-claude-code-1.2.0.vsix
+   code --install-extension open-claude-code-1.5.0.vsix
    ```
    Or use **Extensions → … → Install from VSIX…** in the VSCode UI.
 
