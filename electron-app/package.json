@@ -1,0 +1,81 @@
+{
+  "name": "open-claude-code",
+  "productName": "Open Claude Code",
+  "version": "1.0.0",
+  "description": "Open Claude Code — standalone AI coding assistant for Windows 11",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --dir --win",
+    "build:portable": "electron-builder --win portable"
+  },
+  "keywords": [
+    "claude",
+    "ai",
+    "coding-assistant",
+    "electron",
+    "windows"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^41.2.1",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.openclaudecode.app",
+    "productName": "Open Claude Code",
+    "copyright": "Copyright © 2025 Open Claude Code",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "dialog-preload.js",
+      "api-key-dialog.html",
+      "renderer/**/*",
+      "!renderer/node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../vscode-extension/agent-bridge.mjs",
+        "to": "agent-bridge.mjs"
+      },
+      {
+        "from": "../v2/src",
+        "to": "v2/src"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "renderer/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Open Claude Code"
+    },
+    "portable": {
+      "artifactName": "OpenClaudeCode-${version}-portable.exe"
+    },
+    "publish": null
+  }
+}

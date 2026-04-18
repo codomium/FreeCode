@@ -1,0 +1,1044 @@
+'use strict';
+/**
+ * main.js — Open Claude Code Electron Main Process
+ *
+ * Standalone Windows 11 application that implements the Open Claude Code agent.
+ * Ports the VSCode extension's functionality (extension.js) to Electron, replacing
+ * VSCode-specific APIs with Electron equivalents:
+ *
+ *   • vscode.workspace.getConfiguration()  → JSON settings file in userData
+ *   • vscode.secrets                        → Electron safeStorage
+ *   • vscode.window.showOpenDialog()        → dialog.showOpenDialogSync()
+ *   • vscode.env.clipboard                  → clipboard module
+ *   • context.globalState                   → JSON files in userData
+ *   • vscode.window.activeTextEditor        → not available (standalone app)
+ *   • vscode.languages.getDiagnostics()     → not available (standalone app)
+ *
+ * The Open Claude Code agent loop from v2/src runs **in-process** (imported
+ * dynamically as ES modules) rather than as a subprocess. This avoids the
+ * Node.js binary path issue on Windows and simplifies the architecture.
+ */
+
+const { app, BrowserWindow, ipcMain, dialog, clipboard, shell, safeStorage, Menu } = require('electron');
+const path = require('path');
+const fs   = require('fs');
+const os   = require('os');
+const { execFile } = require('child_process');
+const { pathToFileURL } = require('url');
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const MAX_SESSION_MESSAGES = 200;
+const RETRY_DELAYS_MS = [3000, 8000, 20000];
+
+/** Returns true for rate-limit / server-overload errors worth retrying. */
+function isRateLimitError(msg) {
+    return /rate.?limit|overload|too.?many.?request|capacity|529|503|quota/i.test(msg || '');
+}
+
+// ── Paths ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Locate the v2/src directory.
+ * In development: ../v2/src (sibling of electron-app/)
+ * In a packaged build: resources/v2/src
+ */
+function findV2Src() {
+    const candidates = [
+        path.join(__dirname, '..', 'v2', 'src'),          // development
+        path.join(process.resourcesPath || '', 'v2', 'src'), // packaged
+    ];
+    for (const c of candidates) {
+        if (fs.existsSync(path.join(c, 'core', 'agent-loop.mjs'))) return c;
+    }
+    throw new Error(
+        'Cannot locate v2/src. Checked:\n' +
+        candidates.map(c => '  ' + c).join('\n')
+    );
+}
+
+// ── Persistent storage helpers ────────────────────────────────────────────────
+
+let _userData = null;
+function getUserData() {
+    if (!_userData) {
+        _userData = app.getPath('userData');
+        fs.mkdirSync(_userData, { recursive: true });
+    }
+    return _userData;
+}
+
+function readJson(name, defaultVal) {
+    try {
+        const p = path.join(getUserData(), name + '.json');
+        return JSON.parse(fs.readFileSync(p, 'utf8'));
+    } catch {
+        return defaultVal;
+    }
+}
+
+function writeJson(name, data) {
+    const p = path.join(getUserData(), name + '.json');
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+const DEFAULT_SETTINGS = {
+    model:              'claude-sonnet-4-6',
+    permissionMode:     'default',
+    maxTurns:           20,
+    showToolOutput:     true,
+    nvidiaThinkingMode: false,
+    nvidiaApiKey:       '',
+    autoAttachActiveFile: false,
+    pinnedFiles:        [],
+    workspacePath:      os.homedir(),
+};
+
+function getSettings() {
+    return Object.assign({}, DEFAULT_SETTINGS, readJson('settings', {}));
+}
+
+function saveSetting(key, value) {
+    const s = getSettings();
+    s[key] = value;
+    writeJson('settings', s);
+}
+
+// ── API-key storage (safeStorage for Windows Credential Store) ────────────────
+
+const API_KEY_FILE = 'apikey.enc';
+
+function storeApiKey(keyVal) {
+    if (safeStorage.isEncryptionAvailable()) {
+        const enc = safeStorage.encryptString(keyVal);
+        fs.writeFileSync(path.join(getUserData(), API_KEY_FILE), enc);
+    } else {
+        // Fallback: store in plaintext settings (warns user)
+        saveSetting('_apiKeyPlain', keyVal);
+    }
+}
+
+function loadApiKey() {
+    try {
+        const filePath = path.join(getUserData(), API_KEY_FILE);
+        if (fs.existsSync(filePath)) {
+            const enc = fs.readFileSync(filePath);
+            return safeStorage.isEncryptionAvailable()
+                ? safeStorage.decryptString(enc)
+                : '';
+        }
+    } catch { /* ignore */ }
+    // Fallback: plaintext
+    return getSettings()._apiKeyPlain || '';
+}
+
+function hasApiKey() {
+    const storedKey = loadApiKey();
+    if (storedKey) return true;
+    return !!(
+        process.env.ANTHROPIC_API_KEY ||
+        process.env.OPENAI_API_KEY    ||
+        process.env.GOOGLE_API_KEY    ||
+        process.env.GEMINI_API_KEY    ||
+        process.env.NVIDIA_API_KEY    ||
+        getSettings().nvidiaApiKey
+    );
+}
+
+// ── In-Process Agent Bridge ───────────────────────────────────────────────────
+/**
+ * Runs the Open Claude Code agent loop in the Electron main process.
+ * Mirrors the message protocol of agent-bridge.mjs but uses IPC instead of
+ * stdin/stdout to communicate with the renderer.
+ */
+class InProcessAgentBridge {
+    constructor() {
+        this._loop        = null;
+        this._isCancelled = false;
+        this._ready       = false;
+        this._initPromise = null;
+        this._model       = null;
+    }
+
+    async _init() {
+        if (this._initPromise) return this._initPromise;
+        this._initPromise = (async () => {
+            const v2Src = findV2Src();
+            const v2url = (rel) => pathToFileURL(path.join(v2Src, rel)).href;
+
+            const { createAgentLoop }       = await import(v2url('core/agent-loop.mjs'));
+            const { createToolRegistry }    = await import(v2url('tools/registry.mjs'));
+            const { createPermissionChecker } = await import(v2url('permissions/checker.mjs'));
+            const { loadSettings }          = await import(v2url('config/settings.mjs'));
+            const { HookEngine }            = await import(v2url('hooks/engine.mjs'));
+            const { AgentLoader }           = await import(v2url('agents/loader.mjs'));
+            const { SkillsLoader }          = await import(v2url('skills/loader.mjs'));
+
+            const settings = await loadSettings();
+
+            const tools       = createToolRegistry();
+            const permissions = createPermissionChecker(settings.permissions);
+            const hooks       = new HookEngine(settings.hooks || {});
+
+            const agentLoader = new AgentLoader();
+            agentLoader.load();
+            const skillsLoader = new SkillsLoader();
+            skillsLoader.load();
+
+            const skillTool = tools.get('Skill');
+            if (skillTool) skillTool._skillsLoader = skillsLoader;
+
+            const appSettings  = getSettings();
+            const model        = this._model || appSettings.model || 'claude-sonnet-4-6';
+
+            this._loop = createAgentLoop({ model, tools, permissions, settings, hooks });
+            this._loop.state._agentLoader   = agentLoader;
+            this._loop.state._skillsLoader  = skillsLoader;
+            this._loop.state._hooks         = settings.hooks;
+            this._loop.state._permissionMode = appSettings.permissionMode || 'default';
+            this._ready = true;
+        })();
+        return this._initPromise;
+    }
+
+    async run(message, onEvent) {
+        this._isCancelled = false;
+        try {
+            await this._init();
+        } catch (err) {
+            onEvent({ type: 'error', message: 'Failed to init agent: ' + err.message });
+            onEvent({ type: 'stop', reason: 'error' });
+            return;
+        }
+        try {
+            for await (const event of this._loop.run(message)) {
+                if (this._isCancelled) break;
+                onEvent(event);
+            }
+            if (!this._isCancelled) {
+                onEvent({ type: 'stop', reason: 'end_turn' });
+            }
+        } catch (err) {
+            onEvent({ type: 'error', message: err.message });
+            onEvent({ type: 'stop', reason: 'error' });
+        }
+    }
+
+    cancel() {
+        this._isCancelled = true;
+    }
+
+    reset() {
+        if (this._loop) {
+            this._loop.state.messages   = [];
+            this._loop.state.turnCount  = 0;
+            this._loop.state.tokenUsage = { input: 0, output: 0 };
+        }
+    }
+
+    switchModel(model) {
+        this._model = model;
+        if (this._loop) {
+            this._loop.state.model = model;
+        }
+    }
+
+    resume(messages) {
+        if (!this._loop) return;
+        this._loop.state.messages = messages
+            .filter(m => (m.type === 'user' || m.type === 'assistant') && m.text)
+            .map(m => {
+                if (m.type === 'user') return { role: 'user', content: m.text };
+                return { role: 'assistant', content: [{ type: 'text', text: m.text }] };
+            });
+        this._loop.state.turnCount = messages.filter(m => m.type === 'user').length;
+        this._loop.state.tokenUsage = { input: 0, output: 0 };
+    }
+
+    /**
+     * Reinitialise the bridge with new environment variables (after API key or mode change).
+     */
+    reinit() {
+        this._loop = null;
+        this._ready = false;
+        this._initPromise = null;
+    }
+}
+
+// ── Global state ──────────────────────────────────────────────────────────────
+
+/** @type {BrowserWindow|null} */
+let mainWindow = null;
+
+/** @type {InProcessAgentBridge|null} */
+let agentBridge = null;
+
+/** @type {boolean} */
+let isCancelled = false;
+
+function getBridge() {
+    if (!agentBridge) {
+        agentBridge = new InProcessAgentBridge();
+    }
+    return agentBridge;
+}
+
+function applyEnvFromSettings() {
+    const s = getSettings();
+    const key = loadApiKey() || process.env.ANTHROPIC_API_KEY || '';
+    if (key) process.env.ANTHROPIC_API_KEY = key;
+    if (s.nvidiaApiKey) process.env.NVIDIA_API_KEY = s.nvidiaApiKey;
+    process.env.ANTHROPIC_MODEL             = s.model || 'claude-sonnet-4-6';
+    process.env.CLAUDE_CODE_PERMISSION_MODE = s.permissionMode || 'default';
+    process.env.CLAUDE_CODE_MAX_TURNS       = String(s.maxTurns || 20);
+    process.env.NVIDIA_THINKING_MODE        = String(s.nvidiaThinkingMode || false);
+    // Set cwd to workspace
+    try { process.chdir(s.workspacePath || os.homedir()); } catch { /* ignore */ }
+}
+
+// ── BrowserWindow factory ─────────────────────────────────────────────────────
+
+function createWindow() {
+    mainWindow = new BrowserWindow({
+        width:  1200,
+        height: 800,
+        minWidth:  600,
+        minHeight: 500,
+        title: 'Open Claude Code',
+        icon: path.join(__dirname, 'renderer', 'icon.ico'),
+        webPreferences: {
+            preload:           path.join(__dirname, 'preload.js'),
+            contextIsolation:  true,
+            nodeIntegration:   false,
+            sandbox:           false,   // required for preload to access require()
+        },
+        backgroundColor: '#1e1e1e',
+        show: false,
+    });
+
+    mainWindow.once('ready-to-show', () => {
+        mainWindow.show();
+    });
+
+    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+    if (process.env.OCC_DEV) {
+        mainWindow.webContents.openDevTools();
+    }
+
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+    });
+}
+
+// ── Application menu ──────────────────────────────────────────────────────────
+
+function buildMenu() {
+    const template = [
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'Open Workspace Folder…',
+                    accelerator: 'CmdOrCtrl+Shift+O',
+                    async click() {
+                        const result = dialog.showOpenDialogSync(mainWindow, {
+                            title:      'Select workspace folder',
+                            properties: ['openDirectory'],
+                        });
+                        if (result && result[0]) {
+                            saveSetting('workspacePath', result[0]);
+                            applyEnvFromSettings();
+                            if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+                            mainWindow && mainWindow.webContents.send('main-message', {
+                                type: 'workspaceChanged',
+                                path: result[0],
+                            });
+                        }
+                    },
+                },
+                { type: 'separator' },
+                { role: 'quit', label: 'Exit' },
+            ],
+        },
+        {
+            label: 'Edit',
+            submenu: [
+                { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+                { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+            ],
+        },
+        {
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'forceReload' },
+                { type: 'separator' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { role: 'resetZoom' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' },
+            ],
+        },
+        {
+            label: 'Agent',
+            submenu: [
+                {
+                    label: 'Set API Key…',
+                    accelerator: 'CmdOrCtrl+Shift+K',
+                    async click() { await handleSetApiKey(); },
+                },
+                {
+                    label: 'Clear Session',
+                    accelerator: 'CmdOrCtrl+Shift+C',
+                    click() {
+                        if (agentBridge) agentBridge.reset();
+                        mainWindow && mainWindow.webContents.send('main-message', { type: 'sessionCleared' });
+                    },
+                },
+            ],
+        },
+        {
+            label: 'Help',
+            submenu: [
+                {
+                    label: 'Open GitHub Repository',
+                    click() { shell.openExternal('https://github.com/codomium/FreeCode'); },
+                },
+                {
+                    label: 'Anthropic Console (get API key)',
+                    click() { shell.openExternal('https://console.anthropic.com/settings/keys'); },
+                },
+            ],
+        },
+    ];
+
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+// ── Set API key dialog ────────────────────────────────────────────────────────
+
+async function handleSetApiKey() {
+    const result = await showApiKeyDialog();
+    if (result && result.trim().length > 10) {
+        storeApiKey(result.trim());
+        applyEnvFromSettings();
+        if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+        mainWindow && mainWindow.webContents.send('main-message', { type: 'apiKeySet' });
+        dialog.showMessageBoxSync(mainWindow, {
+            type:    'info',
+            title:   'API Key Saved',
+            message: 'API key saved successfully. The agent will use it on the next message.',
+            buttons: ['OK'],
+        });
+    }
+}
+
+/**
+ * Open a modal dialog window for API key input.
+ * Returns the entered key string, or null if cancelled.
+ */
+function showApiKeyDialog() {
+    return new Promise((resolve) => {
+        const dialogWin = new BrowserWindow({
+            width:       520,
+            height:      230,
+            parent:      mainWindow,
+            modal:       true,
+            show:        false,
+            resizable:   false,
+            minimizable: false,
+            maximizable: false,
+            title:       'Set API Key — Open Claude Code',
+            webPreferences: {
+                preload:          path.join(__dirname, 'dialog-preload.js'),
+                contextIsolation: true,
+                nodeIntegration:  false,
+                sandbox:          false,
+            },
+            backgroundColor: '#1e1e1e',
+        });
+
+        dialogWin.setMenu(null);
+        dialogWin.loadFile(path.join(__dirname, 'api-key-dialog.html'));
+        dialogWin.once('ready-to-show', () => dialogWin.show());
+
+        const onSubmit = (_event, value) => {
+            cleanup();
+            resolve(value || null);
+        };
+        const onCancel = () => {
+            cleanup();
+            resolve(null);
+        };
+
+        ipcMain.once('dialog-submit', onSubmit);
+        ipcMain.once('dialog-cancel', onCancel);
+
+        function cleanup() {
+            ipcMain.removeListener('dialog-submit', onSubmit);
+            ipcMain.removeListener('dialog-cancel', onCancel);
+            if (!dialogWin.isDestroyed()) dialogWin.close();
+        }
+
+        dialogWin.on('closed', () => {
+            cleanup();
+            resolve(null);
+        });
+    });
+}
+
+// ── IPC message handlers ──────────────────────────────────────────────────────
+
+ipcMain.on('renderer-message', async (event, msg) => {
+    if (!msg || typeof msg !== 'object') return;
+
+    const send = (data) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('main-message', data);
+        }
+    };
+
+    switch (msg.type) {
+
+        // ── Renderer ready: send initialisation data ──────────────────────────
+        case 'ready': {
+            const s = getSettings();
+            const activeSession = readJson('activeSession', null);
+            const activeMessages = (activeSession && Array.isArray(activeSession.messages) && activeSession.messages.length > 0)
+                ? activeSession.messages : null;
+            const activeSessionId = (activeSession && activeSession.sessionId) || null;
+
+            send({
+                type:               'initialized',
+                model:              s.model || 'claude-sonnet-4-6',
+                mode:               s.permissionMode || 'default',
+                thinkingMode:       !!s.nvidiaThinkingMode,
+                autoAttachActiveFile: !!s.autoAttachActiveFile,
+                hasApiKey:          hasApiKey(),
+                activeSession:      activeMessages,
+                activeSessionId,
+                workspacePath:      s.workspacePath || os.homedir(),
+            });
+
+            // Auto-restore session into agent bridge
+            if (activeMessages && activeMessages.length > 0) {
+                await getBridge()._init().catch(() => {});
+                getBridge().resume(activeMessages);
+            }
+            break;
+        }
+
+        // ── Send a chat message to the agent ──────────────────────────────────
+        case 'send': {
+            await handleRunPrompt(msg.message, msg.contextFiles, msg.fileRefs, send);
+            break;
+        }
+
+        // ── Cancel current generation ─────────────────────────────────────────
+        case 'cancel': {
+            isCancelled = true;
+            if (agentBridge) agentBridge.cancel();
+            break;
+        }
+
+        // ── Clear session ─────────────────────────────────────────────────────
+        case 'clear': {
+            if (agentBridge) agentBridge.reset();
+            isCancelled = false;
+            send({ type: 'sessionCleared' });
+            break;
+        }
+
+        // ── Switch model ──────────────────────────────────────────────────────
+        case 'model': {
+            saveSetting('model', msg.model);
+            if (agentBridge) agentBridge.switchModel(msg.model);
+            process.env.ANTHROPIC_MODEL = msg.model;
+            send({ type: 'modelChanged', model: msg.model });
+            break;
+        }
+
+        // ── Switch permission mode ────────────────────────────────────────────
+        case 'mode': {
+            saveSetting('permissionMode', msg.mode);
+            process.env.CLAUDE_CODE_PERMISSION_MODE = msg.mode;
+            if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+            break;
+        }
+
+        // ── Toggle NVIDIA thinking mode ───────────────────────────────────────
+        case 'thinkingMode': {
+            saveSetting('nvidiaThinkingMode', !!msg.enabled);
+            process.env.NVIDIA_THINKING_MODE = String(!!msg.enabled);
+            if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+            send({ type: 'thinkingModeChanged', enabled: !!msg.enabled });
+            break;
+        }
+
+        // ── Copy text to clipboard ────────────────────────────────────────────
+        case 'copyToClipboard': {
+            clipboard.writeText(String(msg.text || ''));
+            break;
+        }
+
+        // ── File picker ───────────────────────────────────────────────────────
+        case 'pickFile': {
+            const files = dialog.showOpenDialogSync(mainWindow, {
+                title:      'Add file to context',
+                properties: ['openFile'],
+            });
+            if (files && files[0]) {
+                await handleAddContextFile(files[0], send);
+            }
+            break;
+        }
+
+        // ── Add specific file to context ──────────────────────────────────────
+        case 'addContextFile': {
+            if (msg.path) await handleAddContextFile(msg.path, send);
+            break;
+        }
+
+        // ── File search (autocomplete) ────────────────────────────────────────
+        case 'fileSearch': {
+            const results = searchFiles(msg.query || '');
+            send({ type: 'fileSearchResults', files: results });
+            break;
+        }
+
+        // ── Apply code to a file (with file picker) ───────────────────────────
+        case 'applyCodeToFile': {
+            const files = dialog.showOpenDialogSync(mainWindow, {
+                title:      'Apply code to this file',
+                properties: ['openFile'],
+            });
+            if (files && files[0]) {
+                try {
+                    fs.writeFileSync(files[0], msg.code || '', 'utf8');
+                    send({ type: 'info', message: 'Code applied to ' + path.basename(files[0]) });
+                } catch (err) {
+                    send({ type: 'error', message: 'Could not write file: ' + err.message });
+                }
+            }
+            break;
+        }
+
+        // ── Export conversation as Markdown ───────────────────────────────────
+        case 'exportConversation': {
+            const content     = String(msg.markdown || '');
+            const defaultName = 'conversation-' + new Date().toISOString().slice(0, 10) + '.md';
+            const savePath = dialog.showSaveDialogSync(mainWindow, {
+                title:       'Export conversation as Markdown',
+                defaultPath: path.join(getSettings().workspacePath || os.homedir(), defaultName),
+                filters:     [{ name: 'Markdown', extensions: ['md'] }],
+            });
+            if (savePath) {
+                try {
+                    fs.writeFileSync(savePath, content, 'utf8');
+                } catch (err) {
+                    send({ type: 'error', message: 'Export failed: ' + err.message });
+                }
+            }
+            break;
+        }
+
+        // ── Get active file content (not available in standalone app) ─────────
+        case 'getActiveFileContent': {
+            send({ type: 'activeFileContent', content: null, fileName: null });
+            break;
+        }
+
+        // ── Add active file (not available; no editor integration) ────────────
+        case 'addActiveFile': {
+            // In standalone mode, prompt the user to pick a file instead
+            const files = dialog.showOpenDialogSync(mainWindow, {
+                title:      'Add file to context',
+                properties: ['openFile'],
+            });
+            if (files && files[0]) {
+                await handleAddContextFile(files[0], send);
+            }
+            break;
+        }
+
+        // ── Git context ───────────────────────────────────────────────────────
+        case 'getGitContext': {
+            const cwd = getSettings().workspacePath || os.homedir();
+            const run = (args) => new Promise((resolve) => {
+                execFile('git', args, { cwd, timeout: 5000 }, (err, stdout) => {
+                    resolve(err ? '' : stdout.trim());
+                });
+            });
+            const [branch, status, diffStat] = await Promise.all([
+                run(['rev-parse', '--abbrev-ref', 'HEAD']),
+                run(['status', '--short']),
+                run(['diff', '--stat']),
+            ]);
+            const parts = [];
+            if (branch) parts.push('Branch: ' + branch);
+            parts.push(status ? 'Changed files:\n' + status : 'Working tree clean');
+            if (diffStat) parts.push('Diff summary:\n' + diffStat);
+            send({ type: 'gitContext', content: parts.join('\n\n'), branch: branch || '' });
+            break;
+        }
+
+        // ── Workspace diagnostics (not available in standalone app) ──────────
+        case 'getWorkspaceDiagnostics': {
+            send({ type: 'workspaceDiagnostics', diagnostics: [] });
+            break;
+        }
+
+        // ── Open editors (not available in standalone app) ────────────────────
+        case 'getOpenEditors': {
+            send({ type: 'openEditors', files: [] });
+            break;
+        }
+
+        // ── Toggle auto-attach active file ────────────────────────────────────
+        case 'toggleAutoAttach': {
+            const next = !getSettings().autoAttachActiveFile;
+            saveSetting('autoAttachActiveFile', next);
+            send({ type: 'autoAttachState', enabled: next });
+            break;
+        }
+
+        // ── Pinned files ──────────────────────────────────────────────────────
+        case 'getPinnedFiles': {
+            const pinned = (getSettings().pinnedFiles || []).filter(p => {
+                try { return fs.existsSync(p); } catch { return false; }
+            });
+            send({
+                type: 'pinnedFiles',
+                files: pinned.map(p => ({ name: path.basename(p), path: p })),
+            });
+            break;
+        }
+
+        case 'pinFile': {
+            const pinned = [...(getSettings().pinnedFiles || [])];
+            if (msg.path && !pinned.includes(msg.path)) {
+                pinned.push(msg.path);
+                saveSetting('pinnedFiles', pinned);
+            }
+            break;
+        }
+
+        case 'unpinFile': {
+            const pinned = (getSettings().pinnedFiles || []).filter(p => p !== msg.path);
+            saveSetting('pinnedFiles', pinned);
+            break;
+        }
+
+        // ── Session history ───────────────────────────────────────────────────
+        case 'saveSession': {
+            if (msg.messages && msg.messages.length > 0) {
+                const sessions = readJson('history', []);
+                const firstUser = msg.messages.find(m => m.type === 'user');
+                const title = firstUser
+                    ? firstUser.text.slice(0, 80).replace(/\n/g, ' ')
+                    : 'Untitled conversation';
+                sessions.unshift({
+                    id:        Date.now().toString(),
+                    title,
+                    createdAt: Date.now(),
+                    messages:  msg.messages,
+                });
+                if (sessions.length > 30) sessions.length = 30;
+                writeJson('history', sessions);
+            }
+            break;
+        }
+
+        case 'getHistory': {
+            const sessions = readJson('history', []);
+            send({
+                type: 'historyData',
+                sessions: sessions.map(s => ({
+                    id:           s.id,
+                    title:        s.title,
+                    createdAt:    s.createdAt,
+                    messageCount: s.messages ? s.messages.length : 0,
+                })),
+            });
+            break;
+        }
+
+        case 'loadSession': {
+            const sessions = readJson('history', []);
+            const session  = sessions.find(s => s.id === msg.id);
+            if (session) {
+                send({ type: 'sessionData', id: session.id, messages: session.messages || [] });
+            }
+            break;
+        }
+
+        case 'resumeFromHistory': {
+            const sessions = readJson('history', []);
+            const session  = sessions.find(s => s.id === msg.id);
+            if (session) {
+                send({ type: 'resumeFromHistoryData', id: session.id, messages: session.messages || [] });
+            }
+            break;
+        }
+
+        case 'updateSession': {
+            const sessions = readJson('history', []);
+            const sess     = sessions.find(s => s.id === msg.id);
+            if (sess && Array.isArray(msg.messages) && msg.messages.length > 0) {
+                sess.messages     = msg.messages.slice(-MAX_SESSION_MESSAGES);
+                sess.messageCount = sess.messages.length;
+                const firstUser   = sess.messages.find(m => m.type === 'user');
+                if (firstUser) sess.title = firstUser.text.slice(0, 80).replace(/\n/g, ' ');
+                writeJson('history', sessions);
+            }
+            break;
+        }
+
+        case 'renameSession': {
+            const sessions = readJson('history', []);
+            const sess     = sessions.find(s => s.id === msg.id);
+            if (sess && msg.title) {
+                sess.title = String(msg.title).slice(0, 120);
+                writeJson('history', sessions);
+                send({
+                    type: 'historyData',
+                    sessions: sessions.map(s => ({
+                        id: s.id, title: s.title, createdAt: s.createdAt,
+                        messageCount: s.messages ? s.messages.length : 0,
+                    })),
+                });
+            }
+            break;
+        }
+
+        case 'deleteSession': {
+            let sessions = readJson('history', []);
+            sessions     = sessions.filter(s => s.id !== msg.id);
+            writeJson('history', sessions);
+            send({
+                type: 'historyData',
+                sessions: sessions.map(s => ({
+                    id: s.id, title: s.title, createdAt: s.createdAt,
+                    messageCount: s.messages ? s.messages.length : 0,
+                })),
+            });
+            break;
+        }
+
+        case 'autoSaveSession': {
+            if (msg.messages && msg.messages.length > 0) {
+                const capped = msg.messages.slice(-MAX_SESSION_MESSAGES);
+                writeJson('activeSession', {
+                    messages:  capped,
+                    sessionId: msg.sessionId || null,
+                    savedAt:   Date.now(),
+                });
+            } else {
+                writeJson('activeSession', null);
+            }
+            break;
+        }
+
+        case 'resumeSession': {
+            if (msg.messages && msg.messages.length > 0) {
+                try {
+                    const bridge = getBridge();
+                    await bridge._init();
+                    bridge.resume(msg.messages);
+                } catch (err) {
+                    send({ type: 'error', message: 'Failed to resume session: ' + err.message });
+                }
+            }
+            break;
+        }
+
+        // ── Command shortcuts ─────────────────────────────────────────────────
+        case 'runCommand': {
+            if (msg.command === 'openClaudeCode.setApiKey') {
+                await handleSetApiKey();
+            } else if (msg.command === 'workbench.action.openSettings') {
+                // Open the workspace folder in File Explorer as a proxy for "settings"
+                shell.openPath(getUserData());
+            } else if (msg.command === 'vscode.open') {
+                const url = Array.isArray(msg.args) ? msg.args[0] : msg.args;
+                if (url && /^https?:\/\//.test(String(url))) {
+                    shell.openExternal(String(url));
+                }
+            } else if (msg.command === 'runInTerminal') {
+                handleRunInTerminal(String(msg.code || ''));
+            }
+            break;
+        }
+
+        // ── Run code in terminal ──────────────────────────────────────────────
+        case 'runInTerminal': {
+            handleRunInTerminal(String(msg.code || ''));
+            break;
+        }
+
+        default:
+            break;
+    }
+});
+
+// ── Handle run-in-terminal ────────────────────────────────────────────────────
+
+function handleRunInTerminal(code) {
+    if (!code.trim()) return;
+    const cwd = getSettings().workspacePath || os.homedir();
+    // On Windows: open a new cmd.exe window and run the code
+    if (process.platform === 'win32') {
+        const { spawn } = require('child_process');
+        spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', code], { cwd, detached: true });
+    } else {
+        const { spawn } = require('child_process');
+        spawn('bash', ['-c', code], { cwd, detached: true, stdio: 'ignore' });
+    }
+}
+
+// ── Handle prompt run with context files ─────────────────────────────────────
+
+async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
+    isCancelled = false;
+
+    let fullPrompt = message;
+
+    // Inject context file contents
+    const allPaths = new Set(contextFilePaths || []);
+    const cwd      = getSettings().workspacePath || os.homedir();
+
+    if (fileRefs && fileRefs.length > 0) {
+        for (const ref of fileRefs) {
+            const abs = path.resolve(cwd, ref);
+            if (fs.existsSync(abs)) allPaths.add(abs);
+        }
+    }
+
+    if (allPaths.size > 0) {
+        const fileContents = [];
+        for (const fp of allPaths) {
+            try {
+                const content = fs.readFileSync(fp, 'utf8');
+                const rel     = path.relative(cwd, fp);
+                fileContents.push('\n\n--- File: ' + rel + ' ---\n' + content);
+            } catch { /* skip unreadable */ }
+        }
+        if (fileContents.length > 0) {
+            fullPrompt = message + '\n\n[Context files:]' + fileContents.join('');
+        }
+    }
+
+    // Apply current settings to process env before running
+    applyEnvFromSettings();
+
+    const bridge = getBridge();
+
+    // ── Retry loop ────────────────────────────────────────────────────────────
+    for (let attempt = 0; ; attempt++) {
+        if (isCancelled) return;
+
+        let retryErrorMsg = null;
+
+        await bridge.run(fullPrompt, (event) => {
+            if (isCancelled) return;
+            if (event.type === 'error' && isRateLimitError(event.message)) {
+                retryErrorMsg = event.message;
+                return;
+            }
+            send(event);
+        });
+
+        if (isCancelled) return;
+
+        if (!retryErrorMsg) {
+            send({ type: 'stop' });
+            return;
+        }
+
+        if (attempt >= RETRY_DELAYS_MS.length) {
+            send({
+                type:    'error',
+                message: retryErrorMsg + ' (failed after ' + (attempt + 1) + ' attempts)',
+            });
+            send({ type: 'stop' });
+            return;
+        }
+
+        const delaySec = Math.ceil(RETRY_DELAYS_MS[attempt] / 1000);
+        send({ type: 'retrying', attempt: attempt + 1, delaySeconds: delaySec, maxAttempts: RETRY_DELAYS_MS.length });
+
+        await new Promise((resolve) => {
+            let remaining = delaySec - 1;
+            const tick = setInterval(() => {
+                if (isCancelled) { clearInterval(tick); resolve(); return; }
+                if (remaining <= 0) { clearInterval(tick); resolve(); return; }
+                send({ type: 'retrying', attempt: attempt + 1, delaySeconds: remaining, maxAttempts: RETRY_DELAYS_MS.length });
+                remaining--;
+            }, 1000);
+        });
+
+        if (isCancelled) return;
+    }
+}
+
+// ── Handle add-context-file ───────────────────────────────────────────────────
+
+async function handleAddContextFile(filePath, send) {
+    send({ type: 'fileContent', path: filePath, name: path.basename(filePath) });
+}
+
+// ── File search ───────────────────────────────────────────────────────────────
+
+function searchFiles(query) {
+    const cwd     = getSettings().workspacePath || os.homedir();
+    const results = [];
+    const q       = (query || '').toLowerCase();
+    const SKIP    = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.cache']);
+    const MAX     = 20;
+
+    function walk(dir, depth) {
+        if (results.length >= MAX || depth > 6) return;
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+            if (results.length >= MAX) break;
+            if (e.isDirectory()) {
+                if (!SKIP.has(e.name)) walk(path.join(dir, e.name), depth + 1);
+            } else if (e.isFile()) {
+                if (!q || e.name.toLowerCase().includes(q)) {
+                    const fullPath = path.join(dir, e.name);
+                    results.push({
+                        name:         e.name,
+                        path:         fullPath,
+                        relativePath: path.relative(cwd, fullPath),
+                    });
+                }
+            }
+        }
+    }
+
+    try { walk(cwd, 0); } catch { /* ignore */ }
+    return results;
+}
+
+// ── App lifecycle ─────────────────────────────────────────────────────────────
+
+app.whenReady().then(() => {
+    // Apply settings to process.env before anything else
+    applyEnvFromSettings();
+
+    buildMenu();
+    createWindow();
+
+    app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+});
+
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+});
