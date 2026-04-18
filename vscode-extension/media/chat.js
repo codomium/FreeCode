@@ -859,7 +859,7 @@
 
     /** Return just the filename from a path string (browser-safe, no Node path module) */
     function basename(filePath) {
-        return (filePath || '').split(/[\\/]/).filter(Boolean).pop() || filePath || '';
+        return (filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
     }
 
     function addToolCard(toolName, input) {
