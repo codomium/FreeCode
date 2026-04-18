@@ -159,6 +159,41 @@
     const contextWarningTextEl = document.getElementById('context-warning-text');
     const contextWarningNewBtn = document.getElementById('context-warning-new');
 
+    // ── Settings panel refs ──────────────────────────────────────────────────
+    const settingsPanel        = document.getElementById('settings-panel');
+    const settingsCloseBtn     = document.getElementById('settings-close-btn');
+    const settingWorkspace     = document.getElementById('setting-workspace');
+    const settingsPickWorkspace = document.getElementById('settings-pick-workspace');
+    const settingModel         = document.getElementById('setting-model');
+    const settingMode          = document.getElementById('setting-mode');
+    const settingMaxTurns      = document.getElementById('setting-max-turns');
+    const settingShowToolOutput = document.getElementById('setting-show-tool-output');
+    const settingsSetKeyBtn    = document.getElementById('settings-set-key-btn');
+    const settingNvidiaKey     = document.getElementById('setting-nvidia-key');
+    const settingsSaveNvidiaBtn = document.getElementById('settings-save-nvidia-btn');
+    const settingsKeyStatus    = document.getElementById('settings-key-status');
+    const settingsOpenFolderBtn = document.getElementById('settings-open-folder-btn');
+    const settingsGhLink       = document.getElementById('settings-gh-link');
+
+    // ── File explorer panel refs ─────────────────────────────────────────────
+    const explorerBtn          = document.getElementById('explorer-btn');
+    const explorerPanel        = document.getElementById('explorer-panel');
+    const explorerCloseBtn     = document.getElementById('explorer-close-btn');
+    const explorerRefreshBtn   = document.getElementById('explorer-refresh-btn');
+    const explorerTree         = document.getElementById('explorer-tree');
+    const explorerWorkspaceLabel = document.getElementById('explorer-workspace-label');
+
+    // ── File viewer modal refs ───────────────────────────────────────────────
+    const fileViewerModal      = document.getElementById('file-viewer-modal');
+    const fileViewerTitle      = document.getElementById('file-viewer-title');
+    const fileViewerContent    = document.getElementById('file-viewer-content');
+    const fileViewerAddCtxBtn  = document.getElementById('file-viewer-add-ctx-btn');
+    const fileViewerCloseBtn   = document.getElementById('file-viewer-close-btn');
+
+    // ── File explorer / viewer state ─────────────────────────────────────────
+    let currentWorkspacePath  = '';   // kept in sync with settings
+    let fileViewerCurrentPath = null; // path of file currently shown in viewer
+
     /** Models that support NVIDIA thinking mode toggle */
     const THINKING_CAPABLE_MODELS = new Set([
         'moonshotai/kimi-k2.5',
@@ -1635,6 +1670,9 @@
                 // Restore auto-attach state from settings
                 autoAttachActive = !!msg.autoAttachActiveFile;
                 if (autoAttachBtn) autoAttachBtn.classList.toggle('active', autoAttachActive);
+                // Populate settings panel fields
+                currentWorkspacePath = msg.workspacePath || '';
+                populateSettingsPanel(msg);
                 updateStats();
                 updateContextBar();
                 // Restore active session if one was persisted (survives VS Code restarts)
@@ -1649,6 +1687,10 @@
 
             case 'apiKeySet':
                 showWelcome(true);
+                if (settingsKeyStatus) {
+                    settingsKeyStatus.textContent = '✓ API key saved';
+                    settingsKeyStatus.style.color = 'var(--success)';
+                }
                 break;
 
             case 'gitContext':
@@ -1666,6 +1708,24 @@
             case 'autoAttachState':
                 autoAttachActive = !!msg.enabled;
                 if (autoAttachBtn) autoAttachBtn.classList.toggle('active', autoAttachActive);
+                break;
+
+            case 'workspaceChanged':
+                currentWorkspacePath = msg.path || '';
+                if (settingWorkspace) settingWorkspace.value = currentWorkspacePath;
+                if (explorerWorkspaceLabel) explorerWorkspaceLabel.textContent = currentWorkspacePath;
+                // If explorer is open, refresh it
+                if (explorerPanel && explorerPanel.classList.contains('visible')) {
+                    loadExplorerTree(currentWorkspacePath);
+                }
+                break;
+
+            case 'directoryListing':
+                renderExplorerTree(msg.tree || [], msg.path || '');
+                break;
+
+            case 'fileData':
+                showFileViewer(msg.path, msg.name, msg.content, msg.error);
                 break;
 
             default:
@@ -1758,7 +1818,7 @@
     const btnOpenSettings = document.getElementById('btn-open-settings');
     if (btnOpenSettings) {
         btnOpenSettings.addEventListener('click', () => {
-            vscode.postMessage({ type: 'runCommand', command: 'workbench.action.openSettings', args: ['openClaudeCode'] });
+            openSettingsPanel();
         });
     }
 
@@ -2538,7 +2598,7 @@
 
     if (settingsBtn) {
         settingsBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'runCommand', command: 'workbench.action.openSettings', args: ['openClaudeCode'] });
+            openSettingsPanel();
         });
     }
 
@@ -2638,6 +2698,289 @@
     if (contextWarningNewBtn) {
         contextWarningNewBtn.addEventListener('click', () => {
             newChatBtn && newChatBtn.click();
+        });
+    }
+
+    // ── Settings Panel ────────────────────────────────────────────────────────
+
+    function populateSettingsPanel(msg) {
+        if (settingWorkspace)      settingWorkspace.value  = msg.workspacePath || '';
+        if (settingModel)          settingModel.value       = msg.model || 'claude-sonnet-4-6';
+        if (settingMode)           settingMode.value        = msg.mode || 'default';
+        if (settingMaxTurns)       settingMaxTurns.value    = msg.maxTurns || 20;
+        if (settingShowToolOutput) settingShowToolOutput.checked = msg.showToolOutput !== false;
+        if (settingNvidiaKey)      settingNvidiaKey.placeholder = msg.hasNvidiaKey ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
+    }
+
+    function openSettingsPanel() {
+        if (!settingsPanel) return;
+        settingsPanel.classList.add('visible');
+    }
+
+    function closeSettingsPanel() {
+        if (!settingsPanel) return;
+        settingsPanel.classList.remove('visible');
+    }
+
+    if (settingsCloseBtn) {
+        settingsCloseBtn.addEventListener('click', closeSettingsPanel);
+    }
+
+    if (settingModel) {
+        settingModel.addEventListener('change', () => {
+            const val = settingModel.value;
+            vscode.postMessage({ type: 'saveSettings', key: 'model', value: val });
+            // Also sync the main controls bar
+            if (modelSelect) { modelSelect.value = val; currentModel = val; updateStats(); syncThinkingToggleVisibility(val); }
+        });
+    }
+
+    if (settingMode) {
+        settingMode.addEventListener('change', () => {
+            const val = settingMode.value;
+            vscode.postMessage({ type: 'saveSettings', key: 'permissionMode', value: val });
+            if (modeSelect) modeSelect.value = val;
+        });
+    }
+
+    if (settingMaxTurns) {
+        settingMaxTurns.addEventListener('change', () => {
+            const val = parseInt(settingMaxTurns.value, 10);
+            if (!isNaN(val) && val > 0) {
+                vscode.postMessage({ type: 'saveSettings', key: 'maxTurns', value: val });
+            }
+        });
+    }
+
+    if (settingShowToolOutput) {
+        settingShowToolOutput.addEventListener('change', () => {
+            vscode.postMessage({ type: 'saveSettings', key: 'showToolOutput', value: settingShowToolOutput.checked });
+        });
+    }
+
+    if (settingsPickWorkspace) {
+        settingsPickWorkspace.addEventListener('click', () => {
+            // Use existing pickFile flow indirectly; here we fire workspace open via main menu equivalent
+            vscode.postMessage({ type: 'runCommand', command: 'openWorkspaceFolder' });
+        });
+    }
+
+    if (settingsSetKeyBtn) {
+        settingsSetKeyBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'runCommand', command: 'openClaudeCode.setApiKey' });
+        });
+    }
+
+    if (settingsSaveNvidiaBtn) {
+        settingsSaveNvidiaBtn.addEventListener('click', () => {
+            const val = settingNvidiaKey ? settingNvidiaKey.value.trim() : '';
+            vscode.postMessage({ type: 'saveSettings', key: 'nvidiaApiKey', value: val });
+            if (settingsKeyStatus) {
+                settingsKeyStatus.textContent = val ? '✓ NVIDIA key saved' : '✓ NVIDIA key cleared';
+                settingsKeyStatus.style.color = 'var(--success)';
+            }
+            if (settingNvidiaKey) {
+                settingNvidiaKey.value = '';
+                settingNvidiaKey.placeholder = val ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
+            }
+        });
+    }
+
+    if (settingsOpenFolderBtn) {
+        settingsOpenFolderBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'openSettingsFolder' });
+        });
+    }
+
+    if (settingsGhLink) {
+        settingsGhLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            vscode.postMessage({ type: 'runCommand', command: 'vscode.open', args: ['https://github.com/codomium/FreeCode'] });
+        });
+    }
+
+    // ── File Explorer Panel ───────────────────────────────────────────────────
+
+    function loadExplorerTree(dirPath) {
+        if (explorerTree) {
+            explorerTree.innerHTML = '<div class="explorer-loading">Loading…</div>';
+        }
+        vscode.postMessage({ type: 'listDirectory', path: dirPath || currentWorkspacePath });
+    }
+
+    function openExplorerPanel() {
+        if (!explorerPanel) return;
+        explorerPanel.classList.add('visible');
+        if (explorerWorkspaceLabel) explorerWorkspaceLabel.textContent = currentWorkspacePath || '(home)';
+        loadExplorerTree(currentWorkspacePath);
+    }
+
+    function closeExplorerPanel() {
+        if (!explorerPanel) return;
+        explorerPanel.classList.remove('visible');
+    }
+
+    if (explorerBtn)       explorerBtn.addEventListener('click', openExplorerPanel);
+    if (explorerCloseBtn)  explorerCloseBtn.addEventListener('click', closeExplorerPanel);
+    if (explorerRefreshBtn) explorerRefreshBtn.addEventListener('click', () => loadExplorerTree(currentWorkspacePath));
+
+    /** Render the directory tree into #explorer-tree */
+    function renderExplorerTree(tree, rootPath) {
+        if (!explorerTree) return;
+        explorerTree.innerHTML = '';
+        if (!tree || tree.length === 0) {
+            explorerTree.innerHTML = '<div class="explorer-empty">No files found.</div>';
+            return;
+        }
+        explorerTree.appendChild(buildTreeNodes(tree, 0));
+    }
+
+    function buildTreeNodes(items, depth) {
+        const ul = document.createElement('ul');
+        ul.className = 'explorer-list';
+        if (depth > 0) ul.style.paddingLeft = '14px';
+
+        for (const item of items) {
+            const li = document.createElement('li');
+            li.className = 'explorer-item explorer-' + item.type;
+
+            const row = document.createElement('div');
+            row.className = 'explorer-row';
+            row.setAttribute('title', item.path);
+
+            const icon = document.createElement('span');
+            icon.className = 'explorer-icon';
+
+            if (item.type === 'dir') {
+                icon.textContent = '▶';
+                icon.className += ' explorer-chevron';
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'explorer-name';
+                nameSpan.textContent = item.name;
+                row.appendChild(icon);
+                row.appendChild(nameSpan);
+
+                // Children container (collapsed by default)
+                const childrenContainer = document.createElement('div');
+                childrenContainer.className = 'explorer-children';
+                childrenContainer.style.display = 'none';
+
+                let expanded = false;
+                let loaded = false;
+
+                row.addEventListener('click', () => {
+                    expanded = !expanded;
+                    icon.classList.toggle('expanded', expanded);
+                    icon.textContent = expanded ? '▼' : '▶';
+                    childrenContainer.style.display = expanded ? '' : 'none';
+                    if (expanded && !loaded && item.children && item.children.length > 0) {
+                        childrenContainer.appendChild(buildTreeNodes(item.children, depth + 1));
+                        loaded = true;
+                    }
+                });
+
+                li.appendChild(row);
+                li.appendChild(childrenContainer);
+            } else {
+                const ext = (item.name.split('.').pop() || '').toLowerCase();
+                icon.textContent = getFileIcon(ext);
+                icon.className = 'explorer-icon explorer-file-icon';
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'explorer-name';
+                nameSpan.textContent = item.name;
+                row.appendChild(icon);
+                row.appendChild(nameSpan);
+
+                // Right-click or click → context menu (view / add to context)
+                row.addEventListener('click', () => {
+                    openFileViewerFromExplorer(item.path, item.name);
+                });
+
+                // Show a small "add to context" button on hover
+                const ctxBtn = document.createElement('button');
+                ctxBtn.className = 'explorer-ctx-btn';
+                ctxBtn.title = 'Add to context';
+                ctxBtn.textContent = '+';
+                ctxBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    vscode.postMessage({ type: 'addContextFile', path: item.path });
+                });
+                row.appendChild(ctxBtn);
+
+                li.appendChild(row);
+            }
+
+            ul.appendChild(li);
+        }
+        return ul;
+    }
+
+    function getFileIcon(ext) {
+        const icons = {
+            js: '📄', ts: '📄', jsx: '📄', tsx: '📄',
+            py: '🐍', rb: '💎', go: '🐹', rs: '🦀', java: '☕',
+            html: '🌐', css: '🎨', scss: '🎨', less: '🎨',
+            json: '📋', yaml: '📋', yml: '📋', toml: '📋',
+            md: '📝', txt: '📝', rst: '📝',
+            png: '🖼', jpg: '🖼', jpeg: '🖼', gif: '🖼', svg: '🖼', ico: '🖼',
+            sh: '⚙', bash: '⚙', zsh: '⚙', fish: '⚙',
+            dockerfile: '🐳', env: '🔧',
+        };
+        return icons[ext] || '📄';
+    }
+
+    function openFileViewerFromExplorer(filePath, fileName) {
+        if (!fileViewerModal) return;
+        if (fileViewerTitle) fileViewerTitle.textContent = fileName || filePath;
+        if (fileViewerContent) fileViewerContent.textContent = 'Loading…';
+        fileViewerCurrentPath = filePath;
+        fileViewerModal.classList.add('visible');
+        vscode.postMessage({ type: 'readFile', path: filePath });
+    }
+
+    // ── File Viewer Modal ─────────────────────────────────────────────────────
+
+    function showFileViewer(filePath, fileName, content, error) {
+        if (!fileViewerModal) return;
+        // Only update if this is for the currently-open viewer
+        if (filePath && fileViewerCurrentPath && filePath !== fileViewerCurrentPath) return;
+        if (fileViewerTitle) fileViewerTitle.textContent = fileName || filePath || 'File Viewer';
+        if (fileViewerContent) {
+            if (error) {
+                fileViewerContent.textContent = 'Error: ' + error;
+                fileViewerContent.style.color = 'var(--error-text)';
+            } else {
+                fileViewerContent.textContent = content || '';
+                fileViewerContent.style.color = '';
+            }
+        }
+        fileViewerModal.classList.add('visible');
+    }
+
+    if (fileViewerCloseBtn) {
+        fileViewerCloseBtn.addEventListener('click', () => {
+            if (fileViewerModal) fileViewerModal.classList.remove('visible');
+            fileViewerCurrentPath = null;
+        });
+    }
+
+    if (fileViewerAddCtxBtn) {
+        fileViewerAddCtxBtn.addEventListener('click', () => {
+            if (fileViewerCurrentPath) {
+                vscode.postMessage({ type: 'addContextFile', path: fileViewerCurrentPath });
+                if (fileViewerModal) fileViewerModal.classList.remove('visible');
+                fileViewerCurrentPath = null;
+            }
+        });
+    }
+
+    // Close viewer on backdrop click
+    if (fileViewerModal) {
+        fileViewerModal.addEventListener('click', (e) => {
+            if (e.target === fileViewerModal) {
+                fileViewerModal.classList.remove('visible');
+                fileViewerCurrentPath = null;
+            }
         });
     }
 
