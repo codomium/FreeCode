@@ -204,11 +204,27 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 }
 
                 // Execute tool
-                yield { type: 'tool_progress', tool: block.name, status: 'running' };
+                yield { type: 'tool_progress', tool: block.name, status: 'running', input: block.input };
 
                 let result;
                 try {
-                    result = await tools.call(block.name, block.input);
+                    const callResult = await tools.call(block.name, block.input);
+                    // Detect async-generator tools (e.g. Bash with live streaming)
+                    if (callResult !== null && typeof callResult === 'object' && typeof callResult[Symbol.asyncIterator] === 'function') {
+                        for await (const event of callResult) {
+                            if (event.type === 'meta') {
+                                // Forward metadata (e.g. bash jobId for stdin)
+                                yield { type: 'tool_meta', tool: block.name, ...event };
+                            } else if (event.type === 'chunk') {
+                                // Live output chunk
+                                yield { type: 'tool_stream', tool: block.name, chunk: event.data, stream: event.stream };
+                            } else if (event.type === 'done') {
+                                result = event.result;
+                            }
+                        }
+                    } else {
+                        result = callResult;
+                    }
                 } catch (err) {
                     result = `Tool error: ${err.message}`;
                 }
@@ -218,7 +234,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     result = await hooks.runPostToolUse(block.name, result);
                 }
 
-                yield { type: 'result', tool: block.name, result };
+                yield { type: 'result', tool: block.name, result, input: block.input };
 
                 toolResults.push({
                     type: 'tool_result',

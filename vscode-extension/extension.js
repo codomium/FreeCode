@@ -352,6 +352,14 @@ class ClaudeCodeViewProvider {
                 break;
             }
 
+            case 'bashStdin': {
+                // Interactive stdin for a running Bash job — forwarded directly to bridge
+                if (bridge && bridge.isRunning) {
+                    bridge._send({ type: 'bashStdin', jobId: msg.jobId, text: msg.text || '' });
+                }
+                break;
+            }
+
             case 'runCommand': {
                 if (msg.command) {
                     vscode.commands.executeCommand(msg.command, ...(msg.args || []));

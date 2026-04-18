@@ -994,11 +994,26 @@ select:focus { border-color: var(--accent); }
   cursor: pointer;
   user-select: none;
   transition: background 0.1s;
+  flex-wrap: wrap;
 }
 .tool-card-header:hover { background: rgba(255,255,255,0.03); }
 
 .tool-icon { font-size: 12px; }
 .tool-name { color: var(--success); font-family: var(--font-code); font-weight: 600; font-size: 11px; }
+
+/* Subtitle showing file path or command preview */
+.tool-card-subtitle {
+  font-family: var(--font-code);
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.85;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
 .tool-status { margin-left: auto; font-size: 10px; color: var(--text-muted); }
 .tool-chevron { font-size: 10px; color: var(--text-muted); transition: transform 0.2s; }
 .tool-card.expanded .tool-chevron { transform: rotate(90deg); }
@@ -1008,7 +1023,7 @@ select:focus { border-color: var(--accent); }
   padding: 6px 10px 8px;
   border-top: 1px solid var(--tool-border);
   overflow-x: auto;
-  max-height: 200px;
+  max-height: 320px;
   overflow-y: auto;
 }
 .tool-card.expanded .tool-card-body { display: block; }
@@ -1020,6 +1035,61 @@ select:focus { border-color: var(--accent); }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Diff view inside a tool card */
+.tool-result-diff {
+  overflow: hidden;
+}
+.tool-result-diff .diff-view {
+  max-height: 260px;
+  border: none;
+  border-radius: 0;
+}
+
+/* Live bash output */
+.bash-live-output {
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* Bash stdin bar */
+.bash-stdin-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--tool-border);
+}
+.bash-stdin-input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 11px;
+  padding: 3px 7px;
+  outline: none;
+}
+.bash-stdin-input:focus { border-color: var(--accent); }
+.bash-stdin-send {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 11px;
+  padding: 3px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bash-stdin-send:hover { background: var(--accent-hover); }
 
 .tool-spinner {
   display: inline-block;

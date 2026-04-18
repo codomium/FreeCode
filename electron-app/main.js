@@ -179,6 +179,10 @@ class InProcessAgentBridge {
             const { HookEngine }            = await import(v2url('hooks/engine.mjs'));
             const { AgentLoader }           = await import(v2url('agents/loader.mjs'));
             const { SkillsLoader }          = await import(v2url('skills/loader.mjs'));
+            const { sendBashStdin }         = await import(v2url('tools/bash.mjs'));
+
+            // Expose sendBashStdin for the IPC handler (same module instance as the tools)
+            this._sendBashStdin = sendBashStdin;
 
             const settings = await loadSettings();
 
@@ -549,6 +553,14 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'cancel': {
             isCancelled = true;
             if (agentBridge) agentBridge.cancel();
+            break;
+        }
+
+        // ── Interactive stdin for a running Bash job ──────────────────────────
+        case 'bashStdin': {
+            if (agentBridge && typeof agentBridge._sendBashStdin === 'function') {
+                agentBridge._sendBashStdin(msg.jobId, msg.text || '');
+            }
             break;
         }
 

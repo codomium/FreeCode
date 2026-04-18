@@ -855,10 +855,17 @@
     }
 
     let toolCardCounter = 0;
+    const toolCardInputs = {}; // cardId → tool input (for diff/context in updateToolCard)
 
-    function addToolCard(toolName) {
+    /** Return just the filename from a path string (browser-safe, no Node path module) */
+    function basename(filePath) {
+        return (filePath || '').split(/[\\/]/).filter(Boolean).pop() || filePath || '';
+    }
+
+    function addToolCard(toolName, input) {
         hideWelcome();
         const id = `tool-${++toolCardCounter}`;
+        toolCardInputs[id] = input || {};
 
         // Build card using DOM API so toolName is safely set via textContent
         const msgDiv = document.createElement('div');
@@ -874,7 +881,13 @@
 
         const iconSpan = document.createElement('span');
         iconSpan.className = 'tool-icon';
-        iconSpan.textContent = '⚙';
+        // Context-aware icon per tool type
+        iconSpan.textContent = toolName === 'Edit'  ? '✏️' :
+                               toolName === 'Write' ? '📝' :
+                               toolName === 'Read'  ? '📄' :
+                               toolName === 'Bash'  ? '⚡' :
+                               toolName === 'Glob'  ? '🔍' :
+                               toolName === 'Grep'  ? '🔎' : '⚙';
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'tool-name';
@@ -894,6 +907,26 @@
 
         header.appendChild(iconSpan);
         header.appendChild(nameSpan);
+
+        // Subtitle: file path (Read/Edit/Write) or command preview (Bash)
+        if (input) {
+            const sub = document.createElement('span');
+            sub.className = 'tool-card-subtitle';
+            if ((toolName === 'Edit' || toolName === 'Write') && input.file_path) {
+                sub.textContent = basename(input.file_path);
+            } else if (toolName === 'Read' && input.file_path) {
+                const start = (input.offset || 0) + 1;
+                const end   = (input.offset || 0) + (input.limit || 2000);
+                sub.textContent = `${basename(input.file_path)} · lines ${start}–${end}`;
+            } else if (toolName === 'Bash' && input.command) {
+                const cmd = input.command.length > 60
+                    ? input.command.slice(0, 60) + '…'
+                    : input.command;
+                sub.textContent = cmd;
+            }
+            if (sub.textContent) header.appendChild(sub);
+        }
+
         header.appendChild(statusSpan);
         header.appendChild(chevron);
 
@@ -908,17 +941,55 @@
         resultDiv.appendChild(em);
         body.appendChild(resultDiv);
 
+        // Bash: add live output container + interactive stdin bar
+        if (toolName === 'Bash') {
+            const stdinBar = document.createElement('div');
+            stdinBar.className = 'bash-stdin-bar';
+            stdinBar.id = `${id}-stdin`;
+
+            const stdinInput = document.createElement('input');
+            stdinInput.type = 'text';
+            stdinInput.className = 'bash-stdin-input';
+            stdinInput.placeholder = 'Send stdin input…';
+
+            const stdinSend = document.createElement('button');
+            stdinSend.className = 'bash-stdin-send';
+            stdinSend.textContent = '↵ Send';
+
+            const sendStdin = () => {
+                const text = stdinInput.value.trim();
+                if (!text) return;
+                vscode.postMessage({ type: 'bashStdin', jobId: toolCardInputs[id]._jobId, text });
+                // Echo the sent input to the output area
+                appendToolStream(toolName, `\u276f ${text}\n`);
+                stdinInput.value = '';
+            };
+            stdinSend.addEventListener('click', sendStdin);
+            stdinInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); sendStdin(); }
+            });
+
+            stdinBar.appendChild(stdinInput);
+            stdinBar.appendChild(stdinSend);
+            body.appendChild(stdinBar);
+        }
+
         card.appendChild(header);
         card.appendChild(body);
         msgDiv.appendChild(card);
         messagesEl.appendChild(msgDiv);
+
+        // Auto-expand Edit and Bash cards so the diff/output is immediately visible
+        if (toolName === 'Edit' || toolName === 'Bash') {
+            card.classList.add('expanded');
+        }
 
         activeToolCards[toolName] = id;
         scrollToBottom();
         return id;
     }
 
-    function updateToolCard(toolName, result) {
+    function updateToolCard(toolName, result, input) {
         const id = activeToolCards[toolName];
         if (!id) return;
         const card = document.getElementById(id);
@@ -932,13 +1003,65 @@
             statusEl.appendChild(doneSpan);
         }
         const resultEl = document.getElementById(`${id}-result`);
+        const storedInput = toolCardInputs[id] || input || {};
         if (resultEl) {
-            const preview = result && result.length > 800
-                ? result.slice(0, 800) + '\n…'
-                : (result || '');
-            resultEl.textContent = preview;      // safe — textContent only
+            if (toolName === 'Edit' &&
+                storedInput.old_string !== undefined &&
+                storedInput.new_string !== undefined) {
+                // Show inline diff: red for removed lines, green for added lines
+                const diff = computeDiff(
+                    storedInput.old_string.split('\n'),
+                    storedInput.new_string.split('\n')
+                );
+                resultEl.innerHTML = '';
+                resultEl.className = 'tool-result tool-result-diff';
+                resultEl.appendChild(buildDiffView(diff));
+            } else if (toolName === 'Bash') {
+                // Bash: live output is already rendered via appendToolStream;
+                // on completion just remove the waiting placeholder if still there
+                const em = resultEl.querySelector('em');
+                if (em) em.remove();
+                // If no live output was streamed (very fast command), show result now
+                if (!resultEl.querySelector('.bash-live-output') && result) {
+                    const pre = document.createElement('pre');
+                    pre.className = 'bash-live-output';
+                    pre.textContent = result;
+                    resultEl.appendChild(pre);
+                }
+            } else {
+                // Default: plain text preview
+                const preview = result && result.length > 800
+                    ? result.slice(0, 800) + '\n…'
+                    : (result || '');
+                resultEl.textContent = preview;      // safe — textContent only
+            }
         }
+        // Remove stdin bar (command has finished)
+        const stdinBar = document.getElementById(`${id}-stdin`);
+        if (stdinBar) stdinBar.remove();
+
         delete activeToolCards[toolName];
+        delete toolCardInputs[id];
+    }
+
+    /** Append a live output chunk to a running Bash tool card */
+    function appendToolStream(toolName, chunk) {
+        const id = activeToolCards[toolName];
+        if (!id) return;
+        const resultEl = document.getElementById(`${id}-result`);
+        if (!resultEl) return;
+        // Remove placeholder <em> if present
+        const em = resultEl.querySelector('em');
+        if (em) em.remove();
+        // Find or create the live output <pre>
+        let pre = resultEl.querySelector('.bash-live-output');
+        if (!pre) {
+            pre = document.createElement('pre');
+            pre.className = 'bash-live-output';
+            resultEl.appendChild(pre);
+        }
+        pre.textContent += chunk;
+        if (autoScroll) scrollToBottom();
     }
 
     let thinkingCounter = 0;
@@ -1319,12 +1442,26 @@
                 break;
 
             case 'tool_progress':
-                addToolCard(msg.tool);
+                addToolCard(msg.tool, msg.input);
                 setLoading(true, `Running ${msg.tool}…`);
                 break;
 
+            case 'tool_meta':
+                // Store metadata (e.g. bash jobId) in the active card's input map
+                if (msg.jobId !== undefined) {
+                    const cid = activeToolCards[msg.tool];
+                    if (cid && toolCardInputs[cid]) {
+                        toolCardInputs[cid]._jobId = msg.jobId;
+                    }
+                }
+                break;
+
+            case 'tool_stream':
+                appendToolStream(msg.tool, msg.chunk || '');
+                break;
+
             case 'result':
-                updateToolCard(msg.tool, typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2));
+                updateToolCard(msg.tool, typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2), msg.input);
                 break;
 
             case 'compaction':
