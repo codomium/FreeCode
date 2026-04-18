@@ -6,6 +6,7 @@ import { streamResponse, accumulateStream } from './streaming.mjs';
 import { ContextManager } from './context-manager.mjs';
 import { buildSystemPrompt, buildWorkspaceSnapshot, buildWorkspaceContent, buildThinkingModelSystemPrompt } from './system-prompt.mjs';
 import { isNvidiaModel } from './providers.mjs';
+import { RateLimiter } from './rate-limiter.mjs';
 import fs from 'fs';
 import path from 'path';
 
@@ -41,6 +42,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         systemPrompt: promptResult.full,
         systemPromptStatic: promptResult.staticPrefix,  // tool-free prefix for providers that don't use tools
         turnCount: 0,
+        continuationDepth: 0,  // incremented each recursive tool-result turn; reset on new user message
         tokenUsage: { input: 0, output: 0 },
         model,
         tools,
@@ -55,6 +57,19 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 content: userMessage,
             });
             state.turnCount++;
+            state.continuationDepth = 0; // reset per new user message
+        } else if (options.continuation) {
+            // Guard against infinite tool-call loops
+            state.continuationDepth++;
+            const maxContinuation = settings.maxContinuationTurns || 50;
+            if (state.continuationDepth >= maxContinuation) {
+                yield {
+                    type: 'error',
+                    message: `Agent loop limit reached (${maxContinuation} continuation turns). The agent may be stuck. Please start a new message.`,
+                };
+                yield { type: 'stop', reason: 'loop_limit' };
+                return;
+            }
         }
 
         // Check max turns
@@ -85,6 +100,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 const collectedContent = [];
                 let currentText = '';
                 let currentThinking = '';
+                let repetitionDetected = false;
 
                 for await (const event of response.events) {
                     if (event.type === 'content_block_start') {
@@ -95,6 +111,11 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                         if (event.delta?.type === 'text_delta') {
                             currentText += event.delta.text;
                             yield { type: 'stream_event', text: event.delta.text };
+                            // Abort stream if the model is stuck repeating itself
+                            if (detectRepetition(currentText)) {
+                                repetitionDetected = true;
+                                break;
+                            }
                         } else if (event.delta?.type === 'thinking_delta') {
                             currentThinking += event.delta.thinking;
                             yield { type: 'thinking', text: event.delta.thinking };
@@ -102,6 +123,15 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     } else if (event.type === 'ping') {
                         // Keepalive, ignore
                     }
+                }
+
+                if (repetitionDetected) {
+                    yield {
+                        type: 'error',
+                        message: 'Agent stopped: repetitive output detected. The model appears to be stuck. Please start a new message or refine your request.',
+                    };
+                    yield { type: 'stop', reason: 'repetition_detected' };
+                    return;
                 }
 
                 // Use the accumulated message
@@ -450,19 +480,32 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         }),
     };
 
-    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'Accept': stream ? 'text/event-stream' : 'application/json',
-        },
-        body: JSON.stringify(body),
-    });
+    const rateLimiter = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
 
-    if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`NVIDIA API error ${res.status}: ${err}`);
+    let res;
+    for (;;) {
+        res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+                'Accept': stream ? 'text/event-stream' : 'application/json',
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] NVIDIA API ${res.status} — retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const err = await res.text();
+            throw new Error(`NVIDIA API error ${res.status}: ${err}`);
+        }
+        break; // success
     }
 
     if (stream) {
@@ -824,4 +867,35 @@ function accumulateFromCollected(events) {
     }
 
     return message;
+}
+
+/**
+ * Detect repetitive output patterns in streamed text.
+ *
+ * Returns true when the model appears to be stuck generating repeated phrases —
+ * a sign of a "stuck loop" condition where the model repeats the same sentence
+ * or paragraph hundreds of times without making progress.
+ *
+ * Algorithm: look for any phrase of length 20–300 chars that appears ≥5 times
+ * in the most recent 800 characters of accumulated output.
+ *
+ * @param {string} text - accumulated streamed text so far
+ * @returns {boolean}
+ */
+function detectRepetition(text) {
+    if (text.length < 200) return false;
+
+    // Examine only the tail window to keep the check O(1) in total output size
+    const tail = text.slice(-800);
+
+    for (let phraseLen = 20; phraseLen <= 300; phraseLen += 10) {
+        if (phraseLen >= tail.length) break;
+        const phrase = tail.slice(-phraseLen);
+        // Escape regex special chars so the phrase is matched literally
+        const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const occurrences = (tail.match(new RegExp(escaped, 'g')) || []).length;
+        if (occurrences >= 5) return true;
+    }
+
+    return false;
 }

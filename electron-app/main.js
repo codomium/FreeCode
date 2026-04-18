@@ -33,7 +33,7 @@ const RETRY_DELAYS_MS = [3000, 8000, 20000];
 
 /** Returns true for rate-limit / server-overload errors worth retrying. */
 function isRateLimitError(msg) {
-    return /rate.?limit|overload|too.?many.?request|capacity|529|503|quota/i.test(msg || '');
+    return /rate.?limit|overload|too.?many.?request|capacity|529|503|502|504|bad.?gateway|service.?unavailable|quota/i.test(msg || '');
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
