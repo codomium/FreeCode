@@ -74,6 +74,7 @@ const { loadSettings }         = await import(v2url('config/settings.mjs'));
 const { HookEngine }           = await import(v2url('hooks/engine.mjs'));
 const { AgentLoader }          = await import(v2url('agents/loader.mjs'));
 const { SkillsLoader }         = await import(v2url('skills/loader.mjs'));
+const { sendBashStdin }        = await import(v2url('tools/bash.mjs'));
 
 // Redirect console.error/warn to stderr so we don't pollute the ndjson stream.
 // (It already goes to stderr by default, but belt-and-suspenders.)
@@ -146,6 +147,9 @@ async function init() {
             queue = queue.then(() => handleModelSwitch(loop, msg.model));
         } else if (msg.type === 'resume') {
             queue = queue.then(() => handleResume(loop, msg.messages || []));
+        } else if (msg.type === 'bashStdin') {
+            // Interactive stdin for a running Bash job — not serialized in the queue
+            sendBashStdin(msg.jobId, msg.text || '');
         }
     });
 

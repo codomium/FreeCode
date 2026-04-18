@@ -15,8 +15,30 @@
 (function () {
     'use strict';
 
-    // ── VS Code API ──────────────────────────────────────────────────────────
-    const vscode = acquireVsCodeApi();
+    // ── Electron IPC adapter (replaces acquireVsCodeApi) ────────────────────
+    // This shim makes chat.js work identically in both the VSCode extension
+    // (acquireVsCodeApi) and the standalone Electron app (electronBridge IPC).
+    const vscode = (function () {
+        if (typeof window !== 'undefined' && window.electronBridge) {
+            // Forward IPC messages from main process as 'message' events on
+            // window so the existing window.addEventListener('message', ...)
+            // handlers in this file continue to work without any changes.
+            window.electronBridge.onMessage(function (data) {
+                window.dispatchEvent(new MessageEvent('message', { data: data }));
+            });
+            return {
+                postMessage: function (msg) { window.electronBridge.postMessage(msg); },
+                getState:    function ()    { return {}; },
+                setState:    function ()    {},
+            };
+        }
+        // Fallback for unexpected environments
+        return {
+            postMessage: function () {},
+            getState:    function () { return {}; },
+            setState:    function () {},
+        };
+    }());
 
     // ── State ────────────────────────────────────────────────────────────────
     let isLoading = false;

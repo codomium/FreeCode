@@ -11,6 +11,37 @@ import fs from 'fs';
 import path from 'path';
 import { hasBeenRead, markRead } from './read.mjs';
 
+/** Minimum length for a trimmed line to be used as a similarity search needle */
+const MIN_SEARCH_LINE_LENGTH = 4;
+
+/**
+ * When old_string is not found verbatim, find lines in the file that contain
+ * the first non-empty trimmed line of old_string. Returns a formatted hint
+ * string (or '' when nothing useful is found) to help the model self-correct.
+ *
+ * @param {string} content - full file content
+ * @param {string} oldString - the old_string that was not found
+ * @param {string} filePath - absolute file path (for display only)
+ * @returns {string}
+ */
+function findSimilarLinesHint(content, oldString, filePath) {
+    // Find the first non-empty, non-whitespace line of old_string as the needle
+    const needle = (oldString || '').split('\n').map(l => l.trim()).find(l => l.length >= MIN_SEARCH_LINE_LENGTH);
+    if (!needle) return '';
+
+    const lines = content.split('\n');
+    const matches = [];
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(needle)) {
+            matches.push(`  line ${i + 1}: ${lines[i]}`);
+            if (matches.length >= 5) break;
+        }
+    }
+
+    if (matches.length === 0) return '';
+    return `\nClosest match(es) in ${path.basename(filePath)}:\n${matches.join('\n')}`;
+}
+
 export const EditTool = {
     name: 'Edit',
     description: 'Performs exact string replacements in files.',
@@ -52,7 +83,7 @@ export const EditTool = {
         }
 
         if (!content.includes(input.old_string)) {
-            return 'Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.';
+            return `Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.${findSimilarLinesHint(content, input.old_string, filePath)}`;
         }
 
         if (input.replace_all) {
