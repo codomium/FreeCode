@@ -4,6 +4,12 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
 
 ---
 
+## What's New in v1.6
+
+> **Electron app update** — v1.6 adds an **in-app Settings Panel**, **File Explorer**, and **File Viewer** to the standalone Windows desktop app. See the [Electron app README](../electron-app/README.md) for details.  The VS Code extension is unchanged in this release.
+
+---
+
 ## What's New in v1.5
 
 ### ✏️ Edit diff view — see every change highlighted

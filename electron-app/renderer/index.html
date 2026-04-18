@@ -22,6 +22,13 @@
       </svg>
       History
     </button>
+    <button class="header-btn" id="explorer-btn" title="File Explorer">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="1" y="5" width="14" height="10" rx="1"/>
+        <path d="M1 5l3-4h4l1 4"/>
+      </svg>
+      Files
+    </button>
     <button class="header-btn" id="new-chat-btn" title="New conversation">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
         <line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/>
@@ -365,6 +372,139 @@
       <button class="modal-btn" id="apply-cancel-btn">Cancel</button>
       <button class="modal-btn" id="apply-pick-btn">Pick file…</button>
       <button class="modal-btn primary" id="apply-confirm-btn">Apply to active file</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Panel (absolute overlay inside #app) -->
+<div id="settings-panel">
+  <div id="settings-panel-header">
+    <span id="settings-panel-title">⚙ Settings</span>
+    <div style="flex:1"></div>
+    <button class="header-btn" id="settings-close-btn" title="Close settings">✕</button>
+  </div>
+  <div id="settings-content">
+    <div class="settings-section">
+      <div class="settings-section-label">Workspace</div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-workspace">Workspace Folder</label>
+        <div class="settings-path-row">
+          <input type="text" id="setting-workspace" class="settings-input" readonly placeholder="(home directory)">
+          <button class="settings-action-btn" id="settings-pick-workspace">Browse…</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-label">Model &amp; Agent</div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-model">Model</label>
+        <select id="setting-model" class="settings-select">
+          <optgroup label="Anthropic">
+            <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+            <option value="claude-opus-4-6">Opus 4.6</option>
+            <option value="claude-haiku-4-5">Haiku 4.5</option>
+          </optgroup>
+          <optgroup label="OpenAI">
+            <option value="gpt-4o">GPT-4o</option>
+            <option value="gpt-4o-mini">GPT-4o-mini</option>
+          </optgroup>
+          <optgroup label="Google">
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+          </optgroup>
+          <optgroup label="NVIDIA NIM">
+            <option value="moonshotai/kimi-k2.5">Kimi K2.5</option>
+            <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
+            <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B</option>
+            <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+            <option value="mistralai/mistral-large-2-instruct">Mistral Large 2</option>
+            <option value="mistralai/mixtral-8x22b-instruct-v0.1">Mixtral 8x22B</option>
+            <option value="deepseek-ai/deepseek-r1">DeepSeek R1</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-mode">Permission Mode</label>
+        <select id="setting-mode" class="settings-select">
+          <option value="default">default — ask before edits/commands</option>
+          <option value="auto">auto — approve safe reads</option>
+          <option value="plan">plan — read-only, no changes</option>
+          <option value="acceptEdits">acceptEdits — auto-apply file edits</option>
+          <option value="bypassPermissions">bypass — skip all checks</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-max-turns">Max Agent Turns</label>
+        <input type="number" id="setting-max-turns" class="settings-input settings-input-sm" min="1" max="200" step="1">
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-show-tool-output">Show Tool Output</label>
+        <label class="toggle-switch" id="setting-show-tool-output-wrap">
+          <input type="checkbox" id="setting-show-tool-output">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-label">API Keys</div>
+      <div class="settings-row">
+        <label class="settings-label">Anthropic / OpenAI / Google key</label>
+        <button class="settings-action-btn" id="settings-set-key-btn">🔑 Set API Key…</button>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-nvidia-key">NVIDIA NIM API Key</label>
+        <div class="settings-path-row">
+          <input type="password" id="setting-nvidia-key" class="settings-input" placeholder="nvapi-… (leave blank to clear)">
+          <button class="settings-action-btn" id="settings-save-nvidia-btn">Save</button>
+        </div>
+      </div>
+      <div class="settings-note" id="settings-key-status"></div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-label">About</div>
+      <div class="settings-row">
+        <span class="settings-label">Settings &amp; data location</span>
+        <button class="settings-action-btn" id="settings-open-folder-btn">📂 Open folder…</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">GitHub Repository</span>
+        <a class="settings-link" id="settings-gh-link" href="https://github.com/codomium/FreeCode">codomium/FreeCode ↗</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- File Explorer Panel (absolute overlay inside #app) -->
+<div id="explorer-panel">
+  <div id="explorer-panel-header">
+    <span id="explorer-panel-title">📁 Files</span>
+    <div style="flex:1"></div>
+    <button class="header-btn" id="explorer-refresh-btn" title="Refresh file tree">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M13 8A5 5 0 1 1 8 3h3M11 1v4h-4"/>
+      </svg>
+    </button>
+    <button class="header-btn" id="explorer-close-btn" title="Close file explorer">✕</button>
+  </div>
+  <div id="explorer-workspace-bar">
+    <span id="explorer-workspace-label"></span>
+  </div>
+  <div id="explorer-tree"></div>
+</div>
+
+<!-- File Viewer Modal -->
+<div id="file-viewer-modal">
+  <div id="file-viewer-inner">
+    <div id="file-viewer-header">
+      <span id="file-viewer-title">File Viewer</span>
+      <div style="flex:1"></div>
+      <button class="header-btn" id="file-viewer-add-ctx-btn" title="Add file to context">+ Context</button>
+      <button class="header-btn" id="file-viewer-close-btn" title="Close">✕</button>
+    </div>
+    <div id="file-viewer-body">
+      <pre id="file-viewer-content"></pre>
     </div>
   </div>
 </div>

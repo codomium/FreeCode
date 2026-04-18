@@ -14,6 +14,35 @@ An open-source, **Cursor-style AI coding assistant** with full tool access — r
 
 ---
 
+## What's New in v1.6
+
+### ⚙️ In-app Settings Panel (Electron app)
+
+The Electron app now has a full **Settings Panel** accessible via the ⚙ button in the header — no more opening the raw userData folder. Configure everything from one place:
+
+- **Workspace folder** — browse and change your project directory
+- **Model & Agent** — model selector, permission mode, max turns, show/hide tool output toggle
+- **API Keys** — set or update Anthropic/OpenAI/Google and NVIDIA NIM keys in-app
+- **About** — link to GitHub and quick access to your data folder
+
+### 📁 File Explorer (Electron app)
+
+A new **Files** button in the header opens a collapsible file-tree panel showing your workspace directory:
+
+- Expand/collapse folders with a click
+- Click any file to open it in the built-in file viewer
+- **+** button on hover adds any file directly to the agent's context
+
+### 👁️ File Viewer (Electron app)
+
+Click a file in the explorer to open it in a modal viewer with:
+
+- Full file content rendered in a monospace font
+- **Add to Context** button — instantly injects the file into the current chat prompt
+- 500 KB size guard to keep the UI responsive
+
+---
+
 ## What's New in v1.5
 
 ### ✏️ Edit diff view — see every file change highlighted

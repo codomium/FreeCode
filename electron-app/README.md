@@ -2,11 +2,40 @@
 
 A standalone Windows 11 desktop application that implements the **Open Claude Code** AI coding assistant without requiring Visual Studio Code.
 
-Built with [Electron](https://www.electronjs.org/), it reuses the same agent loop (`v2/src`) and chat UI (`vscode-extension/media`) from the VS Code extension, adapting them to run as a native Windows app.
+Built with [Electron](https://www.electronjs.org/), it reuses the same agent loop (`v2/src`) and chat UI from the VS Code extension, adapting them to run as a native Windows app.
 
 ---
 
-## What's New
+## What's New in v1.6
+
+### ⚙️ In-app Settings Panel
+
+Click the **⚙** button in the chat header to open a full settings panel — no more digging around in the userData folder:
+
+- **Workspace** — browse and change the active project folder
+- **Model & Agent** — model selector, permission mode, max turns, show/hide tool output toggle
+- **API Keys** — set Anthropic/OpenAI/Google and NVIDIA NIM keys directly in the app
+- **About** — quick link to GitHub and your data storage location
+
+### 📁 File Explorer
+
+A new **Files** button in the header opens a collapsible file-tree panel for your workspace:
+
+- Expand/collapse folders with a click
+- Hover a file to reveal a **+** button that adds it to the agent's context instantly
+- Click a file to open it in the built-in file viewer
+
+### 👁️ File Viewer
+
+Click any file in the explorer to open it in a modal viewer:
+
+- Full file content in a syntax-aware monospace view
+- **Add to Context** button injects the file into the active chat prompt
+- 500 KB size limit so the UI stays responsive on large files
+
+---
+
+## What's New in v1.5
 
 ### ✏️ Edit diff view
 When the agent edits a file the tool card auto-expands and shows a red/green diff — removed lines in red, added lines in green — so you always see exactly what changed.
@@ -46,15 +75,18 @@ The app opens a window with the familiar chat UI. On first launch, the setup gui
 
 ## Setting Your API Key
 
-**Option A — In-app dialog (recommended)**
+**Option A — In-app Settings Panel (recommended)**
 
-1. Click **Agent → Set API Key…** in the menu bar (or press `Ctrl+Shift+K`).
-2. Paste your key and press Enter.
+1. Click the **⚙** button in the chat header (or press `Ctrl+Shift+K`).
+2. In the **API Keys** section, click **🔑 Set API Key…**.
+3. Paste your key and press Enter.
    - Anthropic: `sk-ant-api03-…`
    - OpenAI: `sk-…`
    - NVIDIA NIM: `nvapi-…`
    - Google: your Gemini API key
-3. The key is encrypted with **Windows Credential Store** via Electron's `safeStorage` API.
+4. The key is encrypted with **Windows Credential Store** via Electron's `safeStorage` API.
+
+You can also set your NVIDIA key directly in the **Settings Panel → API Keys → NVIDIA NIM API Key** field.
 
 **Option B — Environment variable**
 
@@ -76,7 +108,42 @@ npm start
 
 The agent works inside a **workspace folder** (like VS Code's open folder). By default it starts in your home directory.
 
-To change it: **File → Open Workspace Folder…** (`Ctrl+Shift+O`)
+**From the Settings Panel**: click **⚙** → **Workspace → Browse…**
+
+**From the menu**: **File → Open Workspace Folder…** (`Ctrl+Shift+O`)
+
+The file explorer automatically refreshes when you change the workspace.
+
+---
+
+## Using the File Explorer
+
+Click the **Files** button in the header to open the file tree panel:
+
+| Action | Result |
+|--------|--------|
+| Click a folder | Expand/collapse |
+| Click a file | Open in file viewer |
+| Hover a file → **+** | Add file to agent context |
+| Click ↻ (refresh) | Reload the file tree |
+
+Folders like `node_modules`, `.git`, `dist`, and `build` are hidden automatically.
+
+---
+
+## Using the Settings Panel
+
+Click the **⚙** button (gear icon) in the chat header:
+
+| Section | What you can configure |
+|---------|----------------------|
+| Workspace | Browse & change active folder |
+| Model | Switch between all supported AI models |
+| Permission Mode | How the agent handles file/shell permissions |
+| Max Turns | Maximum tool-use turns per request (default: 20) |
+| Show Tool Output | Toggle tool cards in the chat |
+| API Keys | Set / update Anthropic + NVIDIA keys |
+| About | Open data folder · GitHub link |
 
 ---
 
@@ -108,8 +175,8 @@ electron-app/
 │                    # — stores settings & history in %APPDATA%\Open Claude Code\
 ├── preload.js       # Electron preload — exposes electronBridge IPC to renderer
 └── renderer/
-    ├── index.html   # Chat UI (adapted from vscode-extension/media/chat.html)
-    ├── chat.js      # Chat UI logic (acquireVsCodeApi replaced with electronBridge)
+    ├── index.html   # Chat UI (with settings panel, file explorer, file viewer)
+    ├── chat.js      # Chat UI logic (settings, explorer, viewer, acquireVsCodeApi → electronBridge)
     ├── chat.css     # Chat UI styles
     └── icon.svg     # App icon
 ```
@@ -128,7 +195,7 @@ All persistent data is stored in the Electron `userData` directory:
 
 | File | Contents |
 |---|---|
-| `settings.json` | Model, permission mode, workspace path, etc. |
+| `settings.json` | Model, permission mode, workspace path, max turns, etc. |
 | `apikey.enc` | Encrypted API key (Windows Credential Store) |
 | `history.json` | Chat session history (last 30 sessions) |
 | `activeSession.json` | Current in-progress session (auto-restored on restart) |
@@ -143,6 +210,20 @@ All persistent data is stored in the Electron `userData` directory:
 | OpenAI | GPT-4o, GPT-4o Mini |
 | Google | Gemini 2.0 Flash |
 | NVIDIA NIM | Kimi K2.5, Llama 3.1 405B/Nemotron 70B, Llama 3.3 70B, Mistral Large 2, Mixtral 8x22B, DeepSeek R1 |
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Shift+K` | Set API Key |
+| `Ctrl+Shift+O` | Open Workspace Folder |
+| `Ctrl+Shift+C` | Clear Session |
+| `Ctrl+F` | Search messages |
+| `Enter` | Send message |
+| `Shift+Enter` | New line in input |
+| `Esc` | Stop generation |
 
 ---
 

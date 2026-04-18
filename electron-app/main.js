@@ -533,6 +533,10 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 activeSession:      activeMessages,
                 activeSessionId,
                 workspacePath:      s.workspacePath || os.homedir(),
+                // full settings for settings panel
+                maxTurns:           s.maxTurns || 20,
+                showToolOutput:     s.showToolOutput !== false,
+                hasNvidiaKey:       !!(s.nvidiaApiKey || process.env.NVIDIA_API_KEY),
             });
 
             // Auto-restore session into agent bridge
@@ -879,9 +883,23 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'runCommand': {
             if (msg.command === 'openClaudeCode.setApiKey') {
                 await handleSetApiKey();
+            } else if (msg.command === 'openWorkspaceFolder') {
+                // Open workspace folder dialog (triggered from settings panel)
+                const result = dialog.showOpenDialogSync(mainWindow, {
+                    title:      'Select workspace folder',
+                    properties: ['openDirectory'],
+                });
+                if (result && result[0]) {
+                    saveSetting('workspacePath', result[0]);
+                    applyEnvFromSettings();
+                    if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+                    mainWindow && mainWindow.webContents.send('main-message', {
+                        type: 'workspaceChanged',
+                        path: result[0],
+                    });
+                }
             } else if (msg.command === 'workbench.action.openSettings') {
-                // Open the workspace folder in File Explorer as a proxy for "settings"
-                shell.openPath(getUserData());
+                // Legacy: renderer will now show in-app settings panel; this is a no-op fallback
             } else if (msg.command === 'vscode.open') {
                 const url = Array.isArray(msg.args) ? msg.args[0] : msg.args;
                 if (url && /^https?:\/\//.test(String(url))) {
@@ -896,6 +914,90 @@ ipcMain.on('renderer-message', async (event, msg) => {
         // ── Run code in terminal ──────────────────────────────────────────────
         case 'runInTerminal': {
             handleRunInTerminal(String(msg.code || ''));
+            break;
+        }
+
+        // ── Save a single setting ─────────────────────────────────────────────
+        case 'saveSettings': {
+            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath'];
+            if (msg.key && allowed.includes(msg.key)) {
+                saveSetting(msg.key, msg.value);
+                applyEnvFromSettings();
+                const reinitKeys = ['permissionMode','maxTurns','nvidiaApiKey'];
+                if (reinitKeys.includes(msg.key)) {
+                    if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+                }
+                if (msg.key === 'model' && agentBridge) {
+                    agentBridge.switchModel(msg.value);
+                }
+                if (msg.key === 'workspacePath') {
+                    mainWindow && mainWindow.webContents.send('main-message', {
+                        type: 'workspaceChanged',
+                        path: msg.value,
+                    });
+                }
+            }
+            break;
+        }
+
+        // ── Open settings / userData folder in system explorer ────────────────
+        case 'openSettingsFolder': {
+            shell.openPath(getUserData());
+            break;
+        }
+
+        // ── Directory listing for file explorer ───────────────────────────────
+        case 'listDirectory': {
+            const dirPath = msg.path || getSettings().workspacePath || os.homedir();
+            const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
+            function buildTree(dir, depth) {
+                if (depth > 5) return [];
+                let entries;
+                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+                const items = [];
+                for (const e of entries) {
+                    if (e.isDirectory()) {
+                        if (SKIP_DIRS.has(e.name)) continue;
+                        items.push({
+                            name:     e.name,
+                            path:     path.join(dir, e.name),
+                            type:     'dir',
+                            children: buildTree(path.join(dir, e.name), depth + 1),
+                        });
+                    } else {
+                        items.push({ name: e.name, path: path.join(dir, e.name), type: 'file' });
+                    }
+                }
+                items.sort((a, b) => {
+                    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+                    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+                });
+                return items;
+            }
+            try {
+                const tree = buildTree(dirPath, 0);
+                send({ type: 'directoryListing', path: dirPath, tree });
+            } catch (err) {
+                send({ type: 'directoryListing', path: dirPath, tree: [], error: err.message });
+            }
+            break;
+        }
+
+        // ── Read file contents for file viewer ────────────────────────────────
+        case 'readFile': {
+            try {
+                const MAX_BYTES = 500 * 1024; // 500 KB limit
+                const stats = fs.statSync(msg.path);
+                if (stats.size > MAX_BYTES) {
+                    send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content: null,
+                        error: `File too large to display (${Math.round(stats.size/1024)} KB)` });
+                } else {
+                    const content = fs.readFileSync(msg.path, 'utf8');
+                    send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content, size: stats.size });
+                }
+            } catch (err) {
+                send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content: null, error: err.message });
+            }
             break;
         }
 
