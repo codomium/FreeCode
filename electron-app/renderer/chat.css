@@ -1218,6 +1218,57 @@ select:focus { border-color: var(--accent); }
   border-color: var(--error-text);
 }
 
+/* ── AskUser question card ─────────────────────────────────────────────────── */
+.msg-question-card {
+  border: 1px solid rgba(0,122,204,0.45);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+  background: var(--bg-input);
+  max-width: 94%;
+  align-self: flex-start;
+  gap: 8px;
+}
+.msg-question-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  margin: 4px 0;
+}
+.msg-question-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.msg-question-input {
+  flex: 1;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.msg-question-input:focus { border-color: var(--accent); }
+.msg-question-input:disabled { opacity: 0.5; }
+.msg-question-submit {
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 14px;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+.msg-question-submit:hover { opacity: 0.85; }
+.msg-question-submit:disabled { opacity: 0.5; cursor: default; }
+
 /* Continue button on assistant messages */
 .msg-continue-btn {
   background: transparent;
@@ -2378,6 +2429,28 @@ select:focus { border-color: var(--accent); }
 .editor-tab:hover .editor-tab-close { opacity: 1; }
 .editor-tab.active .editor-tab-close { opacity: 0.6; }
 .editor-tab-close:hover { background: rgba(244,135,113,0.2); color: var(--error-text); opacity: 1; }
+
+/* Close-all button — floats at the right end of the tab bar */
+.editor-tab-close-all {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  align-self: center;
+  margin-right: 4px;
+}
+.editor-tab-close-all:hover {
+  background: rgba(244,135,113,0.15);
+  border-color: var(--error-text);
+  color: var(--error-text);
+}
 
 /* ── Editor content area ─────────────────────────────────────────── */
 #editor-content {

@@ -1866,6 +1866,10 @@
                 showPermissionModal(msg);
                 break;
 
+            case 'questionRequest':
+                showQuestionCard(msg);
+                break;
+
             case 'apiKeySet':
                 showWelcome(true);
                 if (settingsKeyStatus) {
@@ -3287,9 +3291,52 @@
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // PLAN BOARD — Cursor-style task tracker
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ── AskUser question card ─────────────────────────────────────────────────
+    /**
+     * Show an inline question card in the chat stream when the agent calls
+     * AskUser.  The user types an answer and submits; the answer is forwarded
+     * back to main.js which resolves the pending AskUser promise.
+     */
+    function showQuestionCard(msg) {
+        hideWelcome();
+        const div = document.createElement('div');
+        div.className = 'msg msg-question-card';
+        div.innerHTML = `
+            <div class="msg-header">
+                <div class="msg-avatar" style="background:var(--accent);color:#fff;font-size:14px;">?</div>
+                <span class="msg-name">Agent Question</span>
+            </div>
+            <div class="msg-question-text"></div>
+            <div class="msg-question-row">
+                <input class="msg-question-input" type="text" placeholder="${msg.defaultValue ? escapeHtml(msg.defaultValue) : 'Your answer…'}" />
+                <button class="msg-question-submit">Submit</button>
+            </div>
+        `;
+        // Safe text injection
+        div.querySelector('.msg-question-text').textContent = msg.question || '';
+
+        const inputEl2 = div.querySelector('.msg-question-input');
+        const submitBtn = div.querySelector('.msg-question-submit');
+
+        function submit() {
+            const answer = inputEl2.value.trim() || msg.defaultValue || '';
+            // Disable UI so it can't be submitted twice
+            inputEl2.disabled = true;
+            submitBtn.disabled = true;
+            submitBtn.textContent = '✓';
+            vscode.postMessage({ type: 'questionResponse', reqId: msg.reqId, answer });
+        }
+
+        submitBtn.addEventListener('click', submit);
+        inputEl2.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+        });
+
+        messagesEl.appendChild(div);
+        scrollToBottom();
+        // Focus the input so the user can type immediately
+        setTimeout(() => inputEl2.focus(), 80);
+    }
 
     let planBoardCollapsed = false;
 
@@ -3400,7 +3447,15 @@
             const m = line.match(PLAN_ITEM_PATTERN);
             if (m) {
                 const itemText = m[1].replace(/^\[[ x]\]\s*/, '').trim(); // strip checkbox syntax
-                if (itemText) items.push(itemText);
+                if (!itemText) continue;
+
+                // Skip choice/option lines like "**A)** ...", "A) ...", "(A) ...", "Option A:"
+                // These appear when the agent lists multiple alternatives for a decision.
+                if (/^(?:\*{0,2})?(?:[A-D][).:]|\([A-D]\))\s/i.test(itemText)) continue;
+                // Skip pure question lines (the agent should use AskUser for those)
+                if (/\?\s*$/.test(itemText) && itemText.length < 200) continue;
+
+                items.push(itemText);
             }
         }
         return items;
@@ -3639,6 +3694,14 @@
         if (diffToolbar) diffToolbar.style.display = 'none';
     }
 
+    /** Close all open editor tabs. */
+    function closeAllTabs() {
+        openTabs = [];
+        activeTabPath = null;
+        renderTabBar();
+        showEditorEmptyState();
+    }
+
     /** Rebuild the tab bar DOM from openTabs. */
     function renderTabBar() {
         if (!editorTabsEl) return;
@@ -3676,6 +3739,16 @@
             tabEl.appendChild(closeEl);
             tabEl.addEventListener('click', () => activateTab(tab.path));
             editorTabsEl.appendChild(tabEl);
+        }
+
+        // Show "Close all" button only when there are 2+ tabs
+        if (openTabs.length >= 2) {
+            const closeAllEl = document.createElement('button');
+            closeAllEl.className   = 'editor-tab-close-all';
+            closeAllEl.title       = 'Close all tabs';
+            closeAllEl.textContent = '×× Close all';
+            closeAllEl.addEventListener('click', closeAllTabs);
+            editorTabsEl.appendChild(closeAllEl);
         }
     }
 

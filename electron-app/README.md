@@ -6,6 +6,53 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New in v2.2
+
+### 💬 Collapsible Long User Prompts
+
+User messages longer than 300 characters are automatically **collapsed** to ~5 lines with a smooth fade-out gradient. A **Show more ▾ / Show less ▴** toggle lets you expand or collapse any long prompt at any time, keeping the chat tidy without losing context.
+
+### ❓ AskUser — Interactive Agent Questions (IPC Bridge)
+
+The agent can now call the **AskUser** tool inside the Electron app. When it does, an inline **question card** appears in the chat stream:
+
+```
+┌─────────────────────────────────────────────────┐
+│ ?  Agent Question                               │
+│                                                 │
+│  Should I use approach A or B?                  │
+│  [ Your answer…                    ] [Submit]   │
+└─────────────────────────────────────────────────┘
+```
+
+The agent waits for your reply before proceeding — no more guessing or listing every option as a plan item.
+
+### 📋 Plan Board — Smarter Item Filtering
+
+The auto-populated plan board no longer adds **choice/option lines** (e.g. `**A)** Create a wrapper…`, `B) Use existing…`) or bare question lines as task items. Those are either skipped or the agent asks via AskUser first, so only real actionable tasks appear in the board.
+
+### 🛠️ Full Tool Catalogue — All 25+ Tools Active
+
+The system prompt now explicitly describes every available tool and when to use each one:
+
+| Tool | Purpose |
+|------|---------|
+| WebFetch | Fetch docs, changelogs, any URL |
+| WebSearch | Live web search (Brave / SearXNG) |
+| AskUser | Ask clarifying questions inline |
+| Agent | Spawn a sub-agent for complex tasks |
+| LSP | Go-to-definition, diagnostics, hover types |
+| TodoWrite | Session task tracking |
+| Skill / ToolSearch / SendMessage / CronCreate … | Specialised integrations |
+
+The agent is now guided to prefer `AskUser` over listing all options, and `WebFetch`/`WebSearch` for up-to-date documentation.
+
+### 🗂️ Close All Editor Tabs
+
+When two or more files are open in the editor, a **×× Close all** button appears at the right end of the tab bar. One click closes every tab and returns to the empty-editor state.
+
+---
+
 ## What's New in v2.1
 
 ### 🏷️ Mode Badge in Agent Responses
