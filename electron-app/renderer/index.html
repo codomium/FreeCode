@@ -92,6 +92,25 @@
   <!-- Mode description bar (full width) -->
   <div id="mode-desc-bar" style="display:none">
     <span id="mode-desc-text"></span>
+    <button id="mode-desc-close" title="Dismiss">✕</button>
+  </div>
+
+  <!-- Plan Board (Cursor-style To-Do list, shown when plan items exist) -->
+  <div id="plan-board" style="display:none">
+    <div class="plan-board-header">
+      <span class="plan-board-title">📋 Plan</span>
+      <button class="plan-board-toggle" id="plan-board-collapse" title="Collapse/expand plan">▾</button>
+      <div class="plan-board-spacer"></div>
+      <button class="plan-board-btn" id="plan-add-btn" title="Add task">+ Add</button>
+      <button class="plan-board-btn plan-board-btn-muted" id="plan-clear-done-btn" title="Clear completed tasks">✓ Clear done</button>
+      <button class="plan-board-btn plan-board-btn-muted" id="plan-close-btn" title="Close plan board">✕</button>
+    </div>
+    <div id="plan-items-list"></div>
+    <div id="plan-add-row" style="display:none">
+      <input id="plan-add-input" type="text" placeholder="New task…" autocomplete="off" spellcheck="false">
+      <button id="plan-add-confirm">Add</button>
+      <button id="plan-add-cancel">✕</button>
+    </div>
   </div>
 
   <!-- Quick Actions panel (full width, collapsible) -->
@@ -565,6 +584,24 @@
   <div class="ctx-menu-separator"></div>
   <div class="ctx-menu-item" id="ctx-copy-path">📋 Copy Path</div>
   <div class="ctx-menu-item" id="ctx-add-context">+ Add to Chat Context</div>
+</div>
+
+<!-- Permission Request Modal (default mode — ask before edits/commands) -->
+<div id="permission-modal" style="display:none">
+  <div id="permission-modal-inner">
+    <div id="permission-modal-header">
+      <span id="permission-modal-icon">🔐</span>
+      <span id="permission-modal-title">Permission Required</span>
+    </div>
+    <div id="permission-modal-body">
+      <div id="permission-modal-desc"></div>
+      <pre id="permission-modal-detail"></pre>
+    </div>
+    <div id="permission-modal-footer">
+      <button class="modal-btn" id="permission-deny-btn">✗ Deny</button>
+      <button class="modal-btn primary" id="permission-allow-btn">✓ Allow</button>
+    </div>
+  </div>
 </div>
 
 <script src="chat.js"></script>

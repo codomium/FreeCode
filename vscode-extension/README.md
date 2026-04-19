@@ -4,6 +4,12 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
 
 ---
 
+## What's New in v2.1
+
+> **Electron app update** — v2.1 adds a **Plan Mode To-Do Board**, **interactive permission prompts** in default mode, **mode badges** in agent responses, a **persistent mode description bar**, and several bug fixes. See the [Electron app README](../electron-app/README.md) for full details. The VS Code extension permission modes table below has been updated to reflect the corrected behavior of `default` mode.
+
+---
+
 ## What's New in v1.6
 
 > **Electron app update** — v1.6 adds an **in-app Settings Panel**, **File Explorer**, and **File Viewer** to the standalone Windows desktop app. See the [Electron app README](../electron-app/README.md) for details.  The VS Code extension is unchanged in this release.
@@ -216,11 +222,11 @@ Open **Settings** (`Ctrl+,`) and search for `openClaudeCode`:
 
 | Mode | Description |
 |------|-------------|
-| `default` | Ask before each tool use (safest) |
-| `auto` | Automatically approve safe operations |
-| `plan` | Read-only — no file writes or shell commands |
-| `acceptEdits` | Approve file edits without prompting |
-| `bypassPermissions` | Skip all permission checks |
+| `default` | **Ask before each tool use** — an Allow/Deny prompt appears before the agent edits a file or runs a command (safest) |
+| `auto` | Automatically approve safe read-only operations; asks for writes and commands |
+| `plan` | Read-only planning mode — no file writes or shell commands |
+| `acceptEdits` | Automatically apply all file edits and run Bash commands without asking |
+| `bypassPermissions` | ⚠ Skip all permission checks — full automation, use with care |
 
 ---
 
