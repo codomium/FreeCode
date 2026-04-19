@@ -4,9 +4,28 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
 
 ---
 
-## What's New in v2.1
+## What's New in v2.3
 
-> **Electron app update** — v2.1 adds a **Plan Mode To-Do Board**, **interactive permission prompts** in default mode, **mode badges** in agent responses, a **persistent mode description bar**, and several bug fixes. See the [Electron app README](../electron-app/README.md) for full details. The VS Code extension permission modes table below has been updated to reflect the corrected behavior of `default` mode.
+### 🟩🟥 Accurate Diff View for Agent File Edits
+
+When the agent edits a file the diff view now **shows only the lines that actually changed** instead of marking the whole file green:
+
+- **Before (bug):** Large files (800+ lines) modified in just a few places showed every line as a green `+` — the entire new file appeared "added"
+- **After (fixed):** Unchanged lines appear as grey context; truly added lines are green; truly removed lines are red
+
+The fix replaces the broken O(n²) large-file fallback with a **hash-based patience-diff** that correctly classifies equal lines as context rows.
+
+### 🔄 Agent Auto-Retry on Rate-Limit Errors
+
+The agent now automatically retries on `429 Too Many Requests` and other transient API errors without stopping or corrupting the conversation:
+
+- Retries up to **3 times** with exponential back-off (30 s → 60 s → 120 s)
+- Respects `Retry-After` headers from the API
+- Displays `⏳ Rate limited — retrying in 30s (attempt 1/3)…` in the chat UI during the wait
+
+---
+
+## What's New in v2.1 — v2.1 adds a **Plan Mode To-Do Board**, **interactive permission prompts** in default mode, **mode badges** in agent responses, a **persistent mode description bar**, and several bug fixes. See the [Electron app README](../electron-app/README.md) for full details. The VS Code extension permission modes table below has been updated to reflect the corrected behavior of `default` mode.
 
 ---
 

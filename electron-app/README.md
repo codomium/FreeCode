@@ -6,6 +6,47 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New in v2.3
+
+### 🔌 Custom Providers UI — Redesigned Settings Cards
+
+The **Custom Providers** section in Settings has been completely reworked:
+
+- **Provider cards** display an auto-picked emoji icon derived from the base URL (🤖 OpenAI, ⚡ NVIDIA NIM, 🌐 Google, 💻 Ollama/local, 🔌 generic)
+- Model names are rendered in **accent colour** so you can instantly see which models a provider exposes
+- **✏ Edit** and **✕ Remove** are grouped as an action cluster on the right edge of each card, with correct hover colours
+- Cards have border-colour transitions and rounded corners; the form gets icon-prefixed titles and a separator line above its buttons
+- Empty state now shows a helpful hint: *"No custom providers yet. Click + Add Provider to connect any OpenAI-compatible API."*
+
+### 📐 Editor Line Numbers
+
+The middle-column code editor now shows **VS Code-style line numbers**:
+
+- A gutter column appears to the left of the editable text area, right-aligned and styled in muted colour
+- Gutter scroll is **locked in sync** with the textarea scroll position
+- Line count **updates live** as you type, paste, or use the Tab key
+
+### 🟩🟥 Accurate Diff View for Large Files
+
+Agent-edited files now show **only the lines that actually changed**, not every line:
+
+| Before | After |
+|--------|-------|
+| 800-line file modified in 3 places → 800 green `+` lines | ~794 grey context lines + 6 red/green changed lines |
+
+The previous O(n²) LCS fallback for files larger than ~400 K line-pairs degraded to "mark everything as added". The new **hash-based patience-diff** algorithm correctly identifies equal lines as context rows.
+
+### 🔄 Agent Auto-Retry on 429 / Rate-Limit Errors
+
+The agent no longer aborts when it hits a `429 Too Many Requests` or gateway error mid-task:
+
+- Retries the API call **up to 3 times** inside the agent loop — conversation state is untouched between retries
+- **Exponential back-off**: 30 s → 60 s → 120 s; honours `Retry-After` header
+- The UI shows `⏳ Rate limited — retrying in 30s (attempt 1/3)…` during the wait
+- Works for all providers: Anthropic, OpenAI, Google, NVIDIA NIM, and Custom Providers
+
+---
+
 ## What's New in v2.2
 
 ### 💬 Collapsible Long User Prompts
