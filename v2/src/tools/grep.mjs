@@ -9,9 +9,12 @@
  * - glob filter and type filter
  * - head_limit (default 250)
  * - multiline mode
+ * - Windows support: uses 'where' for rg detection, avoids bash pipelines
  */
 import { execSync } from 'child_process';
 import path from 'path';
+
+const IS_WINDOWS = process.platform === 'win32';
 
 export const GrepTool = {
     name: 'Grep',
@@ -51,7 +54,7 @@ export const GrepTool = {
             const useRg = hasRipgrep();
 
             if (useRg) {
-                args.push('rg');
+                args.push(IS_WINDOWS ? 'rg.exe' : 'rg');
                 if (input['-i']) args.push('-i');
                 if (input.multiline) args.push('-U', '--multiline-dotall');
 
@@ -96,18 +99,41 @@ export const GrepTool = {
                 args.push('--', input.pattern, dir);
             }
 
-            // Apply head_limit
-            const cmd = limit > 0
-                ? `${args.join(' ')} 2>/dev/null | head -${limit}`
-                : `${args.join(' ')} 2>/dev/null`;
+            let result;
+            if (IS_WINDOWS) {
+                // On Windows avoid bash-specific pipelines; limit output in JS instead
+                try {
+                    result = execSync(args.join(' '), {
+                        encoding: 'utf-8',
+                        maxBuffer: 10 * 1024 * 1024,
+                        timeout: 30000,
+                    });
+                } catch (e) {
+                    // grep/rg returns exit code 1 when no matches found — that's OK
+                    result = e.stdout || '';
+                }
+            } else {
+                // On Unix: redirect stderr and pipe to head for efficiency
+                const cmd = limit > 0
+                    ? `${args.join(' ')} 2>/dev/null | head -${limit}`
+                    : `${args.join(' ')} 2>/dev/null`;
 
-            const result = execSync(cmd, {
-                encoding: 'utf-8',
-                maxBuffer: 10 * 1024 * 1024,
-                timeout: 30000,
-            });
+                result = execSync(cmd, {
+                    encoding: 'utf-8',
+                    maxBuffer: 10 * 1024 * 1024,
+                    timeout: 30000,
+                });
+            }
 
-            return result.trim() || 'No matches found.';
+            let output = (result || '').trim();
+
+            // Apply head_limit in JS when on Windows (bash pipe not available)
+            if (IS_WINDOWS && limit > 0) {
+                const lines = output.split('\n');
+                if (lines.length > limit) output = lines.slice(0, limit).join('\n');
+            }
+
+            return output || 'No matches found.';
         } catch {
             return 'No matches found.';
         }
@@ -118,7 +144,9 @@ let _hasRg = null;
 function hasRipgrep() {
     if (_hasRg !== null) return _hasRg;
     try {
-        execSync('which rg', { encoding: 'utf-8', timeout: 5000 });
+        // 'where' on Windows, 'which' on Unix
+        const cmd = IS_WINDOWS ? 'where rg' : 'which rg';
+        execSync(cmd, { encoding: 'utf-8', timeout: 5000 });
         _hasRg = true;
     } catch {
         _hasRg = false;

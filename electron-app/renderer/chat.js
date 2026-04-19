@@ -69,6 +69,7 @@
     let planItems = [];          // { id, text, done, inProgress }
     let planBoardVisible = false;
     let planItemCounter = 0;
+    let planInsertBeforeId = null; // null = append to end; id = insert before that item
 
     // ── Editor tab state ─────────────────────────────────────────────────────
     let openTabs = [];           // { path, name, content, error, isDiff, beforeContent, afterContent }
@@ -233,6 +234,7 @@
     const planAddInputEl     = document.getElementById('plan-add-input');
     const planAddConfirmBtn  = document.getElementById('plan-add-confirm');
     const planAddCancelBtn   = document.getElementById('plan-add-cancel');
+    const planAddPositionLabelEl = document.getElementById('plan-add-position-label');
 
     // ── Permission modal refs ────────────────────────────────────────────────
     const permModalEl        = document.getElementById('permission-modal');
@@ -3278,6 +3280,22 @@
         if (!planItemsListEl) return;
         planItemsListEl.innerHTML = '';
         for (const item of planItems) {
+            // Insert-before drop zone shown above each item
+            const insertZone = document.createElement('div');
+            insertZone.className = 'plan-insert-zone';
+            const insertBtn = document.createElement('button');
+            insertBtn.className = 'plan-insert-btn';
+            insertBtn.title = 'Insert task before this one';
+            insertBtn.textContent = '+ Insert here';
+            insertBtn.addEventListener('click', () => {
+                planInsertBeforeId = item.id;
+                if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = `Insert before: "${item.text.slice(0, 30)}…"`;
+                if (planAddRowEl) planAddRowEl.style.display = '';
+                if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
+            });
+            insertZone.appendChild(insertBtn);
+            planItemsListEl.appendChild(insertZone);
+
             const row = document.createElement('div');
             row.className = 'plan-item'
                 + (item.done ? ' plan-item-done' : '')
@@ -3321,9 +3339,19 @@
         updatePlanBoardVisibility();
     }
 
-    function addPlanItem(text) {
+    function addPlanItem(text, insertBeforeId) {
         if (!text || !text.trim()) return;
-        planItems.push({ id: ++planItemCounter, text: text.trim(), done: false, inProgress: false });
+        const newItem = { id: ++planItemCounter, text: text.trim(), done: false, inProgress: false };
+        if (insertBeforeId != null) {
+            const idx = planItems.findIndex(p => p.id === insertBeforeId);
+            if (idx !== -1) {
+                planItems.splice(idx, 0, newItem);
+            } else {
+                planItems.push(newItem);
+            }
+        } else {
+            planItems.push(newItem);
+        }
         renderPlanBoard();
         updatePlanBoardVisibility();
     }
@@ -3396,13 +3424,20 @@
     if (planAddBtn) {
         planAddBtn.addEventListener('click', () => {
             if (!planAddRowEl) return;
+            planInsertBeforeId = null;
+            if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = 'Add to end';
             planAddRowEl.style.display = '';
             if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
         });
     }
     if (planAddConfirmBtn) {
         planAddConfirmBtn.addEventListener('click', () => {
-            if (planAddInputEl) { addPlanItem(planAddInputEl.value); planAddInputEl.value = ''; }
+            if (planAddInputEl) {
+                addPlanItem(planAddInputEl.value, planInsertBeforeId);
+                planAddInputEl.value = '';
+            }
+            planInsertBeforeId = null;
+            if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = '';
             if (planAddRowEl) planAddRowEl.style.display = 'none';
         });
     }
@@ -3643,22 +3678,39 @@
         let beforeNum = 1, afterNum = 1;
         for (const { type, line } of diff) {
             const rowEl  = document.createElement('div');
-            let numText;
-            if (type === 'equal')  { rowEl.className = 'diff-context'; numText = beforeNum++; afterNum++; }
-            else if (type === 'remove') { rowEl.className = 'diff-removed'; numText = beforeNum++; }
-            else                   { rowEl.className = 'diff-added';   numText = afterNum++;  }
-            const numEl  = document.createElement('span');
-            numEl.className   = 'diff-line-num';
-            numEl.textContent = type !== 'add' ? String(numText) : '';
+            let oldNumText = '', newNumText = '';
+            if (type === 'equal')  {
+                rowEl.className = 'diff-context';
+                oldNumText = String(beforeNum++);
+                newNumText = String(afterNum++);
+            } else if (type === 'remove') {
+                rowEl.className = 'diff-removed';
+                oldNumText = String(beforeNum++);
+            } else {
+                rowEl.className = 'diff-added';
+                newNumText = String(afterNum++);
+            }
+            // Old line number column
+            const oldNumEl = document.createElement('span');
+            oldNumEl.className   = 'diff-line-num diff-line-num-old';
+            oldNumEl.textContent = oldNumText;
+            // New line number column
+            const newNumEl = document.createElement('span');
+            newNumEl.className   = 'diff-line-num diff-line-num-new';
+            newNumEl.textContent = newNumText;
             const textEl = document.createElement('span');
             textEl.className   = 'diff-line-text';
             textEl.textContent = line;
-            rowEl.appendChild(numEl);
+            rowEl.appendChild(oldNumEl);
+            rowEl.appendChild(newNumEl);
             rowEl.appendChild(textEl);
             container.appendChild(rowEl);
         }
         return container;
     }
+
+    // ── DOM ref for Accept All button ────────────────────────────────────────
+    const diffAcceptAllBtn = document.getElementById('diff-accept-all-btn');
 
     // Diff accept / reject
     if (diffAcceptBtn) {
@@ -3666,6 +3718,9 @@
             if (!activeTabPath) return;
             const tab = openTabs.find(t => t.path === activeTabPath);
             if (!tab || !tab.isDiff) return;
+            // Write afterContent to disk to confirm the accepted state
+            const afterContent = tab.afterContent !== undefined ? tab.afterContent : (tab.content || '');
+            vscode.postMessage({ type: 'writeFile', path: tab.path, content: afterContent, purpose: 'diff_accept' });
             tab.isDiff = false; tab.beforeContent = undefined; tab.afterContent = undefined;
             renderTabBar();
             renderEditorContent(tab);
@@ -3681,6 +3736,26 @@
             const fp = tab.path;
             vscode.postMessage({ type: 'writeFile', path: fp, content: before, purpose: 'diff_reject' });
             closeTab(fp);
+        });
+    }
+
+    // Accept All Changes: accept every open diff tab in one click
+    if (diffAcceptAllBtn) {
+        diffAcceptAllBtn.addEventListener('click', () => {
+            const diffTabs = openTabs.filter(t => t.isDiff);
+            for (const tab of diffTabs) {
+                const afterContent = tab.afterContent !== undefined ? tab.afterContent : (tab.content || '');
+                vscode.postMessage({ type: 'writeFile', path: tab.path, content: afterContent, purpose: 'diff_accept' });
+                tab.isDiff = false;
+                tab.beforeContent = undefined;
+                tab.afterContent  = undefined;
+            }
+            renderTabBar();
+            if (activeTabPath) {
+                const activeTab = openTabs.find(t => t.path === activeTabPath);
+                if (activeTab) renderEditorContent(activeTab);
+            }
+            if (diffToolbar) diffToolbar.style.display = 'none';
         });
     }
 

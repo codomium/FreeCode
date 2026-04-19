@@ -37,11 +37,17 @@ export const MultiEditTool = {
             errors.push('edits must be an array');
             return errors;
         }
+        // Normalize common alternative key names the model may use
+        for (const e of input.edits) {
+            if (!e.file_path) e.file_path = e.filename || e.path || e.file || null;
+            if (e.old_string == null) e.old_string = e.old_content || e.original_string || e.original || e.search || null;
+            if (e.new_string == null) e.new_string = (e.new_content || e.replacement_string || e.replacement || e.replace) ?? null;
+        }
         for (let i = 0; i < input.edits.length; i++) {
             const e = input.edits[i];
             if (!e.file_path) errors.push(`edit[${i}]: file_path required`);
-            if (!e.old_string) errors.push(`edit[${i}]: old_string required`);
-            if (e.old_string === e.new_string) errors.push(`edit[${i}]: old_string must differ from new_string`);
+            if (e.old_string == null) errors.push(`edit[${i}]: old_string required`);
+            if (e.old_string !== null && e.old_string === e.new_string) errors.push(`edit[${i}]: old_string must differ from new_string`);
         }
         return errors;
     },

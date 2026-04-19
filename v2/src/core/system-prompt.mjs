@@ -243,15 +243,77 @@ export function loadClaudeMdFiles(cwd = process.cwd()) {
  * @param {string[]} [options.addDirs] - additional directories to search for CLAUDE.md
  * @returns {{ staticPrefix: string, dynamicSuffix: string, full: string }}
  */
+/**
+ * Detect the primary language/framework stack of a workspace.
+ * Returns a short human-readable string or empty string if unknown.
+ * @param {string} root - resolved workspace root directory
+ * @returns {string}
+ */
+function detectProjectLanguage(root) {
+    const check = (rel) => fs.existsSync(path.join(root, rel));
+    const indicators = [];
+
+    // Flutter / Dart
+    if (check('pubspec.yaml') || check('pubspec.yml')) indicators.push('Flutter/Dart');
+    // Node / JavaScript / TypeScript
+    if (check('package.json')) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+            const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+            if (deps.includes('react')) indicators.push('React');
+            else if (deps.includes('vue')) indicators.push('Vue.js');
+            else if (deps.includes('@angular/core')) indicators.push('Angular');
+            else if (deps.includes('next')) indicators.push('Next.js');
+            else if (deps.includes('electron')) indicators.push('Electron');
+            else indicators.push('Node.js');
+            if (check('tsconfig.json') || deps.includes('typescript')) indicators.push('TypeScript');
+        } catch {
+            indicators.push('Node.js');
+        }
+    }
+    // Python
+    if (check('pyproject.toml') || check('setup.py') || check('requirements.txt')) indicators.push('Python');
+    // Go
+    if (check('go.mod')) indicators.push('Go');
+    // Rust
+    if (check('Cargo.toml')) indicators.push('Rust');
+    // Java / Kotlin (Android / Spring)
+    if (check('pom.xml')) indicators.push('Java/Maven');
+    if (check('build.gradle') || check('build.gradle.kts')) {
+        if (check('android/app') || check('android')) indicators.push('Android/Kotlin');
+        else indicators.push('Gradle');
+    }
+    // C#
+    try {
+        if (fs.readdirSync(root).some(f => f.endsWith('.csproj') || f.endsWith('.sln'))) indicators.push('C#/.NET');
+    } catch { /* skip */ }
+    // PHP
+    if (check('composer.json')) indicators.push('PHP');
+    // Ruby
+    if (check('Gemfile')) indicators.push('Ruby');
+    // Swift / iOS
+    if (check('Package.swift')) indicators.push('Swift');
+    try {
+        if (fs.readdirSync(root).some(f => f.endsWith('.xcodeproj') || f.endsWith('.xcworkspace'))) indicators.push('Swift/Xcode');
+    } catch { /* skip */ }
+
+    return indicators.join(', ');
+}
+
 export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
     if (override) {
         return { staticPrefix: override, dynamicSuffix: '', full: override };
     }
 
     const workspaceRoot = path.resolve(cwd || process.cwd());
+    const detectedStack = detectProjectLanguage(workspaceRoot);
+    const platformInfo = `Platform: ${process.platform} (${process.arch})`;
+
     const basePreamble = [
         `You are an AI coding assistant with direct access to the user's workspace on disk.`,
         `Current working directory: ${workspaceRoot}`,
+        detectedStack ? `Detected project stack: ${detectedStack}` : '',
+        platformInfo,
         ``,
         `## Workspace exploration rules`,
         ``,
@@ -263,7 +325,10 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `- Prefer reading the actual source over guessing from file names alone.`,
         `- Never say "I don't see any files" or ask the user to share code — you can read`,
         `  the workspace directly with your tools.`,
-    ].join('\n');
+        process.platform === 'win32'
+            ? `- On Windows: use PowerShell commands (not bash/sh). Prefer 'dir', 'Get-ChildItem', etc.`
+            : '',
+    ].filter(Boolean).join('\n');
 
     const parts = [basePreamble];
 

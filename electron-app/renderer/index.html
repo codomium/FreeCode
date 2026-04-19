@@ -101,12 +101,13 @@
       <span class="plan-board-title">📋 Plan</span>
       <button class="plan-board-toggle" id="plan-board-collapse" title="Collapse/expand plan">▾</button>
       <div class="plan-board-spacer"></div>
-      <button class="plan-board-btn" id="plan-add-btn" title="Add task">+ Add</button>
+      <button class="plan-board-btn" id="plan-add-btn" title="Add task to end">+ Add</button>
       <button class="plan-board-btn plan-board-btn-muted" id="plan-clear-done-btn" title="Clear completed tasks">✓ Clear done</button>
       <button class="plan-board-btn plan-board-btn-muted" id="plan-close-btn" title="Close plan board">✕</button>
     </div>
     <div id="plan-items-list"></div>
     <div id="plan-add-row" style="display:none">
+      <span id="plan-add-position-label" class="plan-add-position-label"></span>
       <input id="plan-add-input" type="text" placeholder="New task…" autocomplete="off" spellcheck="false">
       <button id="plan-add-confirm">Add</button>
       <button id="plan-add-cancel">✕</button>
@@ -372,8 +373,9 @@
       <div id="diff-toolbar" style="display:none">
         <span id="diff-toolbar-filename"></span>
         <div class="diff-toolbar-actions">
-          <button id="diff-accept-btn" class="diff-btn diff-accept">✓ Accept changes</button>
-          <button id="diff-reject-btn" class="diff-btn diff-reject">✗ Reject changes</button>
+          <button id="diff-accept-btn" class="diff-btn diff-accept">✓ Accept</button>
+          <button id="diff-accept-all-btn" class="diff-btn diff-accept-all" title="Accept all open changes">✓ Accept All</button>
+          <button id="diff-reject-btn" class="diff-btn diff-reject">✗ Reject</button>
         </div>
       </div>
     </div><!-- /#panel-editor -->

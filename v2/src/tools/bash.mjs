@@ -9,8 +9,25 @@
  * - ANSI code stripping by default
  * - Live streaming output via async generator
  * - Interactive stdin via sendBashStdin(jobId, text)
+ * - Windows support: uses PowerShell when bash is unavailable
  */
 import { spawn } from 'child_process';
+
+/** Detect the best available shell on this platform. */
+const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * Return [shell, args] for executing a command string.
+ * On Windows uses PowerShell (preferred) or cmd.exe.
+ * On Unix uses bash.
+ */
+function getShellArgs(command) {
+    if (IS_WINDOWS) {
+        // PowerShell gives better POSIX-like behaviour than cmd.exe
+        return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command]];
+    }
+    return ['bash', ['-c', command]];
+}
 
 // Strip ANSI escape sequences
 function stripAnsi(str) {
@@ -95,7 +112,8 @@ export const BashTool = {
         let killed = false;
         let finalResult = '';
 
-        const proc = spawn('bash', ['-c', input.command], {
+        const [shell, shellArgs] = getShellArgs(input.command);
+        const proc = spawn(shell, shellArgs, {
             env: { ...process.env },
             stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -178,7 +196,8 @@ let bgJobId = 0;
 
 function runBackground(command) {
     const id = ++bgJobId;
-    const proc = spawn('bash', ['-c', command], {
+    const [shell, shellArgs] = getShellArgs(command);
+    const proc = spawn(shell, shellArgs, {
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
