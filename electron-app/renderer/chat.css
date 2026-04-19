@@ -852,6 +852,24 @@ select:focus { border-color: var(--accent); }
   color: #ce9178;
 }
 
+/* Clickable file-path links inside chat messages */
+.chat-file-link {
+  cursor: pointer;
+  display: inline;
+}
+.chat-file-link code {
+  border-color: var(--accent);
+  transition: background 0.15s, border-color 0.15s;
+}
+.chat-file-link:hover code {
+  background: color-mix(in srgb, var(--accent) 15%, var(--code-bg));
+  border-color: var(--accent);
+  text-decoration: underline;
+}
+.chat-file-link:active code {
+  opacity: 0.7;
+}
+
 /* Code Block */
 .code-block {
   position: relative;

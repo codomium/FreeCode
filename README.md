@@ -56,6 +56,14 @@ When the agent edits a file a **diff tab opens automatically**:
 - **✓ Accept** — keeps the new content and converts to a normal view
 - **✗ Reject** — writes the original content back via `writeFile` IPC and closes the diff tab
 
+### 🔗 Clickable File Links in Chat
+
+File names and paths that the agent mentions in its replies are automatically rendered as **clickable links** (shown with an accent-coloured border):
+
+- Click any inline path like `` `renderer/chat.js` `` → opens the file in the editor panel
+- If the agent **just edited** that file, clicking it jumps straight to the **diff tab** so you can see exactly what changed
+- Works for relative paths (resolved against the current workspace), absolute paths, and plain filenames with known extensions
+
 ### 🖱️ File Explorer Context Menu
 
 Right-click any file or folder to get:

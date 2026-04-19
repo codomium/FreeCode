@@ -52,6 +52,14 @@ When the AI agent edits a file a diff tab opens automatically:
 - **✓ Accept** — keeps the agent's changes and switches to a normal view
 - **✗ Reject** — restores the original file and closes the diff tab
 
+### 🔗 Clickable File Links in Chat
+
+File names and paths mentioned by the agent in chat are rendered as **clickable links**:
+
+- Click an inline path like `` `renderer/chat.js` `` → opens the file in the editor tab
+- If the agent just edited that file, clicking it activates the **diff tab** so you see exactly what changed
+- Supports relative paths (resolved against the workspace), absolute paths, and plain filenames
+
 ### 🖱️ File Explorer Context Menu
 
 Right-click any file or folder in the Explorer column for quick actions:

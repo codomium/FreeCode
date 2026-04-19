@@ -346,9 +346,13 @@
         });
         md = paragraphs.join('\n');
 
-        // Restore inline code
+        // Restore inline code — wrap file-path-looking tokens as clickable file links
         md = md.replace(/\x00INLINE(\d+)\x00/g, (_, i) => {
-            return `<code>${escapeHtml(inlineCode[+i])}</code>`;
+            const raw = inlineCode[+i];
+            if (looksLikeFilePath(raw)) {
+                return `<span class="chat-file-link" data-path="${escapeHtml(raw)}" title="Open ${escapeHtml(raw)}"><code>${escapeHtml(raw)}</code></span>`;
+            }
+            return `<code>${escapeHtml(raw)}</code>`;
         });
 
         // Restore code blocks — rendered as interactive elements
@@ -358,6 +362,28 @@
         });
 
         return md;
+    }
+
+    // ── File-path detection (for clickable links in chat) ─────────────────────
+
+    const FILE_PATH_EXT_RE = /\.(js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|scala|sh|bash|zsh|fish|ps1|css|scss|less|html|htm|xml|svg|json|yaml|yml|toml|ini|env|md|txt|log|lock|dockerfile|makefile|gitignore)$/i;
+
+    /**
+     * Returns true if `text` looks like a file path that the agent may have
+     * touched — used to turn inline-code tokens into clickable file links.
+     */
+    function looksLikeFilePath(text) {
+        if (!text || text.length > 300) return false;
+        // Must not contain spaces (these are identifiers/commands, not paths)
+        if (/\s/.test(text)) return false;
+        const norm = text.replace(/\\/g, '/');
+        // Absolute paths: /foo/bar.js or C:/foo/bar.js
+        if (/^(\/|[a-zA-Z]:[\\/])/.test(text) && FILE_PATH_EXT_RE.test(norm)) return true;
+        // Relative paths with at least one directory segment: src/main.js
+        if (/\//.test(norm) && FILE_PATH_EXT_RE.test(norm)) return true;
+        // Plain filenames with a recognised extension: main.js, config.json
+        if (/^[a-zA-Z0-9_.-]+$/.test(text) && FILE_PATH_EXT_RE.test(text)) return true;
+        return false;
     }
 
     // ── Syntax Highlighter ────────────────────────────────────────────────────
@@ -597,6 +623,29 @@
             btn.classList.toggle('active', isWrapped);
             btn.title = isWrapped ? 'Word wrap: on (click to disable)' : 'Toggle word wrap';
         }
+    });
+
+    // ── Click handler for inline file-path links in chat messages ─────────────
+    messagesEl.addEventListener('click', (e) => {
+        const link = e.target.closest('.chat-file-link');
+        if (!link) return;
+        e.preventDefault();
+        const rawPath = link.dataset.path || '';
+        if (!rawPath) return;
+        // Resolve to an absolute path using the current workspace
+        let absPath = rawPath;
+        if (!/^(\/|[a-zA-Z]:[\\/])/.test(rawPath) && currentWorkspacePath) {
+            absPath = pathJoin(currentWorkspacePath, rawPath);
+        }
+        // If there is an open diff tab for this file, just activate it so the
+        // user sees exactly what the agent changed.
+        const diffTab = openTabs.find(t => t.path === absPath && t.isDiff);
+        if (diffTab) {
+            activateTab(absPath);
+            return;
+        }
+        // Otherwise open (or focus) the file in the editor panel.
+        openFileInEditor(absPath);
     });
 
     function decodeHtmlEntities(str) {
