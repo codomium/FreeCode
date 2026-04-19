@@ -9,21 +9,57 @@
  * - ANSI code stripping by default
  * - Live streaming output via async generator
  * - Interactive stdin via sendBashStdin(jobId, text)
- * - Windows support: uses PowerShell when bash is unavailable
+ * - Windows support:
+ *     1. Tries WSL (wsl.exe) first — works on Windows 11 with WSL installed.
+ *     2. Falls back to PowerShell if WSL is not available.
  */
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
-/** Detect the best available shell on this platform. */
+/** Detect platform once at module load time. */
 const IS_WINDOWS = process.platform === 'win32';
 
 /**
+ * Check whether WSL is available on this Windows machine.
+ * Runs `wsl.exe --status` synchronously and caches the result.
+ * Returns false on non-Windows platforms.
+ */
+let _wslAvailable = null;
+function isWslAvailable() {
+    if (!IS_WINDOWS) return false;
+    if (_wslAvailable !== null) return _wslAvailable;
+    try {
+        // `wsl.exe --status` exits 0 if WSL is installed and functional.
+        const result = spawnSync('wsl.exe', ['--status'], {
+            encoding: 'utf-8',
+            timeout: 5000,
+            // Suppress the console window that would flash on Windows
+            windowsHide: true,
+        });
+        _wslAvailable = result.status === 0;
+    } catch {
+        _wslAvailable = false;
+    }
+    return _wslAvailable;
+}
+
+/**
  * Return [shell, args] for executing a command string.
- * On Windows uses PowerShell (preferred) or cmd.exe.
- * On Unix uses bash.
+ *
+ * Priority on Windows:
+ *   1. WSL  — `wsl.exe bash -c "<command>"`  (preferred; full POSIX bash)
+ *   2. PowerShell — `powershell.exe -NoProfile -NonInteractive -Command "<command>"`
+ *
+ * On Unix / macOS: `bash -c "<command>"`
  */
 function getShellArgs(command) {
     if (IS_WINDOWS) {
-        // PowerShell gives better POSIX-like behaviour than cmd.exe
+        if (isWslAvailable()) {
+            // Run the command inside the default WSL distro's bash shell.
+            // `wsl.exe bash -c "..."` passes the command string directly to bash.
+            return ['wsl.exe', ['bash', '-c', command]];
+        }
+        // WSL not available — fall back to PowerShell (elevated or regular).
+        // Note: PowerShell is available on every modern Windows install.
         return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command]];
     }
     return ['bash', ['-c', command]];
