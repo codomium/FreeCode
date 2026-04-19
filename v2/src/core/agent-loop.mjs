@@ -463,7 +463,7 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
     let systemPrompt = state.systemPrompt;
     if (supportsThinking) {
         if (!state.systemPromptStatic) {
-            process.stderr.write('[open-claude-code] Warning: systemPromptStatic missing — falling back to full system prompt for ' + model + '\n');
+            process.stderr.write('[open-claude-code] Warning: systemPromptStatic missing - falling back to full system prompt for ' + model + '\n');
         }
         const base = state.systemPromptStatic || state.systemPrompt;
         const workspaceContent = buildWorkspaceContent(process.cwd());
@@ -496,7 +496,7 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         }),
     };
 
-    const rateLimiter = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
 
     let res;
     for (;;) {
@@ -514,7 +514,7 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
             const action = await rateLimiter.handleResponse(res);
             if (action === 'retry') {
                 process.stderr.write(
-                    `[open-claude-code] NVIDIA API ${res.status} — retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                    `[open-claude-code] NVIDIA API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
                 );
                 continue;
             }

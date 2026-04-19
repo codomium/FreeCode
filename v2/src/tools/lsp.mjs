@@ -12,8 +12,10 @@
  * server process and communicate via JSON-RPC.
  */
 
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import path from 'path';
+
+const IS_WINDOWS = process.platform === 'win32';
 
 export const LspTool = {
     name: 'LSP',
@@ -82,18 +84,22 @@ function getDiagnostics(filePath, language) {
         switch (lang) {
             case 'typescript':
             case 'javascript': {
-                const result = execSync(
-                    `npx tsc --noEmit --pretty false "${filePath}" 2>&1 || true`,
+                // Use spawnSync with an argument array — avoids shell injection and
+                // works on Windows (no `2>&1 || true` POSIX syntax needed).
+                const result = spawnSync(
+                    'npx', ['tsc', '--noEmit', '--pretty', 'false', filePath],
                     { encoding: 'utf-8', timeout: 15000 }
                 );
-                return result.trim() || 'No diagnostics.';
+                return ((result.stdout || '') + (result.stderr || '')).trim() || 'No diagnostics.';
             }
             case 'python': {
-                const result = execSync(
-                    `python3 -m py_compile "${filePath}" 2>&1 || true`,
+                // Use `python` on Windows, `python3` on Unix
+                const pythonExe = IS_WINDOWS ? 'python' : 'python3';
+                const result = spawnSync(
+                    pythonExe, ['-m', 'py_compile', filePath],
                     { encoding: 'utf-8', timeout: 10000 }
                 );
-                return result.trim() || 'No diagnostics.';
+                return (result.stderr || '').trim() || 'No diagnostics.';
             }
             default:
                 return `[LSP stub] No diagnostic provider for language: ${lang}`;

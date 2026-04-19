@@ -243,15 +243,84 @@ export function loadClaudeMdFiles(cwd = process.cwd()) {
  * @param {string[]} [options.addDirs] - additional directories to search for CLAUDE.md
  * @returns {{ staticPrefix: string, dynamicSuffix: string, full: string }}
  */
+/**
+ * Detect the primary language/framework stack of a workspace.
+ * Returns a short human-readable string or empty string if unknown.
+ * @param {string} root - resolved workspace root directory
+ * @returns {string}
+ */
+function detectProjectLanguage(root) {
+    const check = (rel) => fs.existsSync(path.join(root, rel));
+    const indicators = [];
+
+    // Flutter / Dart
+    if (check('pubspec.yaml') || check('pubspec.yml')) indicators.push('Flutter/Dart');
+    // Node / JavaScript / TypeScript
+    if (check('package.json')) {
+        try {
+            const pkgPath = path.join(root, 'package.json');
+            const pkgStat = fs.statSync(pkgPath);
+            if (pkgStat.size > 1024 * 1024) {
+                indicators.push('Node.js'); // file too large to parse, assume generic Node
+            } else {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+                const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+                if (deps.includes('react')) indicators.push('React');
+                else if (deps.includes('vue')) indicators.push('Vue.js');
+                else if (deps.includes('@angular/core')) indicators.push('Angular');
+                else if (deps.includes('next')) indicators.push('Next.js');
+                else if (deps.includes('electron')) indicators.push('Electron');
+                else indicators.push('Node.js');
+                if (check('tsconfig.json') || deps.includes('typescript')) indicators.push('TypeScript');
+            }
+        } catch {
+            indicators.push('Node.js');
+        }
+    }
+    // Python
+    if (check('pyproject.toml') || check('setup.py') || check('requirements.txt')) indicators.push('Python');
+    // Go
+    if (check('go.mod')) indicators.push('Go');
+    // Rust
+    if (check('Cargo.toml')) indicators.push('Rust');
+    // Java / Kotlin (Android / Spring)
+    if (check('pom.xml')) indicators.push('Java/Maven');
+    if (check('build.gradle') || check('build.gradle.kts')) {
+        if (check('android/app') || check('android')) indicators.push('Android/Kotlin');
+        else indicators.push('Gradle');
+    }
+    // C#
+    try {
+        if (fs.readdirSync(root).some(f => f.endsWith('.csproj') || f.endsWith('.sln'))) indicators.push('C#/.NET');
+    } catch { /* skip */ }
+    // PHP
+    if (check('composer.json')) indicators.push('PHP');
+    // Ruby
+    if (check('Gemfile')) indicators.push('Ruby');
+    // Swift / iOS
+    if (check('Package.swift')) indicators.push('Swift');
+    try {
+        if (fs.readdirSync(root).some(f => f.endsWith('.xcodeproj') || f.endsWith('.xcworkspace'))) indicators.push('Swift/Xcode');
+    } catch { /* skip */ }
+
+    return indicators.join(', ');
+}
+
 export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
     if (override) {
         return { staticPrefix: override, dynamicSuffix: '', full: override };
     }
 
     const workspaceRoot = path.resolve(cwd || process.cwd());
+    const detectedStack = detectProjectLanguage(workspaceRoot);
+    const platformInfo = `Platform: ${process.platform} (${process.arch})`;
+
     const basePreamble = [
-        `You are an AI coding assistant with direct access to the user's workspace on disk.`,
+        `You are an expert AI coding assistant — built to be a better architect and engineer`,
+        `than any other tool — with direct access to the user's workspace on disk.`,
         `Current working directory: ${workspaceRoot}`,
+        detectedStack ? `Detected project stack: ${detectedStack}` : '',
+        platformInfo,
         ``,
         `## Workspace exploration rules`,
         ``,
@@ -259,11 +328,60 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `  explore the workspace first — do NOT ask the user to paste or share anything.`,
         `- Use LS / Glob to discover files, Read to inspect their contents, Grep to search`,
         `  for patterns, and Bash to run commands (tests, builds, linters, git log, etc.).`,
+        `- Use LSP for precise go-to-definition, type info, diagnostics, and symbol search.`,
         `- Start broad (list the root directory) then drill into relevant subdirectories.`,
         `- Prefer reading the actual source over guessing from file names alone.`,
         `- Never say "I don't see any files" or ask the user to share code — you can read`,
         `  the workspace directly with your tools.`,
-    ].join('\n');
+        process.platform === 'win32'
+            ? `- On Windows: bash/sh commands run via WSL if installed (full POSIX compatibility). ` +
+              `If WSL is not available, commands run in PowerShell — use Get-ChildItem, Get-Content, etc.`
+            : '',
+        ``,
+        `## Full tool catalogue — use ALL tools that help`,
+        ``,
+        `You have access to a rich set of tools. Choose the best tool for each job:`,
+        ``,
+        `| Tool | When to use |`,
+        `|------|-------------|`,
+        `| Bash | Run shell commands, tests, builds, git, linters, package managers |`,
+        `| Read | Read file contents |`,
+        `| Write | Create new files |`,
+        `| Edit / MultiEdit | Modify existing files (prefer MultiEdit for multiple hunks) |`,
+        `| Glob | Find files matching a pattern |`,
+        `| Grep | Search file contents with regex |`,
+        `| LS | List directory contents |`,
+        `| LSP | Go-to-definition, hover type info, diagnostics, symbol search |`,
+        `| WebFetch | Fetch a URL and read its content — use for docs, changelogs, APIs |`,
+        `| WebSearch | Search the web via Brave/SearXNG — use for up-to-date info |`,
+        `| AskUser | Ask the user a clarifying question — ALWAYS use this when you have a choice to make (e.g. "Should I use approach A or B?") instead of guessing or listing all options |`,
+        `| TodoWrite | Track tasks in the session — use to plan multi-step work |`,
+        `| Agent | Spawn a sub-agent for a complex delegated sub-task |`,
+        `| Skill | Execute a named skill loaded from the skills directory |`,
+        `| NotebookEdit | Edit Jupyter notebook cells |`,
+        `| EnterWorktree / ExitWorktree | Switch to a git worktree |`,
+        `| SendMessage | Send a message to a channel (if configured) |`,
+        `| RemoteTrigger | Trigger a remote workflow (if configured) |`,
+        `| CronCreate / CronDelete / CronList | Schedule or manage recurring jobs |`,
+        `| ReadMcpResource | Read a resource from an MCP server |`,
+        `| ToolSearch | Search for available MCP tools |`,
+        ``,
+        `## AskUser — when to use`,
+        ``,
+        `- ALWAYS call AskUser when you need to choose between two or more implementation`,
+        `  approaches BEFORE writing code or creating plan items.`,
+        `- Never list all options as plan items — pick one (or ask). Options that haven't`,
+        `  been selected should NOT appear in the task board.`,
+        `- Use AskUser early: clarify ambiguous requirements, confirm destructive actions,`,
+        `  or pick a framework / file name before proceeding.`,
+        ``,
+        `## WebFetch / WebSearch — when to use`,
+        ``,
+        `- Use WebFetch to read official documentation, GitHub READMEs, changelogs, or any`,
+        `  URL the user mentions or that you know is relevant.`,
+        `- Use WebSearch when you need current information (latest package versions, error`,
+        `  explanations, Stack Overflow answers) before writing code.`,
+    ].filter(Boolean).join('\n');
 
     const parts = [basePreamble];
 

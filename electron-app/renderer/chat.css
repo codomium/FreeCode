@@ -738,6 +738,8 @@ select:focus { border-color: var(--accent); }
 }
 .msg-assistant:hover .msg-regen-btn { opacity: 1; }
 .msg-regen-btn:hover { background: var(--bg-input); border-color: var(--border); color: var(--accent); }
+
+.msg-bubble {
   background: var(--user-bg);
   border: 1px solid rgba(0,122,204,0.3);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius) var(--radius-lg);
@@ -749,6 +751,31 @@ select:focus { border-color: var(--accent); }
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* Collapsible long-prompt bubble — clamped to ~5 lines when collapsed */
+.msg-bubble.msg-bubble-collapsed {
+  max-height: 7.5em; /* ~5 lines at 1.5 line-height */
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+}
+
+/* Toggle button that appears below a collapsible user prompt */
+.msg-prompt-toggle {
+  align-self: flex-end;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  margin-top: 2px;
+  border-radius: var(--radius);
+  opacity: 0.75;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+.msg-prompt-toggle:hover { opacity: 1; }
 
 .msg-user .msg-meta {
   align-self: flex-end;
@@ -1190,6 +1217,57 @@ select:focus { border-color: var(--accent); }
   background: rgba(244,135,113,0.15);
   border-color: var(--error-text);
 }
+
+/* ── AskUser question card ─────────────────────────────────────────────────── */
+.msg-question-card {
+  border: 1px solid rgba(0,122,204,0.45);
+  border-radius: var(--radius-lg);
+  padding: 10px 14px;
+  background: var(--bg-input);
+  max-width: 94%;
+  align-self: flex-start;
+  gap: 8px;
+}
+.msg-question-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  margin: 4px 0;
+}
+.msg-question-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.msg-question-input {
+  flex: 1;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 5px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.msg-question-input:focus { border-color: var(--accent); }
+.msg-question-input:disabled { opacity: 0.5; }
+.msg-question-submit {
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 14px;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+.msg-question-submit:hover { opacity: 0.85; }
+.msg-question-submit:disabled { opacity: 0.5; cursor: default; }
 
 /* Continue button on assistant messages */
 .msg-continue-btn {
@@ -2352,10 +2430,34 @@ select:focus { border-color: var(--accent); }
 .editor-tab.active .editor-tab-close { opacity: 0.6; }
 .editor-tab-close:hover { background: rgba(244,135,113,0.2); color: var(--error-text); opacity: 1; }
 
+/* Close-all button — floats at the right end of the tab bar */
+.editor-tab-close-all {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 2px 7px;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  align-self: center;
+  margin-right: 4px;
+}
+.editor-tab-close-all:hover {
+  background: rgba(244,135,113,0.15);
+  border-color: var(--error-text);
+  color: var(--error-text);
+}
+
 /* ── Editor content area ─────────────────────────────────────────── */
 #editor-content {
   flex: 1;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   font-family: var(--font-code);
   font-size: 13px;
   line-height: 1.6;
@@ -2379,36 +2481,30 @@ select:focus { border-color: var(--accent); }
 .editor-empty-title { font-size: 14px; color: var(--text-dim); }
 .editor-empty-hint { font-size: 11px; text-align: center; max-width: 200px; }
 
-/* File content rendered in editor */
+/* File content rendered in editor — editable textarea */
 #editor-file-view {
+  display: block;
+  width: 100%;
+  height: 100%;
   padding: 16px;
+  box-sizing: border-box;
   font-family: var(--font-code);
   font-size: 12px;
   line-height: 1.65;
   color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
   white-space: pre;
   tab-size: 4;
   margin: 0;
-  min-height: 100%;
-  counter-reset: editor-lines;
+  overflow: auto;
+  caret-color: var(--accent);
 }
-
-.editor-line {
-  display: flex;
-  counter-increment: editor-lines;
+#editor-file-view::selection {
+  background: rgba(100, 160, 255, 0.25);
 }
-.editor-line::before {
-  content: counter(editor-lines);
-  min-width: 36px;
-  padding-right: 12px;
-  text-align: right;
-  color: var(--text-muted);
-  opacity: 0.4;
-  user-select: none;
-  flex-shrink: 0;
-  font-size: 0.9em;
-}
-.editor-line-text { flex: 1; }
 
 /* ── Diff view in editor ─────────────────────────────────────────── */
 #editor-diff-view {
@@ -2417,6 +2513,8 @@ select:focus { border-color: var(--accent); }
   font-size: 12px;
   line-height: 1.65;
   min-height: 100%;
+  flex: 1;
+  overflow: auto;
 }
 
 .diff-hunk-header {
@@ -2527,7 +2625,65 @@ select:focus { border-color: var(--accent); }
 }
 .diff-reject:hover { background: rgba(244,135,113,0.25); }
 
-/* ── Context menu ────────────────────────────────────────────────── */
+.diff-accept-all {
+  background: rgba(78,201,176,0.08);
+  border-color: rgba(78,201,176,0.3);
+  color: var(--success);
+  opacity: 0.85;
+}
+.diff-accept-all:hover { background: rgba(78,201,176,0.2); opacity: 1; }
+
+/* ── Diff line number columns (old | new) ─────────────────────────── */
+.diff-line-num-old,
+.diff-line-num-new {
+  min-width: 32px;
+  padding-right: 6px;
+  text-align: right;
+  color: var(--text-muted);
+  opacity: 0.45;
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 0.9em;
+}
+
+/* ── Plan board insert zone ──────────────────────────────────────── */
+.plan-insert-zone {
+  height: 2px;
+  position: relative;
+}
+.plan-insert-btn {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -9px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 10px;
+  padding: 2px 10px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.plan-insert-zone:hover .plan-insert-btn { display: block; opacity: 1; }
+.plan-insert-btn:hover { opacity: 1; text-decoration: underline; }
+
+.plan-add-position-label {
+  font-size: 10px;
+  color: var(--accent);
+  font-style: italic;
+  margin-right: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+
 #ctx-menu {
   position: fixed;
   background: var(--bg-elevated);

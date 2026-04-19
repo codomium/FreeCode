@@ -119,20 +119,20 @@ function readPdf(filePath, pages) {
     // PDF reading requires external tools; provide a best-effort
     // text extraction using a simple approach
     try {
-        const { execSync } = await_import_child_process();
-        const pageArg = pages ? `-f ${pages.split('-')[0]} -l ${pages.split('-').pop()}` : '-f 1 -l 20';
-        const text = execSync(`pdftotext ${pageArg} "${filePath}" - 2>/dev/null`, {
+        const { spawnSync } = require('child_process');
+        const [startPage, endPage] = pages
+            ? [pages.split('-')[0], pages.split('-').pop()]
+            : ['1', '20'];
+        const args = ['-f', startPage, '-l', endPage, filePath, '-'];
+        const result = spawnSync('pdftotext', args, {
             encoding: 'utf-8',
             timeout: 30000,
             maxBuffer: 1024 * 1024,
         });
+        const text = result.stdout || '';
         return text || `[PDF file at ${filePath} — could not extract text. Use a PDF viewer.]`;
     } catch {
         return `[PDF file at ${filePath} — pdftotext not available. Install poppler-utils for PDF support.]`;
     }
 }
 
-// Lazy import helper
-function await_import_child_process() {
-    return require('child_process');
-}

@@ -213,6 +213,13 @@ class InProcessAgentBridge {
             const skillTool = tools.get('Skill');
             if (skillTool) skillTool._skillsLoader = skillsLoader;
 
+            // Wire AskUser tool to forward questions to the renderer via IPC
+            const askUserTool = tools.get('AskUser');
+            if (askUserTool) {
+                askUserTool._questionCallback = (question, defaultValue, timeout) =>
+                    this._promptQuestion(question, defaultValue, timeout);
+            }
+
             const model = this._model || appSettings.model || 'claude-sonnet-4-6';
 
             this._loop = createAgentLoop({ model, tools, permissions, settings, hooks });
@@ -249,13 +256,49 @@ class InProcessAgentBridge {
         });
     }
 
-    /** Called by IPC when renderer sends back permissionResponse */
-    resolvePermission(reqId, allowed) {
-        if (!this._permPending) return;
-        const resolve = this._permPending.get(reqId);
+    /**
+     * Send a questionRequest to the renderer and wait for the user's text answer.
+     * Returns a Promise<string> that resolves when the renderer replies.
+     */
+    _promptQuestion(question, defaultValue, timeoutMs) {
+        return new Promise((resolve) => {
+            if (!mainWindow || mainWindow.isDestroyed()) {
+                resolve(defaultValue || '[window unavailable]');
+                return;
+            }
+
+            const reqId = crypto.randomUUID();
+            if (!this._questionPending) this._questionPending = new Map();
+
+            // Auto-resolve on timeout so the agent isn't blocked forever
+            const timer = setTimeout(() => {
+                if (this._questionPending.has(reqId)) {
+                    this._questionPending.delete(reqId);
+                    resolve(defaultValue || '[timeout: no response]');
+                }
+            }, timeoutMs || 120000);
+
+            this._questionPending.set(reqId, (answer) => {
+                clearTimeout(timer);
+                resolve(answer ?? defaultValue ?? '');
+            });
+
+            mainWindow.webContents.send('main-message', {
+                type:    'questionRequest',
+                reqId,
+                question,
+                defaultValue: defaultValue || '',
+            });
+        });
+    }
+
+    /** Called by IPC when renderer sends back questionResponse */
+    resolveQuestion(reqId, answer) {
+        if (!this._questionPending) return;
+        const resolve = this._questionPending.get(reqId);
         if (resolve) {
-            this._permPending.delete(reqId);
-            resolve(!!allowed);
+            this._questionPending.delete(reqId);
+            resolve(answer);
         }
     }
 
@@ -635,6 +678,14 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'permissionResponse': {
             if (agentBridge && typeof agentBridge.resolvePermission === 'function') {
                 agentBridge.resolvePermission(msg.reqId, !!msg.allowed);
+            }
+            break;
+        }
+
+        // ── Question response from renderer (AskUser tool IPC bridge) ──────────
+        case 'questionResponse': {
+            if (agentBridge && typeof agentBridge.resolveQuestion === 'function') {
+                agentBridge.resolveQuestion(msg.reqId, msg.answer || '');
             }
             break;
         }

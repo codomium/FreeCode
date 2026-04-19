@@ -34,6 +34,12 @@ export const AskUserTool = {
     },
 
     async call(input) {
+        // Electron / GUI environment: delegate to the injected callback so the
+        // question can be forwarded to the renderer via IPC.
+        if (typeof AskUserTool._questionCallback === 'function') {
+            return AskUserTool._questionCallback(input.question, input.default_value, input.timeout);
+        }
+
         // In non-interactive mode, return default
         if (!process.stdin.isTTY) {
             return input.default_value || '[non-interactive: no user input available]';

@@ -9,8 +9,100 @@
  * - ANSI code stripping by default
  * - Live streaming output via async generator
  * - Interactive stdin via sendBashStdin(jobId, text)
+ * - Windows support:
+ *     1. Tries WSL (wsl.exe) first — works on Windows 11 with WSL installed.
+ *     2. Falls back to PowerShell if WSL is not available.
  */
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+
+/** Detect platform once at module load time. */
+const IS_WINDOWS = process.platform === 'win32';
+
+/**
+ * Check whether WSL is available on this Windows machine.
+ * Runs `wsl.exe --status` synchronously and caches the result.
+ * Returns false on non-Windows platforms.
+ */
+let _wslAvailable = null;
+function isWslAvailable() {
+    if (!IS_WINDOWS) return false;
+    if (_wslAvailable !== null) return _wslAvailable;
+    try {
+        // `wsl.exe --status` exits 0 if WSL is installed and functional.
+        const result = spawnSync('wsl.exe', ['--status'], {
+            encoding: 'utf-8',
+            timeout: 5000,
+            // Suppress the console window that would flash on Windows
+            windowsHide: true,
+        });
+        _wslAvailable = result.status === 0;
+    } catch {
+        _wslAvailable = false;
+    }
+    return _wslAvailable;
+}
+
+/**
+ * Return [shell, args] for executing a command string.
+ *
+ * Priority on Windows:
+ *   1. WSL  — `wsl.exe bash -c "<command>"`  (preferred; full POSIX bash)
+ *   2. PowerShell — `powershell.exe -NoProfile -NonInteractive -Command "<command>"`
+ *      Prepends POSIX compatibility shims so that common Unix commands like
+ *      `which`, `grep`, `cat`, and `touch` work correctly without WSL.
+ *
+ * On Unix / macOS: `bash -c "<command>"`
+ */
+
+/**
+ * Minimal POSIX-compatibility shims injected before every PowerShell command.
+ * These replace the most-common Unix utilities that PowerShell lacks natively.
+ */
+const POWERSHELL_POSIX_SHIMS = [
+    // which: resolve a binary's full path via Get-Command (mirrors `which cmd`)
+    'function which { param([string]$cmd)' +
+        ' $r = Get-Command $cmd -ErrorAction SilentlyContinue;' +
+        ' if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
+
+    // grep: thin wrapper around Select-String.
+    //   - With file args: grep <pattern> <file…> → path:line:text
+    //   - Without file args (piped): … | grep <pattern> → matching lines
+    'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths)' +
+        ' if ($paths) {' +
+        '   Select-String -Pattern $pattern -Path $paths |' +
+        '   ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" }' +
+        ' } else {' +
+        '   $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line }' +
+        ' } }',
+
+    // cat: print one or more files (mirrors `cat file…`)
+    'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths)' +
+        ' Get-Content $paths }',
+
+    // touch: create file if missing, or update its timestamp (mirrors `touch path`)
+    'function touch { param([string]$path)' +
+        ' if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date }' +
+        ' else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
+
+    // wc -l: count lines from piped stdin (mirrors `… | wc -l`)
+    'function wc { param([string]$flag)' +
+        ' if ($flag -eq "-l") { $c = 0; $input | ForEach-Object { $c++ }; $c } }',
+].join('; ');
+
+function getShellArgs(command) {
+    if (IS_WINDOWS) {
+        if (isWslAvailable()) {
+            // Run the command inside the default WSL distro's bash shell.
+            // `wsl.exe bash -c "..."` passes the command string directly to bash.
+            return ['wsl.exe', ['bash', '-c', command]];
+        }
+        // WSL not available — fall back to PowerShell with POSIX shims prepended.
+        // Note: PowerShell is available on every modern Windows install.
+        const wrapped = `${POWERSHELL_POSIX_SHIMS}; ${command}`;
+        return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', wrapped]];
+    }
+    return ['bash', ['-c', command]];
+}
 
 // Strip ANSI escape sequences
 function stripAnsi(str) {
@@ -95,7 +187,8 @@ export const BashTool = {
         let killed = false;
         let finalResult = '';
 
-        const proc = spawn('bash', ['-c', input.command], {
+        const [shell, shellArgs] = getShellArgs(input.command);
+        const proc = spawn(shell, shellArgs, {
             env: { ...process.env },
             stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -178,7 +271,8 @@ let bgJobId = 0;
 
 function runBackground(command) {
     const id = ++bgJobId;
-    const proc = spawn('bash', ['-c', command], {
+    const [shell, shellArgs] = getShellArgs(command);
+    const proc = spawn(shell, shellArgs, {
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
     });

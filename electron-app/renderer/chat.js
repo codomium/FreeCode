@@ -69,6 +69,7 @@
     let planItems = [];          // { id, text, done, inProgress }
     let planBoardVisible = false;
     let planItemCounter = 0;
+    let planInsertBeforeId = null; // null = append to end; id = insert before that item
 
     // ── Editor tab state ─────────────────────────────────────────────────────
     let openTabs = [];           // { path, name, content, error, isDiff, beforeContent, afterContent }
@@ -105,8 +106,17 @@
     /** Regex that matches markdown numbered or bulleted list items for plan parsing */
     const PLAN_ITEM_PATTERN = /^\s*(?:\d+\.|[-*•])\s+(.+)/;
 
+    /** Max characters shown in the plan insert position label before truncation */
+    const PLAN_LABEL_MAX_CHARS = 30;
+
     /** Keywords that indicate a retryable rate-limit/overload error in the UI */
     const RATE_LIMIT_PATTERN = /rate.?limit|overload|too.?many.?request|capacity|529|503|502|504|bad.?gateway|service.?unavailable|quota/i;
+
+    /**
+     * User prompts longer than this many characters are collapsed in the chat
+     * bubble and show a "Show more / Show less" toggle to keep the UI tidy.
+     */
+    const USER_PROMPT_COLLAPSE_THRESHOLD = 300;
 
     // ── DOM refs ─────────────────────────────────────────────────────────────
     const messagesEl   = document.getElementById('messages');
@@ -233,6 +243,7 @@
     const planAddInputEl     = document.getElementById('plan-add-input');
     const planAddConfirmBtn  = document.getElementById('plan-add-confirm');
     const planAddCancelBtn   = document.getElementById('plan-add-cancel');
+    const planAddPositionLabelEl = document.getElementById('plan-add-position-label');
 
     // ── Permission modal refs ────────────────────────────────────────────────
     const permModalEl        = document.getElementById('permission-modal');
@@ -898,8 +909,26 @@
         bubble.className = 'msg-bubble';
         bubble.textContent = text;   // safe — textContent
 
-        div.appendChild(meta);
-        div.appendChild(bubble);
+        // Collapse long prompts so the chat stays tidy.
+        // A "Show more / Show less" toggle appears below the bubble.
+        if (text.length > USER_PROMPT_COLLAPSE_THRESHOLD) {
+            bubble.classList.add('msg-bubble-collapsed');
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.className = 'msg-prompt-toggle';
+            toggleBtn.textContent = 'Show more ▾';
+            toggleBtn.addEventListener('click', () => {
+                const isCollapsed = bubble.classList.toggle('msg-bubble-collapsed');
+                toggleBtn.textContent = isCollapsed ? 'Show more ▾' : 'Show less ▴';
+            });
+
+            div.appendChild(meta);
+            div.appendChild(bubble);
+            div.appendChild(toggleBtn);
+        } else {
+            div.appendChild(meta);
+            div.appendChild(bubble);
+        }
         messagesEl.appendChild(div);
         scrollToBottom();
     }
@@ -1837,6 +1866,10 @@
                 showPermissionModal(msg);
                 break;
 
+            case 'questionRequest':
+                showQuestionCard(msg);
+                break;
+
             case 'apiKeySet':
                 showWelcome(true);
                 if (settingsKeyStatus) {
@@ -1918,6 +1951,10 @@
                 loadExplorerTree(currentWorkspacePath);
                 if (msg.type === 'fileDeleted') {
                     closeTab(msg.path);
+                }
+                // Clear modified indicator if this was an editor save
+                if ((msg.purpose === 'editor_save' || msg.purpose === 'editor_autosave') && msg.path) {
+                    markTabSaved(msg.path);
                 }
                 break;
 
@@ -3254,9 +3291,52 @@
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // PLAN BOARD — Cursor-style task tracker
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ── AskUser question card ─────────────────────────────────────────────────
+    /**
+     * Show an inline question card in the chat stream when the agent calls
+     * AskUser.  The user types an answer and submits; the answer is forwarded
+     * back to main.js which resolves the pending AskUser promise.
+     */
+    function showQuestionCard(msg) {
+        hideWelcome();
+        const div = document.createElement('div');
+        div.className = 'msg msg-question-card';
+        div.innerHTML = `
+            <div class="msg-header">
+                <div class="msg-avatar" style="background:var(--accent);color:#fff;font-size:14px;">?</div>
+                <span class="msg-name">Agent Question</span>
+            </div>
+            <div class="msg-question-text"></div>
+            <div class="msg-question-row">
+                <input class="msg-question-input" type="text" placeholder="${msg.defaultValue ? escapeHtml(msg.defaultValue) : 'Your answer…'}" />
+                <button class="msg-question-submit">Submit</button>
+            </div>
+        `;
+        // Safe text injection
+        div.querySelector('.msg-question-text').textContent = msg.question || '';
+
+        const inputEl2 = div.querySelector('.msg-question-input');
+        const submitBtn = div.querySelector('.msg-question-submit');
+
+        function submit() {
+            const answer = inputEl2.value.trim() || msg.defaultValue || '';
+            // Disable UI so it can't be submitted twice
+            inputEl2.disabled = true;
+            submitBtn.disabled = true;
+            submitBtn.textContent = '✓';
+            vscode.postMessage({ type: 'questionResponse', reqId: msg.reqId, answer });
+        }
+
+        submitBtn.addEventListener('click', submit);
+        inputEl2.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+        });
+
+        messagesEl.appendChild(div);
+        scrollToBottom();
+        // Focus the input so the user can type immediately
+        setTimeout(() => inputEl2.focus(), 80);
+    }
 
     let planBoardCollapsed = false;
 
@@ -3278,6 +3358,25 @@
         if (!planItemsListEl) return;
         planItemsListEl.innerHTML = '';
         for (const item of planItems) {
+            // Insert-before drop zone shown above each item
+            const insertZone = document.createElement('div');
+            insertZone.className = 'plan-insert-zone';
+            const insertBtn = document.createElement('button');
+            insertBtn.className = 'plan-insert-btn';
+            insertBtn.title = 'Insert task before this one';
+            insertBtn.textContent = '+ Insert here';
+            insertBtn.addEventListener('click', () => {
+                planInsertBeforeId = item.id;
+                const labelText = item.text.length > PLAN_LABEL_MAX_CHARS
+                    ? `${item.text.slice(0, PLAN_LABEL_MAX_CHARS)}…`
+                    : item.text;
+                if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = `Insert before: "${labelText}"`;
+                if (planAddRowEl) planAddRowEl.style.display = '';
+                if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
+            });
+            insertZone.appendChild(insertBtn);
+            planItemsListEl.appendChild(insertZone);
+
             const row = document.createElement('div');
             row.className = 'plan-item'
                 + (item.done ? ' plan-item-done' : '')
@@ -3321,9 +3420,19 @@
         updatePlanBoardVisibility();
     }
 
-    function addPlanItem(text) {
+    function addPlanItem(text, insertBeforeId) {
         if (!text || !text.trim()) return;
-        planItems.push({ id: ++planItemCounter, text: text.trim(), done: false, inProgress: false });
+        const newItem = { id: ++planItemCounter, text: text.trim(), done: false, inProgress: false };
+        if (insertBeforeId != null) {
+            const idx = planItems.findIndex(p => p.id === insertBeforeId);
+            if (idx !== -1) {
+                planItems.splice(idx, 0, newItem);
+            } else {
+                planItems.push(newItem);
+            }
+        } else {
+            planItems.push(newItem);
+        }
         renderPlanBoard();
         updatePlanBoardVisibility();
     }
@@ -3338,7 +3447,15 @@
             const m = line.match(PLAN_ITEM_PATTERN);
             if (m) {
                 const itemText = m[1].replace(/^\[[ x]\]\s*/, '').trim(); // strip checkbox syntax
-                if (itemText) items.push(itemText);
+                if (!itemText) continue;
+
+                // Skip choice/option lines like "**A)** ...", "A) ...", "(A) ...", "Option A:"
+                // These appear when the agent lists multiple alternatives for a decision.
+                if (/^(?:\*{0,2})?(?:[A-D][).:]|\([A-D]\))\s/i.test(itemText)) continue;
+                // Skip pure question lines (the agent should use AskUser for those)
+                if (/\?\s*$/.test(itemText) && itemText.length < 200) continue;
+
+                items.push(itemText);
             }
         }
         return items;
@@ -3396,13 +3513,20 @@
     if (planAddBtn) {
         planAddBtn.addEventListener('click', () => {
             if (!planAddRowEl) return;
+            planInsertBeforeId = null;
+            if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = 'Add to end';
             planAddRowEl.style.display = '';
             if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
         });
     }
     if (planAddConfirmBtn) {
         planAddConfirmBtn.addEventListener('click', () => {
-            if (planAddInputEl) { addPlanItem(planAddInputEl.value); planAddInputEl.value = ''; }
+            if (planAddInputEl) {
+                addPlanItem(planAddInputEl.value, planInsertBeforeId);
+                planAddInputEl.value = '';
+            }
+            planInsertBeforeId = null;
+            if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = '';
             if (planAddRowEl) planAddRowEl.style.display = 'none';
         });
     }
@@ -3570,6 +3694,14 @@
         if (diffToolbar) diffToolbar.style.display = 'none';
     }
 
+    /** Close all open editor tabs. */
+    function closeAllTabs() {
+        openTabs = [];
+        activeTabPath = null;
+        renderTabBar();
+        showEditorEmptyState();
+    }
+
     /** Rebuild the tab bar DOM from openTabs. */
     function renderTabBar() {
         if (!editorTabsEl) return;
@@ -3578,7 +3710,8 @@
             const tabEl   = document.createElement('div');
             tabEl.className = 'editor-tab'
                 + (tab.path === activeTabPath ? ' active' : '')
-                + (tab.isDiff ? ' diff-tab' : '');
+                + (tab.isDiff ? ' diff-tab' : '')
+                + (tab.isModified ? ' modified' : '');
             tabEl.title = tab.path;
 
             const iconEl = document.createElement('span');
@@ -3607,6 +3740,16 @@
             tabEl.addEventListener('click', () => activateTab(tab.path));
             editorTabsEl.appendChild(tabEl);
         }
+
+        // Show "Close all" button only when there are 2+ tabs
+        if (openTabs.length >= 2) {
+            const closeAllEl = document.createElement('button');
+            closeAllEl.className   = 'editor-tab-close-all';
+            closeAllEl.title       = 'Close all tabs';
+            closeAllEl.textContent = '×× Close all';
+            closeAllEl.addEventListener('click', closeAllTabs);
+            editorTabsEl.appendChild(closeAllEl);
+        }
     }
 
     /** Render either file content or a diff view into the editor panel. */
@@ -3627,11 +3770,73 @@
                 errEl.textContent = 'Error: ' + tab.error;
                 editorContentEl.appendChild(errEl);
             } else {
-                const pre = document.createElement('pre');
-                pre.id = 'editor-file-view';
-                pre.textContent = tab.content || '';
-                editorContentEl.appendChild(pre);
+                const textarea = document.createElement('textarea');
+                textarea.id = 'editor-file-view';
+                textarea.value = tab.content || '';
+                textarea.spellcheck = false;
+                textarea.autocomplete = 'off';
+                textarea.setAttribute('autocorrect', 'off');
+                textarea.setAttribute('autocapitalize', 'off');
+
+                // Debounced auto-save timer
+                let saveTimer = null;
+                function scheduleAutoSave() {
+                    if (saveTimer) clearTimeout(saveTimer);
+                    saveTimer = setTimeout(() => {
+                        vscode.postMessage({ type: 'writeFile', path: tab.path, content: textarea.value, purpose: 'editor_autosave' });
+                        tab.content = textarea.value;
+                        markTabSaved(tab.path);
+                    }, 1000);
+                }
+
+                textarea.addEventListener('input', () => {
+                    markTabModified(tab.path);
+                    scheduleAutoSave();
+                });
+
+                // Ctrl+S / Cmd+S: immediate save
+                textarea.addEventListener('keydown', (e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                        e.preventDefault();
+                        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+                        const content = textarea.value;
+                        vscode.postMessage({ type: 'writeFile', path: tab.path, content, purpose: 'editor_save' });
+                        tab.content = content;
+                        markTabSaved(tab.path);
+                    }
+                    // Tab key inserts spaces instead of focusing next element
+                    if (e.key === 'Tab') {
+                        e.preventDefault();
+                        const start = textarea.selectionStart;
+                        const end   = textarea.selectionEnd;
+                        textarea.value = textarea.value.substring(0, start) + '    ' + textarea.value.substring(end);
+                        textarea.selectionStart = textarea.selectionEnd = start + 4;
+                        tab.content = textarea.value;
+                        markTabModified(tab.path);
+                        scheduleAutoSave();
+                    }
+                });
+
+                editorContentEl.appendChild(textarea);
             }
+        }
+    }
+
+    /** Mark a tab as having unsaved edits (shows the dot indicator). */
+    function markTabModified(filePath) {
+        const tab = openTabs.find(t => t.path === filePath);
+        if (tab && !tab.isModified) {
+            tab.isModified = true;
+            renderTabBar();
+        }
+    }
+
+    /** Clear the modified indicator after a successful save. */
+    function markTabSaved(filePath) {
+        const tab = openTabs.find(t => t.path === filePath);
+        if (tab && tab.isModified) {
+            tab.isModified = false;
+            renderTabBar();
         }
     }
 
@@ -3643,22 +3848,39 @@
         let beforeNum = 1, afterNum = 1;
         for (const { type, line } of diff) {
             const rowEl  = document.createElement('div');
-            let numText;
-            if (type === 'equal')  { rowEl.className = 'diff-context'; numText = beforeNum++; afterNum++; }
-            else if (type === 'remove') { rowEl.className = 'diff-removed'; numText = beforeNum++; }
-            else                   { rowEl.className = 'diff-added';   numText = afterNum++;  }
-            const numEl  = document.createElement('span');
-            numEl.className   = 'diff-line-num';
-            numEl.textContent = type !== 'add' ? String(numText) : '';
+            let oldNumText = '', newNumText = '';
+            if (type === 'equal')  {
+                rowEl.className = 'diff-context';
+                oldNumText = String(beforeNum++);
+                newNumText = String(afterNum++);
+            } else if (type === 'remove') {
+                rowEl.className = 'diff-removed';
+                oldNumText = String(beforeNum++);
+            } else {
+                rowEl.className = 'diff-added';
+                newNumText = String(afterNum++);
+            }
+            // Old line number column
+            const oldNumEl = document.createElement('span');
+            oldNumEl.className   = 'diff-line-num diff-line-num-old';
+            oldNumEl.textContent = oldNumText;
+            // New line number column
+            const newNumEl = document.createElement('span');
+            newNumEl.className   = 'diff-line-num diff-line-num-new';
+            newNumEl.textContent = newNumText;
             const textEl = document.createElement('span');
             textEl.className   = 'diff-line-text';
             textEl.textContent = line;
-            rowEl.appendChild(numEl);
+            rowEl.appendChild(oldNumEl);
+            rowEl.appendChild(newNumEl);
             rowEl.appendChild(textEl);
             container.appendChild(rowEl);
         }
         return container;
     }
+
+    // ── DOM ref for Accept All button ────────────────────────────────────────
+    const diffAcceptAllBtn = document.getElementById('diff-accept-all-btn');
 
     // Diff accept / reject
     if (diffAcceptBtn) {
@@ -3666,6 +3888,9 @@
             if (!activeTabPath) return;
             const tab = openTabs.find(t => t.path === activeTabPath);
             if (!tab || !tab.isDiff) return;
+            // Write afterContent to disk to confirm the accepted state
+            const afterContent = tab.afterContent !== undefined ? tab.afterContent : (tab.content || '');
+            vscode.postMessage({ type: 'writeFile', path: tab.path, content: afterContent, purpose: 'diff_accept' });
             tab.isDiff = false; tab.beforeContent = undefined; tab.afterContent = undefined;
             renderTabBar();
             renderEditorContent(tab);
@@ -3681,6 +3906,26 @@
             const fp = tab.path;
             vscode.postMessage({ type: 'writeFile', path: fp, content: before, purpose: 'diff_reject' });
             closeTab(fp);
+        });
+    }
+
+    // Accept All Changes: accept every open diff tab in one click
+    if (diffAcceptAllBtn) {
+        diffAcceptAllBtn.addEventListener('click', () => {
+            const diffTabs = openTabs.filter(t => t.isDiff);
+            for (const tab of diffTabs) {
+                const afterContent = tab.afterContent !== undefined ? tab.afterContent : (tab.content || '');
+                vscode.postMessage({ type: 'writeFile', path: tab.path, content: afterContent, purpose: 'diff_accept' });
+                tab.isDiff = false;
+                tab.beforeContent = undefined;
+                tab.afterContent  = undefined;
+            }
+            renderTabBar();
+            if (activeTabPath) {
+                const activeTab = openTabs.find(t => t.path === activeTabPath);
+                if (activeTab) renderEditorContent(activeTab);
+            }
+            if (diffToolbar) diffToolbar.style.display = 'none';
         });
     }
 
