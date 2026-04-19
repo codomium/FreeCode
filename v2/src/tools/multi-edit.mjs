@@ -84,7 +84,8 @@ export const MultiEditTool = {
             const e = input.edits[i];
             if (!e.file_path) errors.push(`edit[${i}]: file_path required`);
             if (e.old_string == null) errors.push(`edit[${i}]: old_string required`);
-            if (e.old_string !== null && e.old_string === e.new_string) errors.push(`edit[${i}]: old_string must differ from new_string`);
+            if (e.new_string == null) errors.push(`edit[${i}]: new_string required`);
+            if (e.old_string != null && e.new_string != null && e.old_string === e.new_string) errors.push(`edit[${i}]: old_string must differ from new_string`);
         }
         return errors;
     },
