@@ -106,11 +106,8 @@ export const GrepTool = {
                 timeout: 30000,
             });
 
-            // exit code 1 from grep/rg means "no matches" — still return empty
-            let output = ((proc.stdout || '') + (proc.status === 0 || proc.status === 1 ? '' : '')).trim();
-            if (!output && proc.status !== 0 && proc.status !== 1) {
-                return 'No matches found.';
-            }
+            // exit code 1 from grep/rg means "no matches" — still return empty string
+            let output = (proc.stdout || '').trim();
 
             // Apply head_limit in JS
             if (limit > 0) {

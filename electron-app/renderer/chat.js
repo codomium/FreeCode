@@ -3292,7 +3292,10 @@
             insertBtn.textContent = '+ Insert here';
             insertBtn.addEventListener('click', () => {
                 planInsertBeforeId = item.id;
-                if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = `Insert before: "${item.text.slice(0, PLAN_LABEL_MAX_CHARS)}…"`;
+                const labelText = item.text.length > PLAN_LABEL_MAX_CHARS
+                    ? `${item.text.slice(0, PLAN_LABEL_MAX_CHARS)}…`
+                    : item.text;
+                if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = `Insert before: "${labelText}"`;
                 if (planAddRowEl) planAddRowEl.style.display = '';
                 if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
             });

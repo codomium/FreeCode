@@ -260,16 +260,19 @@ function detectProjectLanguage(root) {
         try {
             const pkgPath = path.join(root, 'package.json');
             const pkgStat = fs.statSync(pkgPath);
-            if (pkgStat.size > 1024 * 1024) throw new Error('package.json too large');
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-            const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-            if (deps.includes('react')) indicators.push('React');
-            else if (deps.includes('vue')) indicators.push('Vue.js');
-            else if (deps.includes('@angular/core')) indicators.push('Angular');
-            else if (deps.includes('next')) indicators.push('Next.js');
-            else if (deps.includes('electron')) indicators.push('Electron');
-            else indicators.push('Node.js');
-            if (check('tsconfig.json') || deps.includes('typescript')) indicators.push('TypeScript');
+            if (pkgStat.size > 1024 * 1024) {
+                indicators.push('Node.js'); // file too large to parse, assume generic Node
+            } else {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+                const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+                if (deps.includes('react')) indicators.push('React');
+                else if (deps.includes('vue')) indicators.push('Vue.js');
+                else if (deps.includes('@angular/core')) indicators.push('Angular');
+                else if (deps.includes('next')) indicators.push('Next.js');
+                else if (deps.includes('electron')) indicators.push('Electron');
+                else indicators.push('Node.js');
+                if (check('tsconfig.json') || deps.includes('typescript')) indicators.push('TypeScript');
+            }
         } catch {
             indicators.push('Node.js');
         }
@@ -329,7 +332,7 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `- Never say "I don't see any files" or ask the user to share code — you can read`,
         `  the workspace directly with your tools.`,
         process.platform === 'win32'
-            ? `- On Windows: use PowerShell commands (not bash/sh). Prefer 'dir', 'Get-ChildItem', etc.`
+            ? `- On Windows: use PowerShell commands (not bash/sh). Prefer Get-ChildItem, Get-Content, Copy-Item, etc.`
             : '',
     ].filter(Boolean).join('\n');
 
