@@ -51,7 +51,8 @@ export function createPermissionChecker(config = {}) {
                     if (promptCallback) {
                         try {
                             return await promptCallback(toolName, input);
-                        } catch {
+                        } catch (err) {
+                            console.error('[PermissionChecker] promptCallback error:', err);
                             return false; // deny on error
                         }
                     }

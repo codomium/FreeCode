@@ -102,6 +102,9 @@
         bypassPermissions: '⚠ Skips all permission checks — full automation, use with care',
     };
 
+    /** Regex that matches markdown numbered or bulleted list items for plan parsing */
+    const PLAN_ITEM_PATTERN = /^\s*(?:\d+\.|[-*•])\s+(.+)/;
+
     /** Keywords that indicate a retryable rate-limit/overload error in the UI */
     const RATE_LIMIT_PATTERN = /rate.?limit|overload|too.?many.?request|capacity|529|503|502|504|bad.?gateway|service.?unavailable|quota/i;
 
@@ -908,7 +911,10 @@
         div.className = 'msg msg-assistant';
         div._regenPrompt = lastUserMessage;    // capture for regenerate
         const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const modeBadgeHtml = `<span class="mode-badge mode-badge-${escapeHtml(currentMode)}">${escapeHtml(currentMode)}</span>`;
+        // Whitelist known mode values for safe CSS class construction
+        const safeModes = new Set(['default', 'auto', 'plan', 'acceptEdits', 'bypassPermissions']);
+        const safeMode  = safeModes.has(currentMode) ? currentMode : 'default';
+        const modeBadgeHtml = `<span class="mode-badge mode-badge-${safeMode}">${escapeHtml(safeMode)}</span>`;
         div.innerHTML = `
             <div class="msg-header">
                 <div class="msg-avatar">✦</div>
@@ -3329,7 +3335,7 @@
         const items = [];
         for (const line of lines) {
             // Match numbered lists (1. text) or bullet lists (- text / * text)
-            const m = line.match(/^\s*(?:\d+\.|[-*•])\s+(.+)/);
+            const m = line.match(PLAN_ITEM_PATTERN);
             if (m) {
                 const itemText = m[1].replace(/^\[[ x]\]\s*/, '').trim(); // strip checkbox syntax
                 if (itemText) items.push(itemText);

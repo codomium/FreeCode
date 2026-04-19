@@ -20,9 +20,10 @@
  */
 
 const { app, BrowserWindow, ipcMain, dialog, clipboard, shell, safeStorage, Menu } = require('electron');
-const path = require('path');
-const fs   = require('fs');
-const os   = require('os');
+const path   = require('path');
+const fs     = require('fs');
+const os     = require('os');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { pathToFileURL } = require('url');
 
@@ -232,7 +233,7 @@ class InProcessAgentBridge {
         return new Promise((resolve) => {
             if (!mainWindow || mainWindow.isDestroyed()) { resolve(true); return; }
 
-            const reqId = `perm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const reqId = crypto.randomUUID();
             // Store resolve so the IPC handler can complete it
             if (!this._permPending) this._permPending = new Map();
             this._permPending.set(reqId, resolve);
