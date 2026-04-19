@@ -3206,3 +3206,92 @@ select:focus { border-color: var(--accent); }
   color: #fff;
   border-color: var(--accent);
 }
+
+/* ============================================================
+   Custom Providers — settings section
+   ============================================================ */
+#cp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.cp-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.cp-entry-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.cp-entry-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-entry-url {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-entry-models {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.cp-entry-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 2px 6px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.cp-entry-btn:hover { background: var(--bg-elevated); color: var(--text); }
+.cp-entry-btn.del:hover { background: var(--error-bg); color: var(--error-text); border-color: var(--error-text); }
+
+.cp-form-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.cp-textarea {
+  font-family: var(--font-code);
+  font-size: 11px;
+  resize: vertical;
+  min-height: 52px;
+}
+
+.cp-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#cp-form {
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-top: 8px;
+  background: var(--bg-elevated);
+}

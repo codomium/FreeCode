@@ -571,6 +571,51 @@
       <div class="settings-note" id="settings-key-status"></div>
     </div>
 
+    <!-- ── Custom Providers ─────────────────────────────────── -->
+    <div class="settings-section">
+      <div class="settings-section-label">Custom Providers
+        <button class="settings-action-btn" id="cp-add-btn" style="margin-left:8px;font-size:11px">+ Add Provider</button>
+      </div>
+      <div id="cp-list">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Inline add/edit form (hidden by default) -->
+      <div id="cp-form" style="display:none">
+        <div class="cp-form-title" id="cp-form-title">Add Provider</div>
+        <div class="settings-row">
+          <label class="settings-label" for="cp-f-id">Provider ID</label>
+          <input type="text" id="cp-f-id" class="settings-input" placeholder="nvidia-kimi">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="cp-f-name">Display Name</label>
+          <input type="text" id="cp-f-name" class="settings-input" placeholder="NVIDIA Kimi">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="cp-f-url">Base URL</label>
+          <input type="text" id="cp-f-url" class="settings-input" placeholder="https://integrate.api.nvidia.com/v1">
+        </div>
+        <div class="settings-row">
+          <label class="settings-label" for="cp-f-key">API Key</label>
+          <input type="password" id="cp-f-key" class="settings-input" placeholder="nvapi-…">
+        </div>
+        <div class="settings-row" style="align-items:flex-start">
+          <label class="settings-label" for="cp-f-models" style="margin-top:4px">Models<br><span class="settings-note" style="font-size:10px">one per line: id:Name</span></label>
+          <textarea id="cp-f-models" class="settings-input cp-textarea" rows="3"
+            placeholder="moonshotai/kimi-k2.5:Kimi K2.5&#10;qwen/qwen3-coder-480b-a35b-instruct:Qwen3 Coder"></textarea>
+        </div>
+        <div class="settings-row" style="align-items:flex-start">
+          <label class="settings-label" for="cp-f-headers" style="margin-top:4px">Headers<br><span class="settings-note" style="font-size:10px">one per line: Name:Value</span></label>
+          <textarea id="cp-f-headers" class="settings-input cp-textarea" rows="2"
+            placeholder="Accept:text/event-stream"></textarea>
+        </div>
+        <div class="cp-form-actions">
+          <button class="settings-action-btn" id="cp-form-save">Save Provider</button>
+          <button class="settings-action-btn" id="cp-form-cancel" style="background:none;color:var(--text-dim)">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-section">
       <div class="settings-section-label">About</div>
       <div class="settings-row">

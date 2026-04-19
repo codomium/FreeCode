@@ -99,6 +99,7 @@ const DEFAULT_SETTINGS = {
     autoAttachActiveFile: false,
     pinnedFiles:        [],
     workspacePath:      os.homedir(),
+    customProviders:    [],   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
 };
 
 function getSettings() {
@@ -431,6 +432,11 @@ function applyEnvFromSettings() {
     process.env.CLAUDE_CODE_PERMISSION_MODE = s.permissionMode || 'default';
     process.env.CLAUDE_CODE_MAX_TURNS       = String(s.maxTurns || 20);
     process.env.NVIDIA_THINKING_MODE        = String(s.nvidiaThinkingMode || false);
+
+    // Serialize custom providers so the agent-loop can call them
+    const cp = Array.isArray(s.customProviders) ? s.customProviders : [];
+    process.env.CUSTOM_PROVIDERS_JSON = cp.length > 0 ? JSON.stringify(cp) : '';
+
     // Set cwd to workspace
     try { process.chdir(s.workspacePath || os.homedir()); } catch { /* ignore */ }
 }
@@ -666,6 +672,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 maxTurns:           s.maxTurns || 20,
                 showToolOutput:     s.showToolOutput !== false,
                 hasNvidiaKey:       !!(s.nvidiaApiKey || process.env.NVIDIA_API_KEY),
+                customProviders:    Array.isArray(s.customProviders) ? s.customProviders : [],
             });
 
             // Auto-restore session into agent bridge
@@ -1088,6 +1095,17 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     });
                 }
             }
+            break;
+        }
+
+        // ── Save custom providers list ─────────────────────────────────────────
+        case 'saveCustomProviders': {
+            const providers = Array.isArray(msg.providers) ? msg.providers : [];
+            saveSetting('customProviders', providers);
+            applyEnvFromSettings();
+            // Reinit bridge so new providers are available on the next turn
+            if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
+            send({ type: 'customProvidersSaved', providers });
             break;
         }
 
