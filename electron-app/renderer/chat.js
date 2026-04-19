@@ -106,6 +106,9 @@
     /** Regex that matches markdown numbered or bulleted list items for plan parsing */
     const PLAN_ITEM_PATTERN = /^\s*(?:\d+\.|[-*•])\s+(.+)/;
 
+    /** Max characters shown in the plan insert position label before truncation */
+    const PLAN_LABEL_MAX_CHARS = 30;
+
     /** Keywords that indicate a retryable rate-limit/overload error in the UI */
     const RATE_LIMIT_PATTERN = /rate.?limit|overload|too.?many.?request|capacity|529|503|502|504|bad.?gateway|service.?unavailable|quota/i;
 
@@ -3289,7 +3292,7 @@
             insertBtn.textContent = '+ Insert here';
             insertBtn.addEventListener('click', () => {
                 planInsertBeforeId = item.id;
-                if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = `Insert before: "${item.text.slice(0, 30)}…"`;
+                if (planAddPositionLabelEl) planAddPositionLabelEl.textContent = `Insert before: "${item.text.slice(0, PLAN_LABEL_MAX_CHARS)}…"`;
                 if (planAddRowEl) planAddRowEl.style.display = '';
                 if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
             });

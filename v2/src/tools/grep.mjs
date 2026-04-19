@@ -11,7 +11,7 @@
  * - multiline mode
  * - Windows support: uses 'where' for rg detection, avoids bash pipelines
  */
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import path from 'path';
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -49,12 +49,11 @@ export const GrepTool = {
             const mode = input.output_mode || 'files_with_matches';
             const limit = input.head_limit ?? 250;
 
-            // Build grep command — try rg first, fall back to grep
+            // Build grep args array — use rg first, fall back to grep
             const args = [];
             const useRg = hasRipgrep();
 
             if (useRg) {
-                args.push(IS_WINDOWS ? 'rg.exe' : 'rg');
                 if (input['-i']) args.push('-i');
                 if (input.multiline) args.push('-U', '--multiline-dotall');
 
@@ -63,9 +62,7 @@ export const GrepTool = {
                 } else if (mode === 'count') {
                     args.push('-c');
                 } else {
-                    // content mode
-                    const showLineNumbers = input['-n'] !== false;
-                    if (showLineNumbers) args.push('-n');
+                    if (input['-n'] !== false) args.push('-n');
                 }
 
                 const ctx = input['-C'] || input.context;
@@ -76,9 +73,10 @@ export const GrepTool = {
                 if (input.glob) args.push('--glob', input.glob);
                 if (input.type) args.push('--type', input.type);
 
+                // '--' separates flags from pattern/path so they can't be misinterpreted
                 args.push('--', input.pattern, dir);
             } else {
-                args.push('grep', '-r');
+                args.push('-r');
                 if (input['-i']) args.push('-i');
 
                 if (mode === 'files_with_matches') {
@@ -99,36 +97,23 @@ export const GrepTool = {
                 args.push('--', input.pattern, dir);
             }
 
-            let result;
-            if (IS_WINDOWS) {
-                // On Windows avoid bash-specific pipelines; limit output in JS instead
-                try {
-                    result = execSync(args.join(' '), {
-                        encoding: 'utf-8',
-                        maxBuffer: 10 * 1024 * 1024,
-                        timeout: 30000,
-                    });
-                } catch (e) {
-                    // grep/rg returns exit code 1 when no matches found — that's OK
-                    result = e.stdout || '';
-                }
-            } else {
-                // On Unix: redirect stderr and pipe to head for efficiency
-                const cmd = limit > 0
-                    ? `${args.join(' ')} 2>/dev/null | head -${limit}`
-                    : `${args.join(' ')} 2>/dev/null`;
+            // Use spawnSync with an argument array to avoid shell injection.
+            // Apply head_limit in JS rather than piping through head.
+            const exe = useRg ? (IS_WINDOWS ? 'rg.exe' : 'rg') : 'grep';
+            const proc = spawnSync(exe, args, {
+                encoding: 'utf-8',
+                maxBuffer: 10 * 1024 * 1024,
+                timeout: 30000,
+            });
 
-                result = execSync(cmd, {
-                    encoding: 'utf-8',
-                    maxBuffer: 10 * 1024 * 1024,
-                    timeout: 30000,
-                });
+            // exit code 1 from grep/rg means "no matches" — still return empty
+            let output = ((proc.stdout || '') + (proc.status === 0 || proc.status === 1 ? '' : '')).trim();
+            if (!output && proc.status !== 0 && proc.status !== 1) {
+                return 'No matches found.';
             }
 
-            let output = (result || '').trim();
-
-            // Apply head_limit in JS when on Windows (bash pipe not available)
-            if (IS_WINDOWS && limit > 0) {
+            // Apply head_limit in JS
+            if (limit > 0) {
                 const lines = output.split('\n');
                 if (lines.length > limit) output = lines.slice(0, limit).join('\n');
             }
@@ -144,10 +129,10 @@ let _hasRg = null;
 function hasRipgrep() {
     if (_hasRg !== null) return _hasRg;
     try {
-        // 'where' on Windows, 'which' on Unix
-        const cmd = IS_WINDOWS ? 'where rg' : 'which rg';
-        execSync(cmd, { encoding: 'utf-8', timeout: 5000 });
-        _hasRg = true;
+        // 'where' on Windows, 'which' on Unix — use spawnSync to avoid shell injection
+        const checkExe = IS_WINDOWS ? 'where' : 'which';
+        const result = spawnSync(checkExe, ['rg'], { encoding: 'utf-8', timeout: 5000 });
+        _hasRg = result.status === 0;
     } catch {
         _hasRg = false;
     }

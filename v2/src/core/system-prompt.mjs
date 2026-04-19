@@ -258,7 +258,10 @@ function detectProjectLanguage(root) {
     // Node / JavaScript / TypeScript
     if (check('package.json')) {
         try {
-            const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'));
+            const pkgPath = path.join(root, 'package.json');
+            const pkgStat = fs.statSync(pkgPath);
+            if (pkgStat.size > 1024 * 1024) throw new Error('package.json too large');
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
             const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
             if (deps.includes('react')) indicators.push('React');
             else if (deps.includes('vue')) indicators.push('Vue.js');

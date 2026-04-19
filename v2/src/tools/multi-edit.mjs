@@ -41,7 +41,7 @@ export const MultiEditTool = {
         for (const e of input.edits) {
             if (!e.file_path) e.file_path = e.filename || e.path || e.file || null;
             if (e.old_string == null) e.old_string = e.old_content || e.original_string || e.original || e.search || null;
-            if (e.new_string == null) e.new_string = (e.new_content || e.replacement_string || e.replacement || e.replace) ?? null;
+            if (e.new_string == null) e.new_string = e.new_content || e.replacement_string || e.replacement || e.replace || null;
         }
         for (let i = 0; i < input.edits.length; i++) {
             const e = input.edits[i];
