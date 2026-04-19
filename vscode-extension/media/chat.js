@@ -538,9 +538,48 @@
      * Falls back to showing all new lines when files are too large.
      */
     function computeDiff(aLines, bLines) {
+        // For large files where the full O(n*m) LCS is too expensive, use a
+        // fast hash-based approximation that correctly marks equal lines as context.
         if (aLines.length * bLines.length > 400000) {
-            return bLines.map(l => ({ type: 'add', line: l }));
+            const result = [];
+            const bSet = new Map();
+            for (let j = 0; j < bLines.length; j++) {
+                if (!bSet.has(bLines[j])) bSet.set(bLines[j], []);
+                bSet.get(bLines[j]).push(j);
+            }
+            const usedB = new Uint8Array(bLines.length);
+            const mapping = new Array(aLines.length).fill(-1);
+            for (let i = 0; i < aLines.length; i++) {
+                const candidates = bSet.get(aLines[i]);
+                if (candidates) {
+                    for (const bIdx of candidates) {
+                        if (!usedB[bIdx]) {
+                            mapping[i] = bIdx;
+                            usedB[bIdx] = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            let bi = 0;
+            for (let ai = 0; ai < aLines.length; ai++) {
+                const bMapped = mapping[ai];
+                if (bMapped === -1) {
+                    result.push({ type: 'remove', line: aLines[ai] });
+                } else {
+                    while (bi < bMapped) {
+                        result.push({ type: 'add', line: bLines[bi++] });
+                    }
+                    result.push({ type: 'equal', line: aLines[ai] });
+                    bi = bMapped + 1;
+                }
+            }
+            while (bi < bLines.length) {
+                result.push({ type: 'add', line: bLines[bi++] });
+            }
+            return result;
         }
+
         const n = aLines.length, m = bLines.length;
         const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
         for (let i = 1; i <= n; i++) {
@@ -2027,7 +2066,7 @@
             actionsBtn.classList.toggle('active', !visible);
         });
         // Wire each quick-action button → fill input with template
-        quickActionsPanel.querySelectorAll('.qa-btn').forEach((btn) => {
+        quickActionsPanel.querySelectorAll('.qa-btn:not(.qa-btn-team)').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const template = btn.dataset.template || '';
                 if (!template || !inputEl) return;
@@ -2037,6 +2076,26 @@
                 inputEl.focus();
                 inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
                 // Collapse the panel after selecting to give the user more space
+                quickActionsPanel.style.display = 'none';
+                actionsBtn.classList.remove('active');
+            });
+        });
+        // Wire multi-agent team buttons
+        quickActionsPanel.querySelectorAll('.qa-btn-team').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const teamType = btn.dataset.team || '';
+                if (!inputEl) return;
+                const teamPrompts = {
+                    build: '/team build\nDescribe the feature you want to build:',
+                    review: '/team review\nPaste code or describe what to review:',
+                    fullstack: '/team fullstack\nDescribe the full-stack feature to implement:',
+                    debug: '/team debug\nDescribe the bug or error you are seeing:',
+                };
+                inputEl.value = (teamPrompts[teamType] || '/team\nTask:') + '\n';
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.focus();
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
                 quickActionsPanel.style.display = 'none';
                 actionsBtn.classList.remove('active');
             });
@@ -2063,6 +2122,86 @@
         if (!inputEl) return;
         const rawText = inputEl.value.trim();
         if (!rawText || isLoading) return;
+
+        // ── /team slash command: transform into a structured multi-agent prompt ──
+        const teamLineMatch = rawText.match(/^\/team\s*(\w*)\s*\n?([\s\S]*)$/i);
+        if (teamLineMatch) {
+            const variant = (teamLineMatch[1] || 'build').toLowerCase();
+            const taskBody = teamLineMatch[2].trim() || 'the task described in the context files';
+            const TEAM_CONFIGS = {
+                build: {
+                    label: '🏗 Build Team',
+                    team: [
+                        { role: 'planner',  prompt: 'Create a detailed step-by-step implementation plan.' },
+                        { role: 'coder',    prompt: 'Implement the plan using file tools. Write real, working code.' },
+                        { role: 'reviewer', prompt: 'Review the implementation for bugs, edge cases, and improvements.' },
+                    ],
+                    phases: ['planning', 'implementation', 'review'],
+                },
+                review: {
+                    label: '🔍 Review Team',
+                    team: [
+                        { role: 'reviewer', prompt: 'Review the code for bugs, security issues, and improvements.' },
+                        { role: 'tester',   prompt: 'Write tests that cover the reviewed code.' },
+                    ],
+                    phases: ['review', 'testing'],
+                },
+                fullstack: {
+                    label: '🌐 Full-Stack Team',
+                    team: [
+                        { role: 'planner',  prompt: 'Create architecture and implementation plan for both frontend and backend.' },
+                        { role: 'coder',    prompt: 'Implement the backend services and API.' },
+                        { role: 'coder',    prompt: 'Implement the frontend UI and connect it to the API.' },
+                        { role: 'reviewer', prompt: 'Review and integrate both implementations.' },
+                    ],
+                    phases: ['planning', 'backend', 'frontend', 'integration'],
+                },
+                debug: {
+                    label: '🐛 Debug Team',
+                    team: [
+                        { role: 'researcher', prompt: 'Analyze the bug: identify root cause and affected code paths.' },
+                        { role: 'coder',      prompt: 'Fix the bug with the minimal safe change.' },
+                        { role: 'tester',     prompt: 'Write a regression test that confirms the fix.' },
+                    ],
+                    phases: ['diagnosis', 'fix', 'testing'],
+                },
+            };
+            const cfg = TEAM_CONFIGS[variant] || TEAM_CONFIGS.build;
+            const teamJson = JSON.stringify({ prompt: taskBody, team: cfg.team, phases: cfg.phases }, null, 2);
+            const injectedMessage = [
+                `${cfg.label} requested for: ${taskBody}`,
+                '',
+                'You MUST use the Agent tool with the following configuration to complete this task:',
+                '```json',
+                teamJson,
+                '```',
+                '',
+                'Run the team sequentially through the specified phases and report all results.',
+            ].join('\n');
+
+            addUserMessage(rawText);
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            hideAutocomplete();
+            setSending(true);
+            setLoading(true, `${cfg.label}: Thinking…`);
+
+            const sendContextFiles = contextFiles
+                .filter(f => !f.isImage && !f.isCodebase && !f.isGit && !f.isErrors)
+                .map(f => f.path);
+
+            vscode.postMessage({
+                type: 'send',
+                message: injectedMessage,
+                contextFiles: sendContextFiles,
+                fileRefs: [],
+                useCodebase: contextFiles.some(f => f.isCodebase),
+            });
+
+            contextFiles = contextFiles.filter(f => f.pinned);
+            renderContextFiles();
+            return;
+        }
 
         // Extract @file references from text before sending
         const fileRefs = [];
@@ -2118,6 +2257,7 @@
         { cmd: '/export',   desc: 'Export conversation as Markdown' },
         { cmd: '/help',     desc: 'Show keyboard shortcuts' },
         { cmd: '/pin',      desc: 'Pin all current context files to every session' },
+        { cmd: '/team',     desc: 'Run a multi-agent team: /team build · review · fullstack · debug' },
         { cmd: '/explain',  desc: 'Explain the code/file in context',      template: 'Explain what this code does in simple terms:' },
         { cmd: '/fix',      desc: 'Find and fix bugs',                      template: 'Find and fix the bugs in this code. Explain what was wrong:' },
         { cmd: '/refactor', desc: 'Refactor for clarity and maintainability', template: 'Refactor this code to be cleaner and more maintainable:' },
@@ -2176,8 +2316,10 @@
                 addSystemMessage(
                     'Keyboard shortcuts: Enter=send · Shift+Enter=newline · @=add file · ' +
                     '@codebase=full codebase · /=commands · ↑=recall last message · ' +
-                    'Ctrl+L=focus input · Ctrl+F=search · Ctrl+K=inline edit · Esc=stop\n\n' +
-                    'Template commands: /explain · /fix · /refactor · /test · /review · /docs · /commit · /optimize'
+                    'Ctrl+L=focus input · Ctrl+F=search · Ctrl+K=inline edit · Ctrl+`=terminal · Esc=stop\n\n' +
+                    'Template commands: /explain · /fix · /refactor · /test · /review · /docs · /commit · /optimize\n\n' +
+                    'Multi-agent: /team build · /team review · /team fullstack · /team debug\n' +
+                    '  Usage: type /team build on the first line, then describe your task on the next lines.'
                 );
                 break;
         }
@@ -2618,6 +2760,127 @@
             newChatBtn && newChatBtn.click();
         });
     }
+
+    // ── Integrated Terminal Panel ─────────────────────────────────────────────
+    const terminalPanelEl   = document.getElementById('terminal-panel');
+    const terminalToggleBtn = document.getElementById('terminal-toggle-btn');
+    const terminalOutputEl  = document.getElementById('terminal-output');
+    const terminalInputEl   = document.getElementById('terminal-input');
+    const terminalRunBtn    = document.getElementById('terminal-run-btn');
+    const terminalClearBtn  = document.getElementById('terminal-clear-btn');
+    const terminalCloseBtn  = document.getElementById('terminal-close-btn');
+    const terminalCwdEl     = document.getElementById('terminal-cwd');
+
+    let terminalReqCounter = 0;
+    let terminalHistory    = [];
+    let terminalHistoryIdx = -1;
+    const MAX_TERMINAL_HISTORY = 100;
+
+    function appendTerminalLine(text, cssClass) {
+        if (!terminalOutputEl || !text) return;
+        const span = document.createElement('span');
+        span.className = cssClass || 'term-line-stdout';
+        span.textContent = text;
+        terminalOutputEl.appendChild(span);
+        const wrap = document.getElementById('terminal-output-wrap');
+        if (wrap) wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    function openTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'flex';
+        if (terminalToggleBtn) terminalToggleBtn.classList.add('active');
+        if (terminalInputEl) terminalInputEl.focus();
+    }
+
+    function closeTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'none';
+        if (terminalToggleBtn) terminalToggleBtn.classList.remove('active');
+    }
+
+    function runTerminalCommand() {
+        if (!terminalInputEl) return;
+        const cmd = terminalInputEl.value.trim();
+        if (!cmd) return;
+        terminalHistory.unshift(cmd);
+        if (terminalHistory.length > MAX_TERMINAL_HISTORY) terminalHistory.pop();
+        terminalHistoryIdx = -1;
+        terminalInputEl.value = '';
+
+        appendTerminalLine(`$ ${cmd}\n`, 'term-line-cmd');
+
+        const reqId = `term-${++terminalReqCounter}`;
+        vscode.postMessage({ type: 'terminalRun', command: cmd, reqId });
+    }
+
+    if (terminalToggleBtn) {
+        terminalToggleBtn.addEventListener('click', () => {
+            if (!terminalPanelEl) return;
+            if (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        });
+    }
+
+    if (terminalCloseBtn) terminalCloseBtn.addEventListener('click', closeTerminal);
+
+    if (terminalClearBtn) {
+        terminalClearBtn.addEventListener('click', () => {
+            if (terminalOutputEl) terminalOutputEl.textContent = '';
+        });
+    }
+
+    if (terminalRunBtn) terminalRunBtn.addEventListener('click', runTerminalCommand);
+
+    if (terminalInputEl) {
+        terminalInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                runTerminalCommand();
+            } else if (e.key === 'ArrowUp') {
+                if (terminalHistoryIdx < terminalHistory.length - 1) {
+                    terminalHistoryIdx++;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                }
+                e.preventDefault();
+            } else if (e.key === 'ArrowDown') {
+                if (terminalHistoryIdx > 0) {
+                    terminalHistoryIdx--;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                } else {
+                    terminalHistoryIdx = -1;
+                    terminalInputEl.value = '';
+                }
+                e.preventDefault();
+            }
+        });
+    }
+
+    // Handle terminalOutput messages from extension host
+    window.addEventListener('message', (event) => {
+        const msg = event.data;
+        if (msg.type !== 'terminalOutput') return;
+        if (!terminalOutputEl) return;
+        const cssClass = msg.stream === 'stderr' ? 'term-line-stderr'
+                       : msg.stream === 'cmd'    ? 'term-line-cmd'
+                       : msg.stream === 'info'   ? 'term-line-info'
+                       : 'term-line-stdout';
+        if (msg.data) appendTerminalLine(msg.data, cssClass);
+    });
+
+    // Ctrl+` — toggle terminal
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+            e.preventDefault();
+            if (terminalPanelEl && (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display)) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        }
+    });
 
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });

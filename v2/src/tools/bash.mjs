@@ -28,11 +28,9 @@ function isWslAvailable() {
     if (!IS_WINDOWS) return false;
     if (_wslAvailable !== null) return _wslAvailable;
     try {
-        // `wsl.exe --status` exits 0 if WSL is installed and functional.
         const result = spawnSync('wsl.exe', ['--status'], {
             encoding: 'utf-8',
             timeout: 5000,
-            // Suppress the console window that would flash on Windows
             windowsHide: true,
         });
         _wslAvailable = result.status === 0;
@@ -40,6 +38,44 @@ function isWslAvailable() {
         _wslAvailable = false;
     }
     return _wslAvailable;
+}
+
+/**
+ * Check whether the Ubuntu WSL distro is installed.
+ * Uses `wsl.exe -d Ubuntu -- echo ok` to test the specific distro.
+ * Falls back to the default WSL distro when Ubuntu is not available.
+ *
+ * Preferred priority on Windows:
+ *   1. Ubuntu distro  (`wsl.exe -d Ubuntu -- bash -c "..."`)
+ *   2. Default WSL    (`wsl.exe bash -c "..."`)
+ *   3. PowerShell     (POSIX shims injected)
+ */
+let _ubuntuAvailable = null;
+function isUbuntuWslAvailable() {
+    if (!isWslAvailable()) return false;
+    if (_ubuntuAvailable !== null) return _ubuntuAvailable;
+    try {
+        const result = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
+            encoding: 'utf-8',
+            timeout: 5000,
+            windowsHide: true,
+        });
+        _ubuntuAvailable = result.status === 0 && (result.stdout || '').trim() === 'ok';
+    } catch {
+        _ubuntuAvailable = false;
+    }
+    return _ubuntuAvailable;
+}
+
+/**
+ * Return the name of the active shell for display purposes.
+ * Used by UI components to show "Ubuntu", "WSL", or "PowerShell".
+ */
+export function getActiveShellName() {
+    if (!IS_WINDOWS) return 'bash';
+    if (isUbuntuWslAvailable()) return 'Ubuntu';
+    if (isWslAvailable()) return 'WSL';
+    return 'PowerShell';
 }
 
 /**
@@ -84,20 +120,125 @@ const POWERSHELL_POSIX_SHIMS = [
         ' if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date }' +
         ' else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
 
-    // wc -l: count lines from piped stdin (mirrors `… | wc -l`)
+    // wc -l / wc -c / wc -w: count lines/chars/words from piped stdin
     'function wc { param([string]$flag)' +
-        ' if ($flag -eq "-l") { $c = 0; $input | ForEach-Object { $c++ }; $c } }',
+        ' $lines = @($input);' +
+        ' if ($flag -eq "-l") { $lines.Count }' +
+        ' elseif ($flag -eq "-c") { ($lines -join "`n").Length }' +
+        ' elseif ($flag -eq "-w") { ($lines | ForEach-Object { ($_ -split "\\s+" | Where-Object { $_ -ne "" }).Count } | Measure-Object -Sum).Sum }' +
+        ' else { $lines.Count } }',
+
+    // ls: list directory contents (mirrors `ls [-la] [path]`)
+    'function ls { param([string]$flags="", [string]$p=".")' +
+        ' $showHidden = $flags -match "a";' +
+        ' $long = $flags -match "l";' +
+        ' $items = Get-ChildItem -Path $p -Force:$showHidden;' +
+        ' if ($long) { $items | Format-Table Mode,LastWriteTime,Length,Name -AutoSize }' +
+        ' else { $items | ForEach-Object { $_.Name } } }',
+
+    // mkdir -p: create directory tree without error if exists
+    'function mkdir { param([string]$flag="", [Parameter(ValueFromRemainingArguments)][string[]]$paths)' +
+        ' $allPaths = if ($flag -ne "-p" -and $flag -ne "") { @($flag) + $paths } else { $paths };' +
+        ' foreach ($d in $allPaths) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }',
+
+    // rm: remove files/directories (supports -rf)
+    'function rm { param([string]$flags="", [Parameter(ValueFromRemainingArguments)][string[]]$paths)' +
+        ' $allPaths = if ($flags -notmatch "^-") { @($flags) + $paths } else { $paths };' +
+        ' $recurse = $flags -match "r";' +
+        ' $force = $flags -match "f";' +
+        ' foreach ($p in $allPaths) {' +
+        '   if (Test-Path $p) { Remove-Item -Path $p -Recurse:$recurse -Force:$force } } }',
+
+    // mv: move/rename files
+    'function mv { param([string]$src, [string]$dst)' +
+        ' Move-Item -Path $src -Destination $dst -Force }',
+
+    // cp: copy files (supports -r for recursive)
+    'function cp { param([string]$flags="", [string]$src="", [string]$dst="")' +
+        ' if ($flags -notmatch "^-") { $dst = $src; $src = $flags; $flags = "" };' +
+        ' $recurse = $flags -match "r";' +
+        ' Copy-Item -Path $src -Destination $dst -Recurse:$recurse -Force }',
+
+    // head: first N lines (default 10) from file or piped stdin
+    'function head { param([string]$flag="", [string]$file="")' +
+        ' $n = 10;' +
+        ' if ($flag -match "^-n$" -or $flag -match "^-\\d") {' +
+        '   if ($flag -match "^-(\\d+)$") { $n = [int]$Matches[1] }' +
+        '   elseif ($flag -eq "-n") { $n = [int]$file; $file = "" }' +
+        ' } elseif ($flag -ne "") { $file = $flag }' +
+        ' if ($file) { Get-Content $file | Select-Object -First $n }' +
+        ' else { $input | Select-Object -First $n } }',
+
+    // tail: last N lines (default 10) from file or piped stdin
+    'function tail { param([string]$flag="", [string]$file="")' +
+        ' $n = 10;' +
+        ' if ($flag -match "^-n$" -or $flag -match "^-\\d") {' +
+        '   if ($flag -match "^-(\\d+)$") { $n = [int]$Matches[1] }' +
+        '   elseif ($flag -eq "-n") { $n = [int]$file; $file = "" }' +
+        ' } elseif ($flag -ne "") { $file = $flag }' +
+        ' if ($file) { Get-Content $file | Select-Object -Last $n }' +
+        ' else { $input | Select-Object -Last $n } }',
+
+    // sort: sort lines; -r for reverse, -u for unique
+    'function sort { param([string]$flags="", [Parameter(ValueFromRemainingArguments)][string[]]$extra)' +
+        ' $rev = $flags -match "r";' +
+        ' $uniq = $flags -match "u";' +
+        ' $lines = if ($flags -notmatch "^-") { @($flags) + $extra | ForEach-Object { $_ } }' +
+        '          else { $input };' +
+        ' $sorted = $lines | Sort-Object { $_ } -Descending:$rev;' +
+        ' if ($uniq) { $sorted | Select-Object -Unique } else { $sorted } }',
+
+    // uniq: deduplicate consecutive lines
+    'function uniq { param([Parameter(ValueFromPipeline=$true)][string]$line)' +
+        ' begin { $prev = $null }' +
+        ' process { if ($line -ne $prev) { $line; $prev = $line } } }',
+
+    // find: simplified find (mirrors `find <path> -name <pattern>`)
+    'function find { param([string]$basePath=".", [string]$nameFlag="", [string]$namePattern="*")' +
+        ' if ($nameFlag -ne "-name") { $namePattern = $nameFlag }' +
+        ' Get-ChildItem -Path $basePath -Recurse -Filter $namePattern -Force |' +
+        ' ForEach-Object { $_.FullName } }',
+
+    // echo: print text (already exists in PS but alias may conflict)
+    'function echo { param([Parameter(ValueFromRemainingArguments)][string[]]$args)' +
+        ' Write-Output ($args -join " ") }',
+
+    // diff: basic line diff between two files
+    'function diff { param([string]$file1, [string]$file2)' +
+        ' $a = Get-Content $file1; $b = Get-Content $file2;' +
+        ' Compare-Object $a $b | ForEach-Object {' +
+        '   $sign = if ($_.SideIndicator -eq "<=") { "<" } else { ">" };' +
+        '   "$sign $($_.InputObject)" } }',
+
+    // sed: very basic sed -i s/old/new/g substitute on a file
+    'function sed { param([string]$expr, [string]$file="")' +
+        ' if ($expr -match "^s/(.+)/(.+)/") {' +
+        '   $from = $Matches[1]; $to = $Matches[2];' +
+        '   if ($file) {' +
+        '     (Get-Content $file) -replace $from,$to | Set-Content $file' +
+        '   } else {' +
+        '     $input -replace $from,$to' +
+        '   }' +
+        ' } }',
+
+    // pwd: print working directory
+    'function pwd { (Get-Location).Path }',
+
+    // env: print environment variables
+    'function env { Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" } }',
 ].join('; ');
 
 function getShellArgs(command) {
     if (IS_WINDOWS) {
+        if (isUbuntuWslAvailable()) {
+            // Run inside the Ubuntu WSL distro — best POSIX compatibility.
+            return ['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-c', command]];
+        }
         if (isWslAvailable()) {
-            // Run the command inside the default WSL distro's bash shell.
-            // `wsl.exe bash -c "..."` passes the command string directly to bash.
+            // Run inside the default WSL distro's bash shell.
             return ['wsl.exe', ['bash', '-c', command]];
         }
         // WSL not available — fall back to PowerShell with POSIX shims prepended.
-        // Note: PowerShell is available on every modern Windows install.
         const wrapped = `${POWERSHELL_POSIX_SHIMS}; ${command}`;
         return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', wrapped]];
     }

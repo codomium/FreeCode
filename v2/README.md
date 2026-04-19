@@ -1,5 +1,32 @@
 # open-claude-code v2 — Technical Guide
 
+## What's New in v2.3 (agent-loop / core)
+
+### Transparent 429 / Rate-Limit Retry
+
+`agent-loop.mjs` now wraps every provider API call in an inner **retry loop**:
+
+- Catches `429`, `503`, `502`, `504`, overload, and quota errors
+- Retries up to **3 times** — conversation state is unchanged between attempts
+- Exponential back-off: 30 s → 60 s → 120 s; `Retry-After` header is forwarded as `.retryAfterSeconds` on the thrown `Error` and honoured
+- Emits `{ type: 'retrying', attempt, maxAttempts, delaySeconds }` so UIs can show a countdown
+- Applies to all callers: `callAnthropic`, `callOpenAI`, `callGoogle`, `callNvidia`, `callCustomProvider`
+
+### Large-File Diff Fix (`computeDiff` fallback)
+
+The `computeDiff` helper is used by both UI front-ends (Electron and VS Code extension) to build the red/green diff view when the agent edits a file.
+
+Previously, when `aLines.length × bLines.length > 400 000` (large files), the fallback returned `bLines.map(l => ({ type: 'add', line: l }))` — marking every line in the new file as added, even if only 3 lines changed.
+
+The new fallback uses a **hash-based patience-diff approximation**:
+1. Builds a `Map<line, positions[]>` for the new file
+2. Greedily maps old-file lines to their first unused position in the new file
+3. Emits `equal` for matched pairs, `remove` for unmatched old lines, `add` for unmatched new lines
+
+This runs in O(n + m) time and produces correct context/add/remove classification.
+
+---
+
 ## Quick Start
 
 ```bash

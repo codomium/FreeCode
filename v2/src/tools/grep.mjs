@@ -21,6 +21,8 @@ const IS_WINDOWS = process.platform === 'win32';
 /** Ripgrep executable name varies by platform. */
 const RG_EXE = IS_WINDOWS ? 'rg.exe' : 'rg';
 
+let _hasRg = null;
+
 export const GrepTool = {
     name: 'Grep',
     description: 'Search file contents with regex (powered by ripgrep or grep).',

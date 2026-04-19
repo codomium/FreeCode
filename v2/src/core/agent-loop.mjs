@@ -93,56 +93,85 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         const provider = detectProvider(currentModel);
         let response;
 
-        try {
-            if (settings.stream !== false) {
-                // Streaming mode
-                response = await callApiStreaming(provider, currentModel, state, tools.list(), settings);
-                const collectedContent = [];
-                let currentText = '';
-                let currentThinking = '';
-                let repetitionDetected = false;
+        // Retry loop — handles 429 / 5xx rate-limit errors transparently.
+        // The loop only retries the HTTP call itself; streaming events are not
+        // replayed. The conversation state is unchanged between retries.
+        const MAX_API_RETRIES = 3;
+        const RETRY_BASE_DELAY_MS = 30000;
+        let apiAttempt = 0;
+        while (true) {
+            try {
+                if (settings.stream !== false) {
+                    // Streaming mode
+                    response = await callApiStreaming(provider, currentModel, state, tools.list(), settings);
+                    const collectedContent = [];
+                    let currentText = '';
+                    let currentThinking = '';
+                    let repetitionDetected = false;
 
-                for await (const event of response.events) {
-                    if (event.type === 'content_block_start') {
-                        if (event.content_block?.type === 'thinking') {
-                            currentThinking = '';
-                        }
-                    } else if (event.type === 'content_block_delta') {
-                        if (event.delta?.type === 'text_delta') {
-                            currentText += event.delta.text;
-                            yield { type: 'stream_event', text: event.delta.text };
-                            // Abort stream if the model is stuck repeating itself
-                            if (detectRepetition(currentText)) {
-                                repetitionDetected = true;
-                                break;
+                    for await (const event of response.events) {
+                        if (event.type === 'content_block_start') {
+                            if (event.content_block?.type === 'thinking') {
+                                currentThinking = '';
                             }
-                        } else if (event.delta?.type === 'thinking_delta') {
-                            currentThinking += event.delta.thinking;
-                            yield { type: 'thinking', text: event.delta.thinking };
+                        } else if (event.type === 'content_block_delta') {
+                            if (event.delta?.type === 'text_delta') {
+                                currentText += event.delta.text;
+                                yield { type: 'stream_event', text: event.delta.text };
+                                // Abort stream if the model is stuck repeating itself
+                                if (detectRepetition(currentText)) {
+                                    repetitionDetected = true;
+                                    break;
+                                }
+                            } else if (event.delta?.type === 'thinking_delta') {
+                                currentThinking += event.delta.thinking;
+                                yield { type: 'thinking', text: event.delta.thinking };
+                            }
+                        } else if (event.type === 'ping') {
+                            // Keepalive, ignore
                         }
-                    } else if (event.type === 'ping') {
-                        // Keepalive, ignore
                     }
-                }
 
-                if (repetitionDetected) {
+                    if (repetitionDetected) {
+                        yield {
+                            type: 'error',
+                            message: 'Agent stopped: repetitive output detected. The model appears to be stuck. Please start a new message or refine your request.',
+                        };
+                        yield { type: 'stop', reason: 'repetition_detected' };
+                        return;
+                    }
+
+                    // Use the accumulated message
+                    response = response.accumulated;
+                } else {
+                    // Non-streaming mode
+                    response = await callApi(provider, currentModel, state, tools.list(), settings);
+                }
+                // Success — reset retry counter and exit the retry loop
+                state._autoRetryCount = 0;
+                break;
+            } catch (err) {
+                // Detect rate-limit / overload errors and auto-retry with back-off
+                const isRetryable = /rate.?limit|overload|too.?many.?request|capacity|429|529|503|502|504|bad.?gateway|service.?unavailable|quota/i.test(err.message || '');
+                if (isRetryable && apiAttempt < MAX_API_RETRIES) {
+                    apiAttempt++;
+                    // Honour Retry-After if the error carries it; otherwise exponential back-off
+                    const delaySec = err.retryAfterSeconds
+                        || Math.min(30 * Math.pow(2, apiAttempt - 1), 120);
                     yield {
-                        type: 'error',
-                        message: 'Agent stopped: repetitive output detected. The model appears to be stuck. Please start a new message or refine your request.',
+                        type: 'retrying',
+                        attempt: apiAttempt,
+                        maxAttempts: MAX_API_RETRIES,
+                        delaySeconds: delaySec,
                     };
-                    yield { type: 'stop', reason: 'repetition_detected' };
-                    return;
+                    await new Promise(r => setTimeout(r, delaySec * 1000));
+                    continue; // retry the API call without mutating messages
                 }
-
-                // Use the accumulated message
-                response = response.accumulated;
-            } else {
-                // Non-streaming mode
-                response = await callApi(provider, currentModel, state, tools.list(), settings);
+                // Non-retryable error or retries exhausted
+                state._autoRetryCount = 0;
+                yield { type: 'error', message: err.message };
+                return;
             }
-        } catch (err) {
-            yield { type: 'error', message: err.message };
-            return;
         }
 
         // Track token usage
@@ -348,8 +377,11 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
     });
 
     if (!res.ok) {
+        const retryAfter = res.headers?.get?.('retry-after');
         const err = await res.text();
-        throw new Error(`Anthropic API error ${res.status}: ${err}`);
+        const errMsg = `Anthropic API error ${res.status}: ${err}`;
+        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+        throw new Error(errMsg);
     }
 
     if (stream) {
@@ -417,8 +449,11 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     });
 
     if (!res.ok) {
+        const retryAfter = res.headers?.get?.('retry-after');
         const err = await res.text();
-        throw new Error(`OpenAI API error ${res.status}: ${err}`);
+        const errMsg = `OpenAI API error ${res.status}: ${err}`;
+        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+        throw new Error(errMsg);
     }
 
     const data = await res.json();
@@ -454,8 +489,11 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
     );
 
     if (!res.ok) {
+        const retryAfter = res.headers?.get?.('retry-after') || res.headers?.get?.('x-ratelimit-reset-requests');
         const err = await res.text();
-        throw new Error(`Google API error ${res.status}: ${err}`);
+        const errMsg = `Google API error ${res.status}: ${err}`;
+        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+        throw new Error(errMsg);
     }
 
     const data = await res.json();

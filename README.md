@@ -14,6 +14,57 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.3
+
+### 🔌 Custom Providers UI — Redesigned Settings Cards
+
+The **Custom Providers** section in Settings has been completely reworked for clarity and ease of use:
+
+- **Provider cards** now display an auto-picked emoji icon based on the base URL (🤖 OpenAI, ⚡ NVIDIA NIM, 🌐 Google, 💻 Ollama/local, 🔌 generic)
+- Model names are shown in **accent colour** beneath the base URL so you can see at a glance which models a provider exposes
+- **✏ Edit** and **✕ Remove** buttons are grouped in a tidy action area on the right side of each card, with hover colours
+- Cards have a subtle **hover border-colour transition** and rounded corners for a modern look
+- The add/edit **form** gets an icon-prefixed title (🔌 Add Custom Provider / ✏ Edit Provider) and a top-border separator above the action buttons
+- The empty-state hint now reads: *"No custom providers yet. Click + Add Provider to connect any OpenAI-compatible API."*
+
+### 📐 Editor Line Numbers
+
+The built-in code editor now shows **VS Code-style line numbers** in a gutter on the left:
+
+- A dedicated line-number column appears left of the text area, styled identically to VS Code's default theme (muted colour, right-aligned)
+- The gutter **scrolls in sync** with the file content as you scroll or navigate
+- Line numbers **update instantly** as you type — adding or removing lines adjusts the count in real time
+- Works in both the Electron app and the VS Code extension webview
+
+### 🟩🟥 Accurate Diff View for Large Files
+
+The diff view now **correctly shows which lines actually changed** instead of marking the entire after-file as added:
+
+**Before (bug):** When an agent edited a large file (800+ lines), the diff showed every single line as a green `+` line — making it impossible to tell what actually changed.
+
+**After (fixed):** Unchanged lines are shown as grey context lines; only truly added lines are green and truly removed lines are red.
+
+The fix replaces the previous O(n²) fallback (which degenerated to "all added" for files with more than ~400 K line-pairs) with a fast **hash-based patience-diff approximation**:
+
+1. Builds a positional index of all lines in the new file
+2. Greedily maps matching lines from the old file → keeping them as context
+3. Only emits red/green markers for lines that truly differ
+
+Both the Electron app and the VS Code extension webview use the updated algorithm.
+
+### 🔄 Agent Auto-Retry on 429 / Rate-Limit Errors
+
+The agent no longer stops mid-task when it hits a `429 Too Many Requests` or other transient API error:
+
+- An inner **retry loop** wraps every API call inside the agent loop generator — the HTTP request is retried up to **3 times** without re-adding the user message or corrupting conversation history
+- **Exponential back-off**: 30 s → 60 s → 120 s between attempts
+- Respects the `Retry-After` HTTP header returned by Anthropic, OpenAI, and Google — waits exactly as long as the provider requests
+- Emits a `retrying` event that both UIs display as: `⏳ Rate limited — retrying in 30s (attempt 1/3)…`
+- Covers **all providers**: Anthropic, OpenAI, Google, NVIDIA NIM, and Custom Providers
+- After 3 failed retries the error is surfaced normally — the `main.js` outer retry loop remains as a final safety net
+
+---
+
 ## What's New in v2.2
 
 ### 🔌 Custom Providers — Add Any OpenAI-Compatible API

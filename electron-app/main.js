@@ -675,6 +675,13 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 customProviders:    Array.isArray(s.customProviders) ? s.customProviders : [],
             });
 
+            // Report which shell the integrated terminal will use
+            // (deferred so main window is already ready to receive it)
+            setImmediate(() => {
+                const sh = detectPreferredShell();
+                send({ type: 'shellInfo', shell: sh.type });
+            });
+
             // Auto-restore session into agent bridge
             if (activeMessages && activeMessages.length > 0) {
                 await getBridge()._init().catch(() => {});
@@ -1254,15 +1261,70 @@ ipcMain.on('renderer-message', async (event, msg) => {
 
 // ── Handle run-in-terminal ────────────────────────────────────────────────────
 
+/**
+ * Detect the preferred shell on Windows.
+ * Priority: Ubuntu WSL distro → generic WSL → PowerShell → bash (non-Windows).
+ * Result is cached after first call.
+ */
+let _preferredShell = null;
+function detectPreferredShell() {
+    if (_preferredShell) return _preferredShell;
+    if (process.platform !== 'win32') {
+        _preferredShell = { type: 'bash', exe: 'bash', args: [] };
+        return _preferredShell;
+    }
+
+    const { spawnSync } = require('child_process');
+
+    // Try Ubuntu WSL distro first
+    try {
+        const r = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
+            encoding: 'utf-8', timeout: 4000, windowsHide: true,
+        });
+        if (r.status === 0 && (r.stdout || '').trim() === 'ok') {
+            _preferredShell = { type: 'ubuntu', exe: 'wsl.exe', args: ['-d', 'Ubuntu', '--', 'bash', '-c'] };
+            return _preferredShell;
+        }
+    } catch { /* ignore */ }
+
+    // Try generic WSL
+    try {
+        const r = spawnSync('wsl.exe', ['--status'], {
+            encoding: 'utf-8', timeout: 4000, windowsHide: true,
+        });
+        if (r.status === 0) {
+            _preferredShell = { type: 'wsl', exe: 'wsl.exe', args: ['bash', '-c'] };
+            return _preferredShell;
+        }
+    } catch { /* ignore */ }
+
+    // Fall back to PowerShell
+    _preferredShell = { type: 'powershell', exe: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command'] };
+    return _preferredShell;
+}
+
 function handleRunInTerminal(code) {
     if (!code.trim()) return;
     const cwd = getSettings().workspacePath || os.homedir();
-    // On Windows: open a new cmd.exe window and run the code
+    const { spawn } = require('child_process');
+    const shell = detectPreferredShell();
+
     if (process.platform === 'win32') {
-        const { spawn } = require('child_process');
-        spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', code], { cwd, detached: true });
+        if (shell.type === 'ubuntu') {
+            // Open a new WSL Ubuntu window
+            spawn('wsl.exe', ['-d', 'Ubuntu', '--'], {
+                cwd, detached: true, stdio: 'ignore', windowsHide: false,
+            });
+        } else if (shell.type === 'wsl') {
+            spawn('wsl.exe', [], {
+                cwd, detached: true, stdio: 'ignore', windowsHide: false,
+            });
+        } else {
+            spawn('powershell.exe', [
+                '-NoProfile', '-NoExit', '-Command', code,
+            ], { cwd, detached: true, stdio: 'ignore', windowsHide: false });
+        }
     } else {
-        const { spawn } = require('child_process');
         spawn('bash', ['-c', code], { cwd, detached: true, stdio: 'ignore' });
     }
 }
@@ -1278,25 +1340,29 @@ function handleTerminalRun(command, reqId, send) {
     }
 
     const cwd = getSettings().workspacePath || os.homedir();
+    const shell = detectPreferredShell();
 
-    // Choose shell: WSL on Windows if available, else PowerShell, else bash
     let shellExe, shellArgs;
-    if (process.platform === 'win32') {
-        // Try WSL first (same logic as bash.mjs)
-        const { spawnSync } = require('child_process');
-        let wslOk = false;
-        try {
-            const r = spawnSync('wsl.exe', ['--status'], { encoding: 'utf-8', timeout: 3000, windowsHide: true });
-            wslOk = r.status === 0;
-        } catch { /* ignore */ }
-
-        if (wslOk) {
-            shellExe = 'wsl.exe';
-            shellArgs = ['bash', '-c', command];
-        } else {
-            shellExe = 'powershell.exe';
-            shellArgs = ['-NoProfile', '-NonInteractive', '-Command', command];
-        }
+    if (shell.type === 'ubuntu') {
+        shellExe = 'wsl.exe';
+        shellArgs = ['-d', 'Ubuntu', '--', 'bash', '-c', command];
+    } else if (shell.type === 'wsl') {
+        shellExe = 'wsl.exe';
+        shellArgs = ['bash', '-c', command];
+    } else if (shell.type === 'powershell') {
+        // Inject POSIX shims so common Unix tools work in PS
+        const TERMINAL_PS_SHIMS = [
+            'function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
+            'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Select-String -Pattern $pattern -Path $paths | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line } } }',
+            'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) Get-Content $paths }',
+            'function touch { param([string]$path) if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
+            'function head { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -First $n } else { $input | Select-Object -First $n } }',
+            'function tail { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -Last $n } else { $input | Select-Object -Last $n } }',
+            'function find { param([string]$basePath=".", [string]$nameFlag="", [string]$namePattern="*") if ($nameFlag -ne "-name") { $namePattern=$nameFlag }; Get-ChildItem -Path $basePath -Recurse -Filter $namePattern -Force | ForEach-Object { $_.FullName } }',
+            'function pwd { (Get-Location).Path }',
+        ].join('; ');
+        shellExe = 'powershell.exe';
+        shellArgs = ['-NoProfile', '-NonInteractive', '-Command', `${TERMINAL_PS_SHIMS}; ${command}`];
     } else {
         shellExe = 'bash';
         shellArgs = ['-c', command];
