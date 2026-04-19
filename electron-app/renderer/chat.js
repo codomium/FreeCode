@@ -48,6 +48,7 @@
     let costTotal = 0;
     let startTime = Date.now();
     let currentModel = '';
+    let currentMode = 'default'; // tracks active permission mode for mode badge
     let pendingApply = null;     // { code, language }
     let activeToolCards = {};    // toolName -> dom element
     let sessionMessages = [];    // tracked messages for history saving
@@ -63,6 +64,11 @@
     let lastStreamTps = 0;       // final t/s from last completed stream
     let autoAttachActive = false; // whether to auto-attach the active file with every send
     let msgSendTime = 0;          // timestamp when the last user message was submitted
+
+    // ── Plan board state ─────────────────────────────────────────────────────
+    let planItems = [];          // { id, text, done, inProgress }
+    let planBoardVisible = false;
+    let planItemCounter = 0;
 
     // ── Editor tab state ─────────────────────────────────────────────────────
     let openTabs = [];           // { path, name, content, error, isDiff, beforeContent, afterContent }
@@ -160,6 +166,7 @@
     const quickActionsPanel = document.getElementById('quick-actions');
     const modeDescBar       = document.getElementById('mode-desc-bar');
     const modeDescText      = document.getElementById('mode-desc-text');
+    const modeDescCloseBtn  = document.getElementById('mode-desc-close');
     const gitBtn            = document.getElementById('git-btn');
     const errorsBtn         = document.getElementById('errors-btn');
     const autoAttachBtn     = document.getElementById('auto-attach-btn');
@@ -211,6 +218,26 @@
     const fileViewerContent    = document.getElementById('file-viewer-content');
     const fileViewerAddCtxBtn  = document.getElementById('file-viewer-add-ctx-btn');
     const fileViewerCloseBtn   = document.getElementById('file-viewer-close-btn');
+
+    // ── Plan board refs ──────────────────────────────────────────────────────
+    const planBoardEl        = document.getElementById('plan-board');
+    const planItemsListEl    = document.getElementById('plan-items-list');
+    const planAddBtn         = document.getElementById('plan-add-btn');
+    const planClearDoneBtn   = document.getElementById('plan-clear-done-btn');
+    const planCloseBoardBtn  = document.getElementById('plan-close-btn');
+    const planCollapseBtn    = document.getElementById('plan-board-collapse');
+    const planAddRowEl       = document.getElementById('plan-add-row');
+    const planAddInputEl     = document.getElementById('plan-add-input');
+    const planAddConfirmBtn  = document.getElementById('plan-add-confirm');
+    const planAddCancelBtn   = document.getElementById('plan-add-cancel');
+
+    // ── Permission modal refs ────────────────────────────────────────────────
+    const permModalEl        = document.getElementById('permission-modal');
+    const permModalTitle     = document.getElementById('permission-modal-title');
+    const permModalDesc      = document.getElementById('permission-modal-desc');
+    const permModalDetail    = document.getElementById('permission-modal-detail');
+    const permAllowBtn       = document.getElementById('permission-allow-btn');
+    const permDenyBtn        = document.getElementById('permission-deny-btn');
 
     // ── File explorer / viewer state ─────────────────────────────────────────
     let currentWorkspacePath  = '';   // kept in sync with settings
@@ -881,10 +908,12 @@
         div.className = 'msg msg-assistant';
         div._regenPrompt = lastUserMessage;    // capture for regenerate
         const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const modeBadgeHtml = `<span class="mode-badge mode-badge-${escapeHtml(currentMode)}">${escapeHtml(currentMode)}</span>`;
         div.innerHTML = `
             <div class="msg-header">
                 <div class="msg-avatar">✦</div>
                 <span class="msg-name">Claude</span>
+                ${modeBadgeHtml}
                 <span class="msg-time">${escapeHtml(ts)}</span>
             </div>
             <div class="msg-content streaming-cursor"></div>
@@ -964,6 +993,15 @@
                 const msgDiv = currentStreamMsg.closest('.msg-assistant');
                 if (msgDiv) addCopyButtonToMessage(msgDiv, raw, msgDiv._regenPrompt);
                 sessionMessages.push({ type: 'assistant', text: raw });
+                // In plan mode, auto-parse list items from the response
+                if (currentMode === 'plan' && planItems.length === 0) {
+                    const parsed = extractPlanItems(raw);
+                    if (parsed.length > 0) {
+                        for (const t of parsed) addPlanItem(t);
+                    }
+                }
+                // Advance plan progress on completion
+                if (planItems.length > 0) advancePlanProgress();
             }
             currentStreamMsg = null;
         } else if (content) {
@@ -1117,6 +1155,8 @@
 
         activeToolCards[toolName] = id;
         scrollToBottom();
+        // Mark first uncompleted plan item as in-progress when agent starts doing work
+        if (planItems.length > 0) startPlanProgress();
         return id;
     }
 
@@ -1579,7 +1619,7 @@
                 if (FILE_WRITE_TOOLS.has(msg.tool) && msg.input) {
                     const diffPath = msg.input.file_path || msg.input.path || null;
                     if (diffPath) {
-                        pendingDiffEdit = { path: diffPath, tool: msg.tool, beforeContent: null };
+                        pendingDiffEdit = { path: diffPath, tool: msg.tool, beforeContent: null, resultReady: false };
                         vscode.postMessage({ type: 'readFile', path: diffPath, purpose: 'before_diff' });
                     }
                 }
@@ -1601,12 +1641,15 @@
 
             case 'result':
                 updateToolCard(msg.tool, typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2), msg.input);
-                // Trigger after-content read for diff if we captured a before-content
-                if (pendingDiffEdit && pendingDiffEdit.tool === msg.tool && pendingDiffEdit.beforeContent !== null) {
-                    vscode.postMessage({ type: 'readFile', path: pendingDiffEdit.path, purpose: 'after_diff' });
-                } else if (pendingDiffEdit && pendingDiffEdit.tool === msg.tool) {
-                    // Before content failed — clear pending
-                    pendingDiffEdit = null;
+                if (pendingDiffEdit && pendingDiffEdit.tool === msg.tool) {
+                    if (pendingDiffEdit.beforeContent !== null) {
+                        // Before content is already available — trigger after read
+                        vscode.postMessage({ type: 'readFile', path: pendingDiffEdit.path, purpose: 'after_diff' });
+                    } else {
+                        // Before read hasn't completed yet — mark result as ready so
+                        // the fileData handler can trigger after read when it arrives
+                        pendingDiffEdit.resultReady = true;
+                    }
                 }
                 break;
 
@@ -1749,6 +1792,7 @@
 
             case 'initialized':
                 currentModel = msg.model || 'claude-sonnet-4-6';
+                currentMode  = msg.mode  || 'default';
                 if (modelSelect && msg.model) modelSelect.value = msg.model;
                 if (modeSelect && msg.mode) modeSelect.value = msg.mode;
                 if (thinkingToggleEl) {
@@ -1756,6 +1800,9 @@
                     if (thinkingLabelEl) thinkingLabelEl.classList.toggle('active', !!msg.thinkingMode);
                 }
                 syncThinkingToggleVisibility(currentModel);
+                // Show the mode description bar on startup so users know what mode is active
+                showModeDesc(currentMode);
+                updatePlanBoardVisibility();
                 // Restore auto-attach state from settings
                 autoAttachActive = !!msg.autoAttachActiveFile;
                 if (autoAttachBtn) autoAttachBtn.classList.toggle('active', autoAttachActive);
@@ -1778,6 +1825,10 @@
                 if (currentWorkspacePath) {
                     vscode.postMessage({ type: 'watchWorkspace', path: currentWorkspacePath });
                 }
+                break;
+
+            case 'permissionRequest':
+                showPermissionModal(msg);
                 break;
 
             case 'apiKeySet':
@@ -1823,14 +1874,19 @@
                 if (msg.purpose === 'before_diff') {
                     // Store before content for diff view
                     if (pendingDiffEdit && msg.path === pendingDiffEdit.path) {
-                        pendingDiffEdit.beforeContent = msg.content || '';
+                        pendingDiffEdit.beforeContent = msg.content !== null ? (msg.content || '') : '';
+                        // If result already arrived while we were waiting, trigger after read now
+                        if (pendingDiffEdit.resultReady) {
+                            pendingDiffEdit.resultReady = false;
+                            vscode.postMessage({ type: 'readFile', path: pendingDiffEdit.path, purpose: 'after_diff' });
+                        }
                     }
                 } else if (msg.purpose === 'after_diff') {
-                    // Open diff tab
+                    // Open diff tab — if before is empty string it's a new file
                     if (pendingDiffEdit && msg.path === pendingDiffEdit.path) {
-                        const before = pendingDiffEdit.beforeContent;
-                        const after = msg.content || '';
-                        const diffPath = pendingDiffEdit.path;
+                        const before    = pendingDiffEdit.beforeContent !== null ? pendingDiffEdit.beforeContent : '';
+                        const after     = msg.content || '';
+                        const diffPath  = pendingDiffEdit.path;
                         pendingDiffEdit = null;
                         openDiffTab(diffPath, before, after);
                     }
@@ -2269,19 +2325,26 @@
     }
 
     // ── Mode description bar ─────────────────────────────────────────────────
-    let modeDescTimeout = null;
     function showModeDesc(mode) {
         const desc = MODE_DESCRIPTIONS[mode];
         if (!modeDescBar || !modeDescText || !desc) return;
         modeDescText.textContent = desc;
         modeDescBar.style.display = '';
-        clearTimeout(modeDescTimeout);
-        modeDescTimeout = setTimeout(() => {
-            if (modeDescBar) modeDescBar.style.display = 'none';
-        }, 5000);
+    }
+    function hideModeDesc() {
+        if (modeDescBar) modeDescBar.style.display = 'none';
+    }
+    if (modeDescCloseBtn) {
+        modeDescCloseBtn.addEventListener('click', hideModeDesc);
     }
     if (modeSelect) {
-        modeSelect.addEventListener('change', () => showModeDesc(modeSelect.value));
+        modeSelect.addEventListener('change', () => {
+            currentMode = modeSelect.value;
+            showModeDesc(modeSelect.value);
+            // Show/hide plan board based on mode
+            updatePlanBoardVisibility();
+            vscode.postMessage({ type: 'mode', mode: modeSelect.value });
+        });
     }
 
     function submitMessage() {
@@ -2306,7 +2369,9 @@
             if (f.isGit && f.content)    specialParts.push('\n\n[Git Context]\n' + f.content);
             if (f.isErrors && f.content) specialParts.push('\n\n[Workspace Problems]\n' + f.content);
         }
-        const finalMessage = specialParts.length > 0 ? rawText + specialParts.join('') : rawText;
+        // Inject active plan context so the agent always remembers the to-do list
+        const planCtx = buildPlanContext();
+        const finalMessage = rawText + specialParts.join('') + planCtx;
 
         // Separate file paths from image/codebase/special context entries
         const sendContextFiles = contextFiles
@@ -2340,6 +2405,7 @@
         { cmd: '/clear',    desc: 'Clear conversation and start fresh' },
         { cmd: '/new',      desc: 'Start a new conversation (alias for /clear)' },
         { cmd: '/model',    desc: 'Switch AI model' },
+        { cmd: '/mode',     desc: 'Switch permission mode: default · auto · plan · acceptEdits · bypass' },
         { cmd: '/export',   desc: 'Export conversation as Markdown' },
         { cmd: '/help',     desc: 'Show keyboard shortcuts' },
         { cmd: '/pin',      desc: 'Pin all current context files to every session' },
@@ -2797,12 +2863,6 @@
         });
     }
 
-    if (modeSelect) {
-        modeSelect.addEventListener('change', () => {
-            vscode.postMessage({ type: 'mode', mode: modeSelect.value });
-        });
-    }
-
     // ── Thinking mode toggle (NVIDIA capable models only) ─────────────────────
     function syncThinkingToggleVisibility(model) {
         const visible = THINKING_CAPABLE_MODELS.has(model);
@@ -3146,8 +3206,213 @@
 
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // 3-COLUMN IDE — RESIZE HANDLES
+    // PERMISSION MODAL — default-mode interactive allow/deny
     // ═══════════════════════════════════════════════════════════════════════════
+
+    let pendingPermReqId = null;
+
+    function showPermissionModal(msg) {
+        if (!permModalEl) return;
+        pendingPermReqId = msg.reqId;
+        const toolLabel = msg.tool || 'unknown tool';
+        if (permModalDesc) {
+            permModalDesc.textContent = `The agent wants to run: ${toolLabel}`;
+        }
+        if (permModalDetail) {
+            const detail = msg.file ? `File: ${msg.file}` : (msg.command ? `Command: ${msg.command}` : '');
+            permModalDetail.textContent = detail;
+            permModalDetail.style.display = detail ? '' : 'none';
+        }
+        permModalEl.style.display = '';
+    }
+
+    function closePermissionModal() {
+        if (permModalEl) permModalEl.style.display = 'none';
+        pendingPermReqId = null;
+    }
+
+    if (permAllowBtn) {
+        permAllowBtn.addEventListener('click', () => {
+            if (pendingPermReqId) {
+                vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: true });
+            }
+            closePermissionModal();
+        });
+    }
+    if (permDenyBtn) {
+        permDenyBtn.addEventListener('click', () => {
+            if (pendingPermReqId) {
+                vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: false });
+            }
+            closePermissionModal();
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PLAN BOARD — Cursor-style task tracker
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    let planBoardCollapsed = false;
+
+    function updatePlanBoardVisibility() {
+        if (!planBoardEl) return;
+        const hasPlan = planItems.length > 0;
+        const isPlanMode = currentMode === 'plan';
+        // Show if there are plan items, OR if we're in plan mode
+        if (hasPlan || isPlanMode) {
+            planBoardEl.style.display = '';
+            planBoardVisible = true;
+        } else {
+            planBoardEl.style.display = 'none';
+            planBoardVisible = false;
+        }
+    }
+
+    function renderPlanBoard() {
+        if (!planItemsListEl) return;
+        planItemsListEl.innerHTML = '';
+        for (const item of planItems) {
+            const row = document.createElement('div');
+            row.className = 'plan-item'
+                + (item.done ? ' plan-item-done' : '')
+                + (item.inProgress ? ' plan-item-active' : '');
+            row.dataset.id = item.id;
+
+            const checkBtn = document.createElement('button');
+            checkBtn.className = 'plan-check-btn';
+            checkBtn.title = item.done ? 'Mark incomplete' : 'Mark complete';
+            checkBtn.innerHTML = item.done ? '✓' : (item.inProgress ? '<span class="plan-spinner">⟳</span>' : '○');
+            checkBtn.addEventListener('click', () => togglePlanItem(item.id));
+
+            const textEl = document.createElement('span');
+            textEl.className = 'plan-item-text';
+            textEl.textContent = item.text;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'plan-remove-btn';
+            removeBtn.title = 'Remove task';
+            removeBtn.textContent = '✕';
+            removeBtn.addEventListener('click', () => removePlanItem(item.id));
+
+            row.appendChild(checkBtn);
+            row.appendChild(textEl);
+            row.appendChild(removeBtn);
+            planItemsListEl.appendChild(row);
+        }
+    }
+
+    function togglePlanItem(id) {
+        const item = planItems.find(p => p.id === id);
+        if (!item) return;
+        item.done = !item.done;
+        if (item.done) item.inProgress = false;
+        renderPlanBoard();
+    }
+
+    function removePlanItem(id) {
+        planItems = planItems.filter(p => p.id !== id);
+        renderPlanBoard();
+        updatePlanBoardVisibility();
+    }
+
+    function addPlanItem(text) {
+        if (!text || !text.trim()) return;
+        planItems.push({ id: ++planItemCounter, text: text.trim(), done: false, inProgress: false });
+        renderPlanBoard();
+        updatePlanBoardVisibility();
+    }
+
+    /** Parse markdown list items from agent plan-mode responses */
+    function extractPlanItems(text) {
+        if (!text) return [];
+        const lines = text.split('\n');
+        const items = [];
+        for (const line of lines) {
+            // Match numbered lists (1. text) or bullet lists (- text / * text)
+            const m = line.match(/^\s*(?:\d+\.|[-*•])\s+(.+)/);
+            if (m) {
+                const itemText = m[1].replace(/^\[[ x]\]\s*/, '').trim(); // strip checkbox syntax
+                if (itemText) items.push(itemText);
+            }
+        }
+        return items;
+    }
+
+    /** Mark the first in-progress item as done; mark next as in-progress */
+    function advancePlanProgress() {
+        const inProg = planItems.find(p => p.inProgress && !p.done);
+        if (inProg) { inProg.done = true; inProg.inProgress = false; }
+        const next = planItems.find(p => !p.done && !p.inProgress);
+        if (next) next.inProgress = true;
+        renderPlanBoard();
+    }
+
+    /** Start first uncompleted item as in-progress when agent begins tool use */
+    function startPlanProgress() {
+        if (!planItems.some(p => p.inProgress)) {
+            const first = planItems.find(p => !p.done);
+            if (first) { first.inProgress = true; renderPlanBoard(); }
+        }
+    }
+
+    /** Build plan context string to inject into prompts */
+    function buildPlanContext() {
+        if (planItems.length === 0) return '';
+        const lines = planItems.map(p =>
+            `- [${p.done ? 'x' : ' '}] ${p.text}${p.inProgress && !p.done ? ' ← (in progress)' : ''}`
+        );
+        return '\n\n[Active Plan]\n' + lines.join('\n');
+    }
+
+    // Wire plan board controls
+    if (planCollapseBtn) {
+        planCollapseBtn.addEventListener('click', () => {
+            planBoardCollapsed = !planBoardCollapsed;
+            if (planItemsListEl) planItemsListEl.style.display = planBoardCollapsed ? 'none' : '';
+            if (planAddRowEl)    planAddRowEl.style.display   = 'none';
+            planCollapseBtn.textContent = planBoardCollapsed ? '▸' : '▾';
+        });
+    }
+    if (planCloseBoardBtn) {
+        planCloseBoardBtn.addEventListener('click', () => {
+            planItems = [];
+            planBoardEl && (planBoardEl.style.display = 'none');
+            planBoardVisible = false;
+        });
+    }
+    if (planClearDoneBtn) {
+        planClearDoneBtn.addEventListener('click', () => {
+            planItems = planItems.filter(p => !p.done);
+            renderPlanBoard();
+            updatePlanBoardVisibility();
+        });
+    }
+    if (planAddBtn) {
+        planAddBtn.addEventListener('click', () => {
+            if (!planAddRowEl) return;
+            planAddRowEl.style.display = '';
+            if (planAddInputEl) { planAddInputEl.value = ''; planAddInputEl.focus(); }
+        });
+    }
+    if (planAddConfirmBtn) {
+        planAddConfirmBtn.addEventListener('click', () => {
+            if (planAddInputEl) { addPlanItem(planAddInputEl.value); planAddInputEl.value = ''; }
+            if (planAddRowEl) planAddRowEl.style.display = 'none';
+        });
+    }
+    if (planAddCancelBtn) {
+        planAddCancelBtn.addEventListener('click', () => {
+            if (planAddRowEl) planAddRowEl.style.display = 'none';
+        });
+    }
+    if (planAddInputEl) {
+        planAddInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { planAddConfirmBtn && planAddConfirmBtn.click(); }
+            if (e.key === 'Escape') { planAddCancelBtn && planAddCancelBtn.click(); }
+        });
+    }
+
+
 
     function initResizeHandles() {
         const resizeLeft  = document.getElementById('resize-left');

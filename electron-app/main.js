@@ -186,8 +186,22 @@ class InProcessAgentBridge {
 
             const settings = await loadSettings();
 
-            const tools       = createToolRegistry();
-            const permissions = createPermissionChecker(settings.permissions);
+            const tools   = createToolRegistry();
+            const appSettings  = getSettings();
+            const permMode = appSettings.permissionMode || 'default';
+
+            // In default mode, wire an interactive promptCallback so the renderer
+            // gets a chance to approve/deny each tool use before it runs.
+            const permConfig = {
+                ...(settings.permissions || {}),
+                defaultMode: permMode,
+            };
+            if (permMode === 'default') {
+                permConfig.promptCallback = (toolName, input) =>
+                    this._promptPermission(toolName, input);
+            }
+
+            const permissions = createPermissionChecker(permConfig);
             const hooks       = new HookEngine(settings.hooks || {});
 
             const agentLoader = new AgentLoader();
@@ -198,17 +212,50 @@ class InProcessAgentBridge {
             const skillTool = tools.get('Skill');
             if (skillTool) skillTool._skillsLoader = skillsLoader;
 
-            const appSettings  = getSettings();
-            const model        = this._model || appSettings.model || 'claude-sonnet-4-6';
+            const model = this._model || appSettings.model || 'claude-sonnet-4-6';
 
             this._loop = createAgentLoop({ model, tools, permissions, settings, hooks });
             this._loop.state._agentLoader   = agentLoader;
             this._loop.state._skillsLoader  = skillsLoader;
             this._loop.state._hooks         = settings.hooks;
-            this._loop.state._permissionMode = appSettings.permissionMode || 'default';
+            this._loop.state._permissionMode = permMode;
             this._ready = true;
         })();
         return this._initPromise;
+    }
+
+    /**
+     * Send a permissionRequest to the renderer and wait for the user's response.
+     * Returns a Promise<boolean> that resolves when the renderer replies.
+     */
+    _promptPermission(toolName, input) {
+        return new Promise((resolve) => {
+            if (!mainWindow || mainWindow.isDestroyed()) { resolve(true); return; }
+
+            const reqId = `perm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            // Store resolve so the IPC handler can complete it
+            if (!this._permPending) this._permPending = new Map();
+            this._permPending.set(reqId, resolve);
+
+            mainWindow.webContents.send('main-message', {
+                type:    'permissionRequest',
+                reqId,
+                tool:    toolName,
+                file:    input?.file_path || input?.path || null,
+                command: input?.command   || null,
+                input,
+            });
+        });
+    }
+
+    /** Called by IPC when renderer sends back permissionResponse */
+    resolvePermission(reqId, allowed) {
+        if (!this._permPending) return;
+        const resolve = this._permPending.get(reqId);
+        if (resolve) {
+            this._permPending.delete(reqId);
+            resolve(!!allowed);
+        }
     }
 
     async run(message, onEvent) {
@@ -269,6 +316,13 @@ class InProcessAgentBridge {
      * Reinitialise the bridge with new environment variables (after API key or mode change).
      */
     reinit() {
+        // Reject any pending permission prompts before reinit
+        if (this._permPending) {
+            for (const resolve of this._permPending.values()) {
+                resolve(false); // deny any outstanding requests
+            }
+            this._permPending.clear();
+        }
         this._loop = null;
         this._ready = false;
         this._initPromise = null;
@@ -573,6 +627,14 @@ ipcMain.on('renderer-message', async (event, msg) => {
             if (agentBridge) agentBridge.reset();
             isCancelled = false;
             send({ type: 'sessionCleared' });
+            break;
+        }
+
+        // ── Permission response from renderer (default mode interactive prompts) ─
+        case 'permissionResponse': {
+            if (agentBridge && typeof agentBridge.resolvePermission === 'function') {
+                agentBridge.resolvePermission(msg.reqId, !!msg.allowed);
+            }
             break;
         }
 

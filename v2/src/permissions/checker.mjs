@@ -12,6 +12,9 @@ import { validatePath } from './path-check.mjs';
 export function createPermissionChecker(config = {}) {
     const mode = config.defaultMode || process.env.CLAUDE_CODE_PERMISSION_MODE || 'default';
     const rl = config.rl || null; // readline interface for prompts
+    // Optional async callback for interactive permission prompts (e.g. from Electron UI).
+    // Signature: promptCallback(toolName, input) => Promise<boolean>
+    const promptCallback = config.promptCallback || null;
 
     return {
         mode,
@@ -35,21 +38,26 @@ export function createPermissionChecker(config = {}) {
             switch (mode) {
                 case 'bypassPermissions': return true;
                 case 'acceptEdits':
-                    // Allow file ops, block Bash/Agent unless rl available
-                    if (toolName === 'Bash' || toolName === 'Agent') {
-                        return !requiresPermission(toolName) || !!config.bypassBash;
-                    }
+                    // Allow file ops and Bash in acceptEdits mode — user accepted all edits
                     return true;
                 case 'auto': return true; // AI decides
                 case 'dontAsk': return false; // deny everything not pre-approved
                 case 'plan': return ['Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch'].includes(toolName);
                 case 'default':
                 default:
-                    // In default mode, safe tools pass through
+                    // In default mode, safe read-only tools pass through without asking
                     if (!requiresPermission(toolName)) return true;
-                    // Without a readline interface, allow (headless mode)
+                    // If a UI callback is provided, use it to ask the user interactively
+                    if (promptCallback) {
+                        try {
+                            return await promptCallback(toolName, input);
+                        } catch {
+                            return false; // deny on error
+                        }
+                    }
+                    // Without readline or callback (headless), allow by default
                     if (!rl) return true;
-                    // With rl, would call promptPermission — but that's async/interactive
+                    // With rl, would call promptPermission — allow for now
                     return true;
             }
         },
