@@ -59,16 +59,34 @@ function isWslAvailable() {
  * These replace the most-common Unix utilities that PowerShell lacks natively.
  */
 const POWERSHELL_POSIX_SHIMS = [
-    // which → resolve binary path via Get-Command
-    'function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
-    // grep → thin wrapper around Select-String; handles both piped and file input
-    'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Select-String -Pattern $pattern -Path $paths | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line } } }',
-    // cat → print file contents
-    'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) Get-Content $paths }',
-    // touch → create or update file timestamp
-    'function touch { param([string]$path) if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
-    // wc -l shim: count lines from stdin
-    'function wc { param([string]$flag) if ($flag -eq "-l") { $c = 0; $input | ForEach-Object { $c++ }; $c } }',
+    // which: resolve a binary's full path via Get-Command (mirrors `which cmd`)
+    'function which { param([string]$cmd)' +
+        ' $r = Get-Command $cmd -ErrorAction SilentlyContinue;' +
+        ' if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
+
+    // grep: thin wrapper around Select-String.
+    //   - With file args: grep <pattern> <file…> → path:line:text
+    //   - Without file args (piped): … | grep <pattern> → matching lines
+    'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths)' +
+        ' if ($paths) {' +
+        '   Select-String -Pattern $pattern -Path $paths |' +
+        '   ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" }' +
+        ' } else {' +
+        '   $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line }' +
+        ' } }',
+
+    // cat: print one or more files (mirrors `cat file…`)
+    'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths)' +
+        ' Get-Content $paths }',
+
+    // touch: create file if missing, or update its timestamp (mirrors `touch path`)
+    'function touch { param([string]$path)' +
+        ' if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date }' +
+        ' else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
+
+    // wc -l: count lines from piped stdin (mirrors `… | wc -l`)
+    'function wc { param([string]$flag)' +
+        ' if ($flag -eq "-l") { $c = 0; $input | ForEach-Object { $c++ }; $c } }',
 ].join('; ');
 
 function getShellArgs(command) {

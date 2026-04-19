@@ -18,6 +18,9 @@ import path from 'path';
 
 const IS_WINDOWS = process.platform === 'win32';
 
+/** Ripgrep executable name varies by platform. */
+const RG_EXE = IS_WINDOWS ? 'rg.exe' : 'rg';
+
 export const GrepTool = {
     name: 'Grep',
     description: 'Search file contents with regex (powered by ripgrep or grep).',
@@ -106,7 +109,7 @@ export const GrepTool = {
 
             // Use spawnSync with an argument array to avoid shell injection.
             // Apply head_limit in JS rather than piping through head.
-            const exe = useRg ? (IS_WINDOWS ? 'rg.exe' : 'rg') : 'grep';
+            const exe = useRg ? RG_EXE : 'grep';
             const proc = spawnSync(exe, args, {
                 encoding: 'utf-8',
                 maxBuffer: 10 * 1024 * 1024,
@@ -129,13 +132,12 @@ export const GrepTool = {
     },
 };
 
-let _hasRg = null;
 function hasRipgrep() {
     if (_hasRg !== null) return _hasRg;
     try {
-        // 'where' on Windows, 'which' on Unix — use spawnSync to avoid shell injection
+        // 'where' on Windows, 'which' on Unix — check for the platform-correct exe name
         const checkExe = IS_WINDOWS ? 'where' : 'which';
-        const result = spawnSync(checkExe, ['rg'], { encoding: 'utf-8', timeout: 5000 });
+        const result = spawnSync(checkExe, [RG_EXE], { encoding: 'utf-8', timeout: 5000 });
         _hasRg = result.status === 0;
     } catch {
         _hasRg = false;
