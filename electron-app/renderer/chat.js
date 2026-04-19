@@ -1924,6 +1924,10 @@
                 if (msg.type === 'fileDeleted') {
                     closeTab(msg.path);
                 }
+                // Clear modified indicator if this was an editor save
+                if ((msg.purpose === 'editor_save' || msg.purpose === 'editor_autosave') && msg.path) {
+                    markTabSaved(msg.path);
+                }
                 break;
 
             case 'fileOpError':
@@ -3619,7 +3623,8 @@
             const tabEl   = document.createElement('div');
             tabEl.className = 'editor-tab'
                 + (tab.path === activeTabPath ? ' active' : '')
-                + (tab.isDiff ? ' diff-tab' : '');
+                + (tab.isDiff ? ' diff-tab' : '')
+                + (tab.isModified ? ' modified' : '');
             tabEl.title = tab.path;
 
             const iconEl = document.createElement('span');
@@ -3668,11 +3673,71 @@
                 errEl.textContent = 'Error: ' + tab.error;
                 editorContentEl.appendChild(errEl);
             } else {
-                const pre = document.createElement('pre');
-                pre.id = 'editor-file-view';
-                pre.textContent = tab.content || '';
-                editorContentEl.appendChild(pre);
+                const textarea = document.createElement('textarea');
+                textarea.id = 'editor-file-view';
+                textarea.value = tab.content || '';
+                textarea.spellcheck = false;
+                textarea.autocomplete = 'off';
+                textarea.setAttribute('autocorrect', 'off');
+                textarea.setAttribute('autocapitalize', 'off');
+
+                // Debounced auto-save timer
+                let saveTimer = null;
+                function scheduleAutoSave() {
+                    if (saveTimer) clearTimeout(saveTimer);
+                    saveTimer = setTimeout(() => {
+                        vscode.postMessage({ type: 'writeFile', path: tab.path, content: tab.content, purpose: 'editor_autosave' });
+                        markTabSaved(tab.path);
+                    }, 1000);
+                }
+
+                textarea.addEventListener('input', () => {
+                    tab.content = textarea.value;
+                    markTabModified(tab.path);
+                    scheduleAutoSave();
+                });
+
+                // Ctrl+S / Cmd+S: immediate save
+                textarea.addEventListener('keydown', (e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                        e.preventDefault();
+                        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+                        vscode.postMessage({ type: 'writeFile', path: tab.path, content: tab.content, purpose: 'editor_save' });
+                        markTabSaved(tab.path);
+                    }
+                    // Tab key inserts spaces instead of focusing next element
+                    if (e.key === 'Tab') {
+                        e.preventDefault();
+                        const start = textarea.selectionStart;
+                        const end   = textarea.selectionEnd;
+                        textarea.value = textarea.value.substring(0, start) + '    ' + textarea.value.substring(end);
+                        textarea.selectionStart = textarea.selectionEnd = start + 4;
+                        tab.content = textarea.value;
+                        markTabModified(tab.path);
+                        scheduleAutoSave();
+                    }
+                });
+
+                editorContentEl.appendChild(textarea);
             }
+        }
+    }
+
+    /** Mark a tab as having unsaved edits (shows the dot indicator). */
+    function markTabModified(filePath) {
+        const tab = openTabs.find(t => t.path === filePath);
+        if (tab && !tab.isModified) {
+            tab.isModified = true;
+            renderTabBar();
+        }
+    }
+
+    /** Clear the modified indicator after a successful save. */
+    function markTabSaved(filePath) {
+        const tab = openTabs.find(t => t.path === filePath);
+        if (tab && tab.isModified) {
+            tab.isModified = false;
+            renderTabBar();
         }
     }
 

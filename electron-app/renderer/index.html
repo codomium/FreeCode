@@ -95,25 +95,6 @@
     <button id="mode-desc-close" title="Dismiss">✕</button>
   </div>
 
-  <!-- Plan Board (Cursor-style To-Do list, shown when plan items exist) -->
-  <div id="plan-board" style="display:none">
-    <div class="plan-board-header">
-      <span class="plan-board-title">📋 Plan</span>
-      <button class="plan-board-toggle" id="plan-board-collapse" title="Collapse/expand plan">▾</button>
-      <div class="plan-board-spacer"></div>
-      <button class="plan-board-btn" id="plan-add-btn" title="Add task to end">+ Add</button>
-      <button class="plan-board-btn plan-board-btn-muted" id="plan-clear-done-btn" title="Clear completed tasks">✓ Clear done</button>
-      <button class="plan-board-btn plan-board-btn-muted" id="plan-close-btn" title="Close plan board">✕</button>
-    </div>
-    <div id="plan-items-list"></div>
-    <div id="plan-add-row" style="display:none">
-      <span id="plan-add-position-label" class="plan-add-position-label"></span>
-      <input id="plan-add-input" type="text" placeholder="New task…" autocomplete="off" spellcheck="false">
-      <button id="plan-add-confirm">Add</button>
-      <button id="plan-add-cancel">✕</button>
-    </div>
-  </div>
-
   <!-- Quick Actions panel (full width, collapsible) -->
   <div id="quick-actions" style="display:none">
     <div class="qa-section-label">✨ Code Tasks</div>
@@ -143,6 +124,25 @@
 
     <!-- ── LEFT COLUMN: Chat ─────────────────────────────────── -->
     <div id="panel-chat">
+
+      <!-- Plan Board (Cursor-style To-Do list, shown when plan items exist) -->
+      <div id="plan-board" style="display:none">
+        <div class="plan-board-header">
+          <span class="plan-board-title">📋 Plan</span>
+          <button class="plan-board-toggle" id="plan-board-collapse" title="Collapse/expand plan">▾</button>
+          <div class="plan-board-spacer"></div>
+          <button class="plan-board-btn" id="plan-add-btn" title="Add task to end">+ Add</button>
+          <button class="plan-board-btn plan-board-btn-muted" id="plan-clear-done-btn" title="Clear completed tasks">✓ Clear done</button>
+          <button class="plan-board-btn plan-board-btn-muted" id="plan-close-btn" title="Close plan board">✕</button>
+        </div>
+        <div id="plan-items-list"></div>
+        <div id="plan-add-row" style="display:none">
+          <span id="plan-add-position-label" class="plan-add-position-label"></span>
+          <input id="plan-add-input" type="text" placeholder="New task…" autocomplete="off" spellcheck="false">
+          <button id="plan-add-confirm">Add</button>
+          <button id="plan-add-cancel">✕</button>
+        </div>
+      </div>
 
       <!-- Search bar (hidden until Ctrl+F) -->
       <div id="search-bar" style="display:none">

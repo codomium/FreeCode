@@ -2355,7 +2355,9 @@ select:focus { border-color: var(--accent); }
 /* ── Editor content area ─────────────────────────────────────────── */
 #editor-content {
   flex: 1;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   font-family: var(--font-code);
   font-size: 13px;
   line-height: 1.6;
@@ -2379,36 +2381,30 @@ select:focus { border-color: var(--accent); }
 .editor-empty-title { font-size: 14px; color: var(--text-dim); }
 .editor-empty-hint { font-size: 11px; text-align: center; max-width: 200px; }
 
-/* File content rendered in editor */
+/* File content rendered in editor — editable textarea */
 #editor-file-view {
+  display: block;
+  width: 100%;
+  height: 100%;
   padding: 16px;
+  box-sizing: border-box;
   font-family: var(--font-code);
   font-size: 12px;
   line-height: 1.65;
   color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
   white-space: pre;
   tab-size: 4;
   margin: 0;
-  min-height: 100%;
-  counter-reset: editor-lines;
+  overflow: auto;
+  caret-color: var(--accent);
 }
-
-.editor-line {
-  display: flex;
-  counter-increment: editor-lines;
+#editor-file-view::selection {
+  background: rgba(100, 160, 255, 0.25);
 }
-.editor-line::before {
-  content: counter(editor-lines);
-  min-width: 36px;
-  padding-right: 12px;
-  text-align: right;
-  color: var(--text-muted);
-  opacity: 0.4;
-  user-select: none;
-  flex-shrink: 0;
-  font-size: 0.9em;
-}
-.editor-line-text { flex: 1; }
 
 /* ── Diff view in editor ─────────────────────────────────────────── */
 #editor-diff-view {
@@ -2417,6 +2413,8 @@ select:focus { border-color: var(--accent); }
   font-size: 12px;
   line-height: 1.65;
   min-height: 100%;
+  flex: 1;
+  overflow: auto;
 }
 
 .diff-hunk-header {
