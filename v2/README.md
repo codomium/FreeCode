@@ -57,7 +57,7 @@ v2/src/
 │   ├── transport-shttp.mjs  # Streamable HTTP
 │   └── transport-ws.mjs     # WebSocket
 ├── permissions/              # Security
-│   ├── checker.mjs          # 6 modes + interactive prompts
+│   ├── checker.mjs          # 6 modes + interactive prompts (supports promptCallback for UI integration)
 │   ├── sandbox.mjs          # bubblewrap/seatbelt
 │   ├── injection-check.mjs  # Command injection detection
 │   ├── path-check.mjs       # File path validation
