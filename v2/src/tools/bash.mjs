@@ -28,11 +28,9 @@ function isWslAvailable() {
     if (!IS_WINDOWS) return false;
     if (_wslAvailable !== null) return _wslAvailable;
     try {
-        // `wsl.exe --status` exits 0 if WSL is installed and functional.
         const result = spawnSync('wsl.exe', ['--status'], {
             encoding: 'utf-8',
             timeout: 5000,
-            // Suppress the console window that would flash on Windows
             windowsHide: true,
         });
         _wslAvailable = result.status === 0;
@@ -40,6 +38,44 @@ function isWslAvailable() {
         _wslAvailable = false;
     }
     return _wslAvailable;
+}
+
+/**
+ * Check whether the Ubuntu WSL distro is installed.
+ * Uses `wsl.exe -d Ubuntu -- echo ok` to test the specific distro.
+ * Falls back to the default WSL distro when Ubuntu is not available.
+ *
+ * Preferred priority on Windows:
+ *   1. Ubuntu distro  (`wsl.exe -d Ubuntu -- bash -c "..."`)
+ *   2. Default WSL    (`wsl.exe bash -c "..."`)
+ *   3. PowerShell     (POSIX shims injected)
+ */
+let _ubuntuAvailable = null;
+function isUbuntuWslAvailable() {
+    if (!isWslAvailable()) return false;
+    if (_ubuntuAvailable !== null) return _ubuntuAvailable;
+    try {
+        const result = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
+            encoding: 'utf-8',
+            timeout: 5000,
+            windowsHide: true,
+        });
+        _ubuntuAvailable = result.status === 0 && (result.stdout || '').trim() === 'ok';
+    } catch {
+        _ubuntuAvailable = false;
+    }
+    return _ubuntuAvailable;
+}
+
+/**
+ * Return the name of the active shell for display purposes.
+ * Used by UI components to show "Ubuntu", "WSL", or "PowerShell".
+ */
+export function getActiveShellName() {
+    if (!IS_WINDOWS) return 'bash';
+    if (isUbuntuWslAvailable()) return 'Ubuntu';
+    if (isWslAvailable()) return 'WSL';
+    return 'PowerShell';
 }
 
 /**
@@ -194,13 +230,15 @@ const POWERSHELL_POSIX_SHIMS = [
 
 function getShellArgs(command) {
     if (IS_WINDOWS) {
+        if (isUbuntuWslAvailable()) {
+            // Run inside the Ubuntu WSL distro — best POSIX compatibility.
+            return ['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-c', command]];
+        }
         if (isWslAvailable()) {
-            // Run the command inside the default WSL distro's bash shell.
-            // `wsl.exe bash -c "..."` passes the command string directly to bash.
+            // Run inside the default WSL distro's bash shell.
             return ['wsl.exe', ['bash', '-c', command]];
         }
         // WSL not available — fall back to PowerShell with POSIX shims prepended.
-        // Note: PowerShell is available on every modern Windows install.
         const wrapped = `${POWERSHELL_POSIX_SHIMS}; ${command}`;
         return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', wrapped]];
     }

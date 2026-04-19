@@ -270,6 +270,18 @@ select:focus { border-color: var(--accent); }
 }
 .qa-btn:active { transform: scale(0.96); }
 
+/* Multi-Agent team buttons — accent color to stand out */
+.qa-btn-team {
+  background: rgba(0,122,204,0.08);
+  border-color: rgba(0,122,204,0.3);
+  color: var(--accent);
+}
+.qa-btn-team:hover {
+  background: rgba(0,122,204,0.25);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ---- Actions button active state ---- */
 #actions-btn.active {
   background: rgba(0,122,204,0.15);
@@ -3128,6 +3140,38 @@ select:focus { border-color: var(--accent); }
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 300px;
+}
+
+.terminal-shell-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-dim);
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+.terminal-shell-badge[data-shell="ubuntu"] {
+  background: rgba(232,84,32,0.15);
+  border-color: rgba(232,84,32,0.4);
+  color: #e85420;
+}
+.terminal-shell-badge[data-shell="wsl"] {
+  background: rgba(0,122,204,0.12);
+  border-color: rgba(0,122,204,0.35);
+  color: var(--accent);
+}
+.terminal-shell-badge[data-shell="powershell"] {
+  background: rgba(90,62,175,0.15);
+  border-color: rgba(90,62,175,0.4);
+  color: #7b5ea7;
+}
+.terminal-shell-badge[data-shell="bash"] {
+  background: rgba(78,201,176,0.12);
+  border-color: rgba(78,201,176,0.35);
+  color: #4ec9b0;
 }
 
 .terminal-btn {

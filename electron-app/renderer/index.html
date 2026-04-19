@@ -122,6 +122,13 @@
       <button class="qa-btn" data-template="Convert this code to TypeScript with proper types:" data-icon="🔷">To TypeScript</button>
       <button class="qa-btn" data-template="List all TODO comments in the codebase and suggest fixes:" data-icon="✅">Fix TODOs</button>
     </div>
+    <div class="qa-section-label" style="margin-top:6px">🤖 Multi-Agent Teams</div>
+    <div class="qa-grid">
+      <button class="qa-btn qa-btn-team" data-team="build" data-icon="🏗">Build Feature</button>
+      <button class="qa-btn qa-btn-team" data-team="review" data-icon="🔍">Deep Review</button>
+      <button class="qa-btn qa-btn-team" data-team="fullstack" data-icon="🌐">Full-Stack</button>
+      <button class="qa-btn qa-btn-team" data-team="debug" data-icon="🐛">Debug Team</button>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════
@@ -428,6 +435,7 @@
   <div id="terminal-panel" style="display:none">
     <div id="terminal-header">
       <span id="terminal-title">⬛ Terminal</span>
+      <span id="terminal-shell-badge" class="terminal-shell-badge" title="Active shell"></span>
       <span id="terminal-cwd" class="terminal-cwd"></span>
       <div style="flex:1"></div>
       <button class="terminal-btn" id="terminal-clear-btn" title="Clear terminal output">Clear</button>

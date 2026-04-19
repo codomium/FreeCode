@@ -2027,7 +2027,7 @@
             actionsBtn.classList.toggle('active', !visible);
         });
         // Wire each quick-action button → fill input with template
-        quickActionsPanel.querySelectorAll('.qa-btn').forEach((btn) => {
+        quickActionsPanel.querySelectorAll('.qa-btn:not(.qa-btn-team)').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const template = btn.dataset.template || '';
                 if (!template || !inputEl) return;
@@ -2037,6 +2037,26 @@
                 inputEl.focus();
                 inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
                 // Collapse the panel after selecting to give the user more space
+                quickActionsPanel.style.display = 'none';
+                actionsBtn.classList.remove('active');
+            });
+        });
+        // Wire multi-agent team buttons
+        quickActionsPanel.querySelectorAll('.qa-btn-team').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const teamType = btn.dataset.team || '';
+                if (!inputEl) return;
+                const teamPrompts = {
+                    build: '/team build\nDescribe the feature you want to build:',
+                    review: '/team review\nPaste code or describe what to review:',
+                    fullstack: '/team fullstack\nDescribe the full-stack feature to implement:',
+                    debug: '/team debug\nDescribe the bug or error you are seeing:',
+                };
+                inputEl.value = (teamPrompts[teamType] || '/team\nTask:') + '\n';
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.focus();
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
                 quickActionsPanel.style.display = 'none';
                 actionsBtn.classList.remove('active');
             });
@@ -2063,6 +2083,86 @@
         if (!inputEl) return;
         const rawText = inputEl.value.trim();
         if (!rawText || isLoading) return;
+
+        // ── /team slash command: transform into a structured multi-agent prompt ──
+        const teamLineMatch = rawText.match(/^\/team\s*(\w*)\s*\n?([\s\S]*)$/i);
+        if (teamLineMatch) {
+            const variant = (teamLineMatch[1] || 'build').toLowerCase();
+            const taskBody = teamLineMatch[2].trim() || 'the task described in the context files';
+            const TEAM_CONFIGS = {
+                build: {
+                    label: '🏗 Build Team',
+                    team: [
+                        { role: 'planner',  prompt: 'Create a detailed step-by-step implementation plan.' },
+                        { role: 'coder',    prompt: 'Implement the plan using file tools. Write real, working code.' },
+                        { role: 'reviewer', prompt: 'Review the implementation for bugs, edge cases, and improvements.' },
+                    ],
+                    phases: ['planning', 'implementation', 'review'],
+                },
+                review: {
+                    label: '🔍 Review Team',
+                    team: [
+                        { role: 'reviewer', prompt: 'Review the code for bugs, security issues, and improvements.' },
+                        { role: 'tester',   prompt: 'Write tests that cover the reviewed code.' },
+                    ],
+                    phases: ['review', 'testing'],
+                },
+                fullstack: {
+                    label: '🌐 Full-Stack Team',
+                    team: [
+                        { role: 'planner',  prompt: 'Create architecture and implementation plan for both frontend and backend.' },
+                        { role: 'coder',    prompt: 'Implement the backend services and API.' },
+                        { role: 'coder',    prompt: 'Implement the frontend UI and connect it to the API.' },
+                        { role: 'reviewer', prompt: 'Review and integrate both implementations.' },
+                    ],
+                    phases: ['planning', 'backend', 'frontend', 'integration'],
+                },
+                debug: {
+                    label: '🐛 Debug Team',
+                    team: [
+                        { role: 'researcher', prompt: 'Analyze the bug: identify root cause and affected code paths.' },
+                        { role: 'coder',      prompt: 'Fix the bug with the minimal safe change.' },
+                        { role: 'tester',     prompt: 'Write a regression test that confirms the fix.' },
+                    ],
+                    phases: ['diagnosis', 'fix', 'testing'],
+                },
+            };
+            const cfg = TEAM_CONFIGS[variant] || TEAM_CONFIGS.build;
+            const teamJson = JSON.stringify({ prompt: taskBody, team: cfg.team, phases: cfg.phases }, null, 2);
+            const injectedMessage = [
+                `${cfg.label} requested for: ${taskBody}`,
+                '',
+                'You MUST use the Agent tool with the following configuration to complete this task:',
+                '```json',
+                teamJson,
+                '```',
+                '',
+                'Run the team sequentially through the specified phases and report all results.',
+            ].join('\n');
+
+            addUserMessage(rawText);
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            hideAutocomplete();
+            setSending(true);
+            setLoading(true, `${cfg.label}: Thinking…`);
+
+            const sendContextFiles = contextFiles
+                .filter(f => !f.isImage && !f.isCodebase && !f.isGit && !f.isErrors)
+                .map(f => f.path);
+
+            vscode.postMessage({
+                type: 'send',
+                message: injectedMessage,
+                contextFiles: sendContextFiles,
+                fileRefs: [],
+                useCodebase: contextFiles.some(f => f.isCodebase),
+            });
+
+            contextFiles = contextFiles.filter(f => f.pinned);
+            renderContextFiles();
+            return;
+        }
 
         // Extract @file references from text before sending
         const fileRefs = [];
@@ -2118,6 +2218,7 @@
         { cmd: '/export',   desc: 'Export conversation as Markdown' },
         { cmd: '/help',     desc: 'Show keyboard shortcuts' },
         { cmd: '/pin',      desc: 'Pin all current context files to every session' },
+        { cmd: '/team',     desc: 'Run a multi-agent team: /team build · review · fullstack · debug' },
         { cmd: '/explain',  desc: 'Explain the code/file in context',      template: 'Explain what this code does in simple terms:' },
         { cmd: '/fix',      desc: 'Find and fix bugs',                      template: 'Find and fix the bugs in this code. Explain what was wrong:' },
         { cmd: '/refactor', desc: 'Refactor for clarity and maintainability', template: 'Refactor this code to be cleaner and more maintainable:' },
@@ -2176,8 +2277,10 @@
                 addSystemMessage(
                     'Keyboard shortcuts: Enter=send · Shift+Enter=newline · @=add file · ' +
                     '@codebase=full codebase · /=commands · ↑=recall last message · ' +
-                    'Ctrl+L=focus input · Ctrl+F=search · Ctrl+K=inline edit · Esc=stop\n\n' +
-                    'Template commands: /explain · /fix · /refactor · /test · /review · /docs · /commit · /optimize'
+                    'Ctrl+L=focus input · Ctrl+F=search · Ctrl+K=inline edit · Ctrl+`=terminal · Esc=stop\n\n' +
+                    'Template commands: /explain · /fix · /refactor · /test · /review · /docs · /commit · /optimize\n\n' +
+                    'Multi-agent: /team build · /team review · /team fullstack · /team debug\n' +
+                    '  Usage: type /team build on the first line, then describe your task on the next lines.'
                 );
                 break;
         }
