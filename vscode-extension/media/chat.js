@@ -2632,6 +2632,7 @@
     let terminalReqCounter = 0;
     let terminalHistory    = [];
     let terminalHistoryIdx = -1;
+    const MAX_TERMINAL_HISTORY = 100;
 
     function appendTerminalLine(text, cssClass) {
         if (!terminalOutputEl || !text) return;
@@ -2661,7 +2662,7 @@
         const cmd = terminalInputEl.value.trim();
         if (!cmd) return;
         terminalHistory.unshift(cmd);
-        if (terminalHistory.length > 100) terminalHistory.pop();
+        if (terminalHistory.length > MAX_TERMINAL_HISTORY) terminalHistory.pop();
         terminalHistoryIdx = -1;
         terminalInputEl.value = '';
 

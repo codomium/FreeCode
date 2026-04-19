@@ -89,7 +89,7 @@ const POWERSHELL_POSIX_SHIMS = [
         ' $lines = @($input);' +
         ' if ($flag -eq "-l") { $lines.Count }' +
         ' elseif ($flag -eq "-c") { ($lines -join "`n").Length }' +
-        ' elseif ($flag -eq "-w") { ($lines -join " " -split "\\s+" | Where-Object { $_ -ne "" }).Count }' +
+        ' elseif ($flag -eq "-w") { ($lines | ForEach-Object { ($_ -split "\\s+" | Where-Object { $_ -ne "" }).Count } | Measure-Object -Sum).Sum }' +
         ' else { $lines.Count } }',
 
     // ls: list directory contents (mirrors `ls [-la] [path]`)
@@ -159,7 +159,7 @@ const POWERSHELL_POSIX_SHIMS = [
 
     // find: simplified find (mirrors `find <path> -name <pattern>`)
     'function find { param([string]$basePath=".", [string]$nameFlag="", [string]$namePattern="*")' +
-        ' if ($nameFlag -eq "-name") {} else { $namePattern = $nameFlag }' +
+        ' if ($nameFlag -ne "-name") { $namePattern = $nameFlag }' +
         ' Get-ChildItem -Path $basePath -Recurse -Filter $namePattern -Force |' +
         ' ForEach-Object { $_.FullName } }',
 
