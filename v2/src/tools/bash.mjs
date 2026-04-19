@@ -48,9 +48,29 @@ function isWslAvailable() {
  * Priority on Windows:
  *   1. WSL  — `wsl.exe bash -c "<command>"`  (preferred; full POSIX bash)
  *   2. PowerShell — `powershell.exe -NoProfile -NonInteractive -Command "<command>"`
+ *      Prepends POSIX compatibility shims so that common Unix commands like
+ *      `which`, `grep`, `cat`, and `touch` work correctly without WSL.
  *
  * On Unix / macOS: `bash -c "<command>"`
  */
+
+/**
+ * Minimal POSIX-compatibility shims injected before every PowerShell command.
+ * These replace the most-common Unix utilities that PowerShell lacks natively.
+ */
+const POWERSHELL_POSIX_SHIMS = [
+    // which → resolve binary path via Get-Command
+    'function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
+    // grep → thin wrapper around Select-String; handles both piped and file input
+    'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Select-String -Pattern $pattern -Path $paths | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line } } }',
+    // cat → print file contents
+    'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) Get-Content $paths }',
+    // touch → create or update file timestamp
+    'function touch { param([string]$path) if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
+    // wc -l shim: count lines from stdin
+    'function wc { param([string]$flag) if ($flag -eq "-l") { $c = 0; $input | ForEach-Object { $c++ }; $c } }',
+].join('; ');
+
 function getShellArgs(command) {
     if (IS_WINDOWS) {
         if (isWslAvailable()) {
@@ -58,9 +78,10 @@ function getShellArgs(command) {
             // `wsl.exe bash -c "..."` passes the command string directly to bash.
             return ['wsl.exe', ['bash', '-c', command]];
         }
-        // WSL not available — fall back to PowerShell (elevated or regular).
+        // WSL not available — fall back to PowerShell with POSIX shims prepended.
         // Note: PowerShell is available on every modern Windows install.
-        return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command]];
+        const wrapped = `${POWERSHELL_POSIX_SHIMS}; ${command}`;
+        return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', wrapped]];
     }
     return ['bash', ['-c', command]];
 }

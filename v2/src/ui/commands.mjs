@@ -187,9 +187,10 @@ export const COMMANDS = {
         description: 'Review recent changes',
         handler(args, state) {
             try {
-                const { execSync } = require('child_process');
-                const diff = execSync('git diff --stat HEAD~1 2>/dev/null || echo "No git history"', { encoding: 'utf-8' });
-                return `Recent changes:\n${diff}`;
+                const { spawnSync } = require('child_process');
+                const result = spawnSync('git', ['diff', '--stat', 'HEAD~1'], { encoding: 'utf-8' });
+                const diff = (result.stdout || result.stderr || '').trim();
+                return diff ? `Recent changes:\n${diff}` : 'No git history.';
             } catch {
                 return 'Unable to review changes (not in a git repo or no history).';
             }
@@ -423,8 +424,9 @@ export const COMMANDS = {
         description: 'Show git diff',
         handler() {
             try {
-                const { execSync } = require('child_process');
-                return execSync('git diff --stat 2>/dev/null || echo "Not in a git repo"', { encoding: 'utf-8' });
+                const { spawnSync } = require('child_process');
+                const result = spawnSync('git', ['diff', '--stat'], { encoding: 'utf-8' });
+                return (result.stdout || result.stderr || '').trim() || 'Not in a git repo.';
             } catch {
                 return 'Unable to show diff.';
             }
@@ -443,10 +445,12 @@ export const COMMANDS = {
         description: 'Create a git commit with AI message',
         handler(args) {
             try {
-                const { execSync } = require('child_process');
+                const { spawnSync } = require('child_process');
                 const msg = args || 'Update from open-claude-code';
-                execSync('git add -A', { encoding: 'utf-8' });
-                execSync(`git commit -m "${msg}"`, { encoding: 'utf-8' });
+                const addResult = spawnSync('git', ['add', '-A'], { encoding: 'utf-8' });
+                if (addResult.status !== 0) throw new Error(addResult.stderr || 'git add failed');
+                const commitResult = spawnSync('git', ['commit', '-m', msg], { encoding: 'utf-8' });
+                if (commitResult.status !== 0) throw new Error(commitResult.stderr || 'git commit failed');
                 return `Committed: ${msg}`;
             } catch (err) {
                 return `Commit failed: ${err.message}`;

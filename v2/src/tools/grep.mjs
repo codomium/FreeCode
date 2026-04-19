@@ -9,9 +9,11 @@
  * - glob filter and type filter
  * - head_limit (default 250)
  * - multiline mode
- * - Windows support: uses 'where' for rg detection, avoids bash pipelines
+ * - Windows support: uses 'where' for rg detection, avoids bash pipelines;
+ *   falls back to a pure-JS implementation when neither rg nor grep is available.
  */
 import { spawnSync } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 
 const IS_WINDOWS = process.platform === 'win32';
@@ -49,9 +51,10 @@ export const GrepTool = {
             const mode = input.output_mode || 'files_with_matches';
             const limit = input.head_limit ?? 250;
 
-            // Build grep args array — use rg first, fall back to grep
+            // Build grep args array — use rg first, fall back to grep, then pure JS
             const args = [];
             const useRg = hasRipgrep();
+            const useNativeGrep = !useRg && hasNativeGrep();
 
             if (useRg) {
                 if (input['-i']) args.push('-i');
@@ -75,7 +78,7 @@ export const GrepTool = {
 
                 // '--' separates flags from pattern/path so they can't be misinterpreted
                 args.push('--', input.pattern, dir);
-            } else {
+            } else if (useNativeGrep) {
                 args.push('-r');
                 if (input['-i']) args.push('-i');
 
@@ -95,6 +98,10 @@ export const GrepTool = {
                 if (input.glob) args.push('--include', input.glob);
 
                 args.push('--', input.pattern, dir);
+            } else {
+                // No native grep or rg available — use pure-JS implementation.
+                // This is the common case on Windows without WSL or ripgrep.
+                return jsGrepFallback(input.pattern, dir, input, limit);
             }
 
             // Use spawnSync with an argument array to avoid shell injection.
@@ -134,4 +141,110 @@ function hasRipgrep() {
         _hasRg = false;
     }
     return _hasRg;
+}
+
+let _hasNativeGrep = null;
+/** Check whether the system `grep` binary is available (not available on Windows without WSL/tools). */
+function hasNativeGrep() {
+    if (_hasNativeGrep !== null) return _hasNativeGrep;
+    if (IS_WINDOWS) { _hasNativeGrep = false; return false; }
+    try {
+        const result = spawnSync('which', ['grep'], { encoding: 'utf-8', timeout: 5000 });
+        _hasNativeGrep = result.status === 0;
+    } catch {
+        _hasNativeGrep = false;
+    }
+    return _hasNativeGrep;
+}
+
+/**
+ * Pure-JavaScript grep fallback used when neither ripgrep nor native grep
+ * is available (typical on Windows without WSL or Cygwin tools installed).
+ * Walks the target path recursively, matching each line against the pattern.
+ */
+function jsGrepFallback(pattern, searchPath, options, limit) {
+    const mode = options.output_mode || 'files_with_matches';
+    const caseFlag = options['-i'] ? 'i' : '';
+    let regex;
+    try {
+        regex = new RegExp(pattern, caseFlag);
+    } catch {
+        return 'No matches found.';
+    }
+
+    // Build a glob filter regex if requested
+    let globRegex = null;
+    if (options.glob) {
+        const escaped = options.glob
+            .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex specials except * ?
+            .replace(/\*/g, '.*')
+            .replace(/\?/g, '.');
+        try { globRegex = new RegExp(`^${escaped}$`, 'i'); } catch { /* ignore */ }
+    }
+
+    const results = [];
+
+    function matchFile(filePath) {
+        if (results.length >= limit) return;
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n');
+            let matchCount = 0;
+            let fileHasMatch = false;
+            const contextBefore = Number(options['-B'] || options['-C'] || options.context || 0);
+            const contextAfter  = Number(options['-A'] || options['-C'] || options.context || 0);
+
+            for (let i = 0; i < lines.length; i++) {
+                if (regex.test(lines[i])) {
+                    fileHasMatch = true;
+                    matchCount++;
+                    if (mode === 'content') {
+                        // Emit context-before lines
+                        for (let b = Math.max(0, i - contextBefore); b < i; b++) {
+                            if (results.length < limit) results.push(`${filePath}:${b + 1}-${lines[b]}`);
+                        }
+                        if (results.length < limit) results.push(`${filePath}:${i + 1}:${lines[i]}`);
+                        // Emit context-after lines
+                        for (let a = i + 1; a <= Math.min(lines.length - 1, i + contextAfter); a++) {
+                            if (results.length < limit) results.push(`${filePath}:${a + 1}-${lines[a]}`);
+                        }
+                    }
+                    if (results.length >= limit) return;
+                }
+            }
+            if (fileHasMatch) {
+                if (mode === 'files_with_matches') results.push(filePath);
+                else if (mode === 'count') results.push(`${filePath}:${matchCount}`);
+            }
+        } catch { /* skip unreadable files */ }
+    }
+
+    function walkDir(dirPath, depth) {
+        if (results.length >= limit) return;
+        if (depth > 50) return; // guard against deep recursion
+        let entries;
+        try { entries = fs.readdirSync(dirPath, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+            if (results.length >= limit) return;
+            if (entry.name.startsWith('.')) continue; // skip hidden files/dirs
+            const fullPath = path.join(dirPath, entry.name);
+            if (entry.isDirectory()) {
+                walkDir(fullPath, depth + 1);
+            } else if (entry.isFile()) {
+                if (globRegex && !globRegex.test(entry.name)) continue;
+                matchFile(fullPath);
+            }
+        }
+    }
+
+    try {
+        const stat = fs.statSync(searchPath);
+        if (stat.isDirectory()) walkDir(searchPath, 0);
+        else matchFile(searchPath);
+    } catch { return 'No matches found.'; }
+
+    if (results.length === 0) return 'No matches found.';
+    let output = results.join('\n');
+    if (results.length >= limit) output += `\n(truncated at ${limit} results)`;
+    return output;
 }
