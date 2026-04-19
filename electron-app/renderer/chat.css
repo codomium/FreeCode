@@ -3084,3 +3084,125 @@ select:focus { border-color: var(--accent); }
   border-top: 1px solid var(--border);
   justify-content: flex-end;
 }
+
+/* ============================================================
+   Integrated Terminal Panel
+   ============================================================ */
+#terminal-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 220px;
+  min-height: 100px;
+  max-height: 50vh;
+  border-top: 2px solid var(--accent);
+  background: #0d0d0d;
+  color: #d4d4d4;
+  font-family: var(--font-code);
+  font-size: 12px;
+  resize: vertical;
+  overflow: hidden;
+}
+
+#terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 30px;
+}
+
+#terminal-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.terminal-cwd {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.terminal-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.terminal-btn:hover { background: var(--bg-input); color: var(--text); }
+
+#terminal-output-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 10px;
+}
+
+#terminal-output {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.term-line-stdout { color: #d4d4d4; }
+.term-line-stderr { color: #f48771; }
+.term-line-cmd    { color: #9cdcfe; }
+.term-line-info   { color: #858585; font-style: italic; }
+
+#terminal-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+#terminal-prompt {
+  color: #6dca87;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+#terminal-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+#terminal-run-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+#terminal-run-btn:hover { color: var(--accent-hover); }
+
+#terminal-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}

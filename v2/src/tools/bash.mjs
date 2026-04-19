@@ -143,6 +143,11 @@ export const BashTool = {
         required: ['command'],
     },
     validateInput(input) {
+        // Normalize common alternative parameter names the model may use
+        if (!input.command) {
+            input.command = input.cmd ?? input.bash_command ?? input.shell_command ??
+                            input.script ?? input.run ?? input.execute ?? null;
+        }
         const errors = [];
         if (!input.command) errors.push('command is required');
         return errors;

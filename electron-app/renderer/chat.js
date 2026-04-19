@@ -258,7 +258,7 @@
     let fileViewerCurrentPath = null; // path of file currently shown in viewer
 
     /** Tool names that perform file writes — used to trigger diff capture. */
-    const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file']);
+    const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file']);
 
     /** Models that support NVIDIA thinking mode toggle */
     const THINKING_CAPABLE_MODELS = new Set([
@@ -1652,7 +1652,9 @@
                 setLoading(true, `Running ${msg.tool}…`);
                 // Track write/edit operations for diff view
                 if (FILE_WRITE_TOOLS.has(msg.tool) && msg.input) {
-                    const diffPath = msg.input.file_path || msg.input.path || null;
+                    // For MultiEdit, the path is in edits[0].file_path (not top-level)
+                    const diffPath = msg.input.file_path || msg.input.path ||
+                        (Array.isArray(msg.input.edits) && msg.input.edits[0] && msg.input.edits[0].file_path) || null;
                     if (diffPath) {
                         pendingDiffEdit = { path: diffPath, tool: msg.tool, beforeContent: null, resultReady: false };
                         vscode.postMessage({ type: 'readFile', path: diffPath, purpose: 'before_diff' });
@@ -1903,6 +1905,8 @@
                 loadExplorerTree(currentWorkspacePath);
                 // Restart workspace watcher
                 vscode.postMessage({ type: 'watchWorkspace', path: currentWorkspacePath });
+                // Keep terminal cwd label in sync
+                updateTerminalCwd();
                 break;
 
             case 'directoryListing':
@@ -1969,6 +1973,18 @@
                     loadExplorerTree(currentWorkspacePath);
                 }, 500);
                 break;
+
+            case 'terminalOutput': {
+                // Stream output from an integrated terminal command
+                if (!terminalOutputEl) break;
+                if (msg.data) {
+                    let cssClass = 'term-line-stdout';
+                    if (msg.stream === 'stderr') cssClass = 'term-line-stderr';
+                    else if (msg.stream === 'info') cssClass = 'term-line-info';
+                    appendTerminalLine(msg.data, cssClass);
+                }
+                break;
+            }
 
             default:
                 break;
@@ -4072,7 +4088,126 @@
             kbEvt.preventDefault();
             closeActiveTab();
         }
+        // Ctrl+` — toggle integrated terminal
+        if ((kbEvt.ctrlKey || kbEvt.metaKey) && kbEvt.key === '`') {
+            kbEvt.preventDefault();
+            if (terminalPanelEl && (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display)) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        }
     });
+
+    // ── Integrated Terminal ───────────────────────────────────────────────────
+    const terminalPanelEl   = document.getElementById('terminal-panel');
+    const terminalToggleBtn = document.getElementById('terminal-toggle-btn');
+    const terminalOutputEl  = document.getElementById('terminal-output');
+    const terminalInputEl   = document.getElementById('terminal-input');
+    const terminalRunBtn    = document.getElementById('terminal-run-btn');
+    const terminalClearBtn  = document.getElementById('terminal-clear-btn');
+    const terminalCloseBtn  = document.getElementById('terminal-close-btn');
+    const terminalCwdEl     = document.getElementById('terminal-cwd');
+
+    let terminalReqCounter = 0;
+    let terminalHistory    = [];   // command history
+    let terminalHistoryIdx = -1;   // navigation index
+
+    function appendTerminalLine(text, cssClass) {
+        if (!terminalOutputEl || !text) return;
+        const span = document.createElement('span');
+        span.className = cssClass;
+        span.textContent = text;
+        terminalOutputEl.appendChild(span);
+        // Auto-scroll
+        const wrap = document.getElementById('terminal-output-wrap');
+        if (wrap) wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    function updateTerminalCwd() {
+        if (terminalCwdEl) terminalCwdEl.textContent = currentWorkspacePath || '';
+    }
+
+    function openTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'flex';
+        if (terminalToggleBtn) terminalToggleBtn.classList.add('active');
+        updateTerminalCwd();
+        if (terminalInputEl) terminalInputEl.focus();
+    }
+
+    function closeTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'none';
+        if (terminalToggleBtn) terminalToggleBtn.classList.remove('active');
+    }
+
+    function runTerminalCommand() {
+        if (!terminalInputEl) return;
+        const cmd = terminalInputEl.value.trim();
+        if (!cmd) return;
+
+        // Add to history
+        terminalHistory.unshift(cmd);
+        if (terminalHistory.length > 100) terminalHistory.pop();
+        terminalHistoryIdx = -1;
+        terminalInputEl.value = '';
+
+        // Show the command prompt
+        appendTerminalLine(`$ ${cmd}\n`, 'term-line-cmd');
+
+        const reqId = `term-${++terminalReqCounter}`;
+        vscode.postMessage({ type: 'terminalRun', command: cmd, reqId });
+    }
+
+    if (terminalToggleBtn) {
+        terminalToggleBtn.addEventListener('click', () => {
+            if (!terminalPanelEl) return;
+            if (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        });
+    }
+
+    if (terminalCloseBtn) terminalCloseBtn.addEventListener('click', closeTerminal);
+
+    if (terminalClearBtn) {
+        terminalClearBtn.addEventListener('click', () => {
+            if (terminalOutputEl) terminalOutputEl.textContent = '';
+        });
+    }
+
+    if (terminalRunBtn) terminalRunBtn.addEventListener('click', runTerminalCommand);
+
+    if (terminalInputEl) {
+        terminalInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                runTerminalCommand();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (terminalHistoryIdx < terminalHistory.length - 1) {
+                    terminalHistoryIdx++;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (terminalHistoryIdx > 0) {
+                    terminalHistoryIdx--;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                } else {
+                    terminalHistoryIdx = -1;
+                    terminalInputEl.value = '';
+                }
+            }
+        });
+    }
+
+    // Handle terminalOutput messages from main process
+    // (injected into the normal message switch-case via a dedicated handler)
+    // This is wired in the main window.addEventListener('message'...) handler below.
 
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });
