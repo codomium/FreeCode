@@ -738,6 +738,8 @@ select:focus { border-color: var(--accent); }
 }
 .msg-assistant:hover .msg-regen-btn { opacity: 1; }
 .msg-regen-btn:hover { background: var(--bg-input); border-color: var(--border); color: var(--accent); }
+
+.msg-bubble {
   background: var(--user-bg);
   border: 1px solid rgba(0,122,204,0.3);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius) var(--radius-lg);
@@ -749,6 +751,31 @@ select:focus { border-color: var(--accent); }
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* Collapsible long-prompt bubble — clamped to ~5 lines when collapsed */
+.msg-bubble.msg-bubble-collapsed {
+  max-height: 7.5em; /* ~5 lines at 1.5 line-height */
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+}
+
+/* Toggle button that appears below a collapsible user prompt */
+.msg-prompt-toggle {
+  align-self: flex-end;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  margin-top: 2px;
+  border-radius: var(--radius);
+  opacity: 0.75;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+.msg-prompt-toggle:hover { opacity: 1; }
 
 .msg-user .msg-meta {
   align-self: flex-end;

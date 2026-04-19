@@ -112,6 +112,12 @@
     /** Keywords that indicate a retryable rate-limit/overload error in the UI */
     const RATE_LIMIT_PATTERN = /rate.?limit|overload|too.?many.?request|capacity|529|503|502|504|bad.?gateway|service.?unavailable|quota/i;
 
+    /**
+     * User prompts longer than this many characters are collapsed in the chat
+     * bubble and show a "Show more / Show less" toggle to keep the UI tidy.
+     */
+    const USER_PROMPT_COLLAPSE_THRESHOLD = 300;
+
     // ── DOM refs ─────────────────────────────────────────────────────────────
     const messagesEl   = document.getElementById('messages');
     const welcomeEl    = document.getElementById('welcome');
@@ -903,8 +909,26 @@
         bubble.className = 'msg-bubble';
         bubble.textContent = text;   // safe — textContent
 
-        div.appendChild(meta);
-        div.appendChild(bubble);
+        // Collapse long prompts so the chat stays tidy.
+        // A "Show more / Show less" toggle appears below the bubble.
+        if (text.length > USER_PROMPT_COLLAPSE_THRESHOLD) {
+            bubble.classList.add('msg-bubble-collapsed');
+
+            const toggleBtn = document.createElement('button');
+            toggleBtn.className = 'msg-prompt-toggle';
+            toggleBtn.textContent = 'Show more ▾';
+            toggleBtn.addEventListener('click', () => {
+                const isCollapsed = bubble.classList.toggle('msg-bubble-collapsed');
+                toggleBtn.textContent = isCollapsed ? 'Show more ▾' : 'Show less ▴';
+            });
+
+            div.appendChild(meta);
+            div.appendChild(bubble);
+            div.appendChild(toggleBtn);
+        } else {
+            div.appendChild(meta);
+            div.appendChild(bubble);
+        }
         messagesEl.appendChild(div);
         scrollToBottom();
     }
