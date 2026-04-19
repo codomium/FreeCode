@@ -64,6 +64,14 @@
     let autoAttachActive = false; // whether to auto-attach the active file with every send
     let msgSendTime = 0;          // timestamp when the last user message was submitted
 
+    // ── Editor tab state ─────────────────────────────────────────────────────
+    let openTabs = [];           // { path, name, content, error, isDiff, beforeContent, afterContent }
+    let activeTabPath = null;    // path of the currently active editor tab
+    let pendingEditorRead = null;// path being read to open in editor
+    let pendingDiffEdit = null;  // { path, tool, beforeContent } for diff tracking
+    let ctxMenuTarget = null;    // { path, name, type: 'file'|'dir' } for context menu
+    let fileWatchDebounce = null;// debounce timer for file watch events
+
     /** Max characters shown in the header session-title indicator */
     const SESSION_TITLE_DISPLAY_LENGTH = 55;
 
@@ -176,12 +184,26 @@
     const settingsGhLink       = document.getElementById('settings-gh-link');
 
     // ── File explorer panel refs ─────────────────────────────────────────────
-    const explorerBtn          = document.getElementById('explorer-btn');
-    const explorerPanel        = document.getElementById('explorer-panel');
-    const explorerCloseBtn     = document.getElementById('explorer-close-btn');
+    const explorerBtn          = document.getElementById('explorer-btn');   // may be null
+    const explorerPanel        = document.getElementById('explorer-panel'); // may be null (removed as overlay)
+    const explorerCloseBtn     = document.getElementById('explorer-close-btn'); // may be null
     const explorerRefreshBtn   = document.getElementById('explorer-refresh-btn');
     const explorerTree         = document.getElementById('explorer-tree');
     const explorerWorkspaceLabel = document.getElementById('explorer-workspace-label');
+
+    // ── 3-column IDE panel refs ───────────────────────────────────────────────
+    const panelChatEl          = document.getElementById('panel-chat');
+    const panelEditorEl        = document.getElementById('panel-editor');
+    const panelExplorerEl      = document.getElementById('panel-explorer');
+    const editorTabsEl         = document.getElementById('editor-tabs');
+    const editorContentEl      = document.getElementById('editor-content');
+    const diffToolbar          = document.getElementById('diff-toolbar');
+    const diffToolbarFilename  = document.getElementById('diff-toolbar-filename');
+    const diffAcceptBtn        = document.getElementById('diff-accept-btn');
+    const diffRejectBtn        = document.getElementById('diff-reject-btn');
+    const ctxMenu              = document.getElementById('ctx-menu');
+    const explorerNewFileBtn   = document.getElementById('explorer-new-file-btn');
+    const explorerNewFolderBtn = document.getElementById('explorer-new-folder-btn');
 
     // ── File viewer modal refs ───────────────────────────────────────────────
     const fileViewerModal      = document.getElementById('file-viewer-modal');
@@ -1501,6 +1523,15 @@
             case 'tool_progress':
                 addToolCard(msg.tool, msg.input);
                 setLoading(true, `Running ${msg.tool}…`);
+                // Track write/edit operations for diff view
+                if (['Write', 'Edit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file'].includes(msg.tool)
+                    && msg.input) {
+                    const diffPath = msg.input.file_path || msg.input.path || null;
+                    if (diffPath) {
+                        pendingDiffEdit = { path: diffPath, tool: msg.tool, beforeContent: null };
+                        vscode.postMessage({ type: 'readFile', path: diffPath, purpose: 'before_diff' });
+                    }
+                }
                 break;
 
             case 'tool_meta':
@@ -1519,6 +1550,13 @@
 
             case 'result':
                 updateToolCard(msg.tool, typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2), msg.input);
+                // Trigger after-content read for diff if we captured a before-content
+                if (pendingDiffEdit && pendingDiffEdit.tool === msg.tool && pendingDiffEdit.beforeContent !== null) {
+                    vscode.postMessage({ type: 'readFile', path: pendingDiffEdit.path, purpose: 'after_diff' });
+                } else if (pendingDiffEdit && pendingDiffEdit.tool === msg.tool) {
+                    // Before content failed — clear pending
+                    pendingDiffEdit = null;
+                }
                 break;
 
             case 'compaction':
@@ -1683,6 +1721,12 @@
                 }
                 // Load pinned files from settings
                 vscode.postMessage({ type: 'getPinnedFiles' });
+                // Initialize permanent file explorer
+                initExplorer();
+                // Start workspace watcher
+                if (currentWorkspacePath) {
+                    vscode.postMessage({ type: 'watchWorkspace', path: currentWorkspacePath });
+                }
                 break;
 
             case 'apiKeySet':
@@ -1714,10 +1758,10 @@
                 currentWorkspacePath = msg.path || '';
                 if (settingWorkspace) settingWorkspace.value = currentWorkspacePath;
                 if (explorerWorkspaceLabel) explorerWorkspaceLabel.textContent = currentWorkspacePath;
-                // If explorer is open, refresh it
-                if (explorerPanel && explorerPanel.classList.contains('visible')) {
-                    loadExplorerTree(currentWorkspacePath);
-                }
+                // Always refresh explorer tree now that it's a permanent panel
+                loadExplorerTree(currentWorkspacePath);
+                // Restart workspace watcher
+                vscode.postMessage({ type: 'watchWorkspace', path: currentWorkspacePath });
                 break;
 
             case 'directoryListing':
@@ -1725,7 +1769,55 @@
                 break;
 
             case 'fileData':
-                showFileViewer(msg.path, msg.name, msg.content, msg.error);
+                if (msg.purpose === 'before_diff') {
+                    // Store before content for diff view
+                    if (pendingDiffEdit && msg.path === pendingDiffEdit.path) {
+                        pendingDiffEdit.beforeContent = msg.content || '';
+                    }
+                } else if (msg.purpose === 'after_diff') {
+                    // Open diff tab
+                    if (pendingDiffEdit && msg.path === pendingDiffEdit.path) {
+                        const before = pendingDiffEdit.beforeContent;
+                        const after = msg.content || '';
+                        const diffPath = pendingDiffEdit.path;
+                        pendingDiffEdit = null;
+                        openDiffTab(diffPath, before, after);
+                    }
+                } else if (msg.purpose === 'open_editor') {
+                    addOrActivateTab(msg);
+                } else {
+                    // Legacy: check if pending editor read, then fall back to file viewer modal
+                    if (pendingEditorRead && msg.path === pendingEditorRead) {
+                        pendingEditorRead = null;
+                        addOrActivateTab(msg);
+                    } else {
+                        showFileViewer(msg.path, msg.name, msg.content, msg.error);
+                    }
+                }
+                break;
+
+            case 'fileCreated':
+            case 'dirCreated':
+            case 'fileRenamed':
+            case 'fileDeleted':
+            case 'fileWritten':
+                // Refresh explorer tree after any file operation
+                loadExplorerTree(currentWorkspacePath);
+                if (msg.type === 'fileDeleted') {
+                    closeTab(msg.path);
+                }
+                break;
+
+            case 'fileOpError':
+                addSystemMessage(`⚠ File operation failed (${msg.op}): ${msg.error}`);
+                break;
+
+            case 'fileWatchEvent':
+                // Debounced tree refresh on workspace changes
+                if (fileWatchDebounce) clearTimeout(fileWatchDebounce);
+                fileWatchDebounce = setTimeout(() => {
+                    loadExplorerTree(currentWorkspacePath);
+                }, 500);
                 break;
 
             default:
@@ -2879,6 +2971,12 @@
                     }
                 });
 
+                row.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showCtxMenu(e.clientX, e.clientY, { path: item.path, name: item.name, type: 'dir' });
+                });
+
                 li.appendChild(row);
                 li.appendChild(childrenContainer);
             } else {
@@ -2894,6 +2992,12 @@
                 // Right-click or click → context menu (view / add to context)
                 row.addEventListener('click', () => {
                     openFileViewerFromExplorer(item.path, item.name);
+                });
+
+                row.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showCtxMenu(e.clientX, e.clientY, { path: item.path, name: item.name, type: 'file' });
                 });
 
                 // Show a small "add to context" button on hover
@@ -2930,12 +3034,17 @@
     }
 
     function openFileViewerFromExplorer(filePath, fileName) {
-        if (!fileViewerModal) return;
-        if (fileViewerTitle) fileViewerTitle.textContent = fileName || filePath;
-        if (fileViewerContent) fileViewerContent.textContent = 'Loading…';
-        fileViewerCurrentPath = filePath;
-        fileViewerModal.classList.add('visible');
-        vscode.postMessage({ type: 'readFile', path: filePath });
+        // Open in editor tabs if available, fall back to modal
+        if (editorContentEl) {
+            openFileInEditor(filePath, fileName);
+        } else {
+            if (!fileViewerModal) return;
+            if (fileViewerTitle) fileViewerTitle.textContent = fileName || filePath;
+            if (fileViewerContent) fileViewerContent.textContent = 'Loading…';
+            fileViewerCurrentPath = filePath;
+            fileViewerModal.classList.add('visible');
+            vscode.postMessage({ type: 'readFile', path: filePath });
+        }
     }
 
     // ── File Viewer Modal ─────────────────────────────────────────────────────
@@ -2984,7 +3093,422 @@
         });
     }
 
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-COLUMN IDE — RESIZE HANDLES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    function initResizeHandles() {
+        const resizeLeft  = document.getElementById('resize-left');
+        const resizeRight = document.getElementById('resize-right');
+
+        // Left handle: resize chat panel
+        if (resizeLeft && panelChatEl) {
+            resizeLeft.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                resizeLeft.classList.add('dragging');
+                const startX = e.clientX;
+                const startW = panelChatEl.getBoundingClientRect().width;
+                const onMove = (e2) => {
+                    const min = parseInt(getComputedStyle(panelChatEl).minWidth) || 220;
+                    const max = parseInt(getComputedStyle(panelChatEl).maxWidth) || 600;
+                    panelChatEl.style.width = Math.max(min, Math.min(max, startW + (e2.clientX - startX))) + 'px';
+                };
+                const onUp = () => {
+                    resizeLeft.classList.remove('dragging');
+                    localStorage.setItem('freecode_chat_width', panelChatEl.style.width);
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+
+        // Right handle: resize explorer panel (inverted — dragging left widens explorer)
+        if (resizeRight && panelExplorerEl) {
+            resizeRight.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                resizeRight.classList.add('dragging');
+                const startX = e.clientX;
+                const startW = panelExplorerEl.getBoundingClientRect().width;
+                const onMove = (e2) => {
+                    panelExplorerEl.style.width = Math.max(160, Math.min(420, startW + (startX - e2.clientX))) + 'px';
+                };
+                const onUp = () => {
+                    resizeRight.classList.remove('dragging');
+                    localStorage.setItem('freecode_explorer_width', panelExplorerEl.style.width);
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+
+        // Restore saved panel widths
+        const savedChat     = localStorage.getItem('freecode_chat_width');
+        const savedExplorer = localStorage.getItem('freecode_explorer_width');
+        if (savedChat     && panelChatEl)     panelChatEl.style.width     = savedChat;
+        if (savedExplorer && panelExplorerEl) panelExplorerEl.style.width = savedExplorer;
+    }
+
+    initResizeHandles();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-COLUMN IDE — EDITOR TABS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Open a file in the editor (sends readFile IPC with purpose open_editor). */
+    function openFileInEditor(filePath, fileName) {
+        const existing = openTabs.find(t => t.path === filePath);
+        if (existing) { activateTab(filePath); return; }
+        pendingEditorRead = filePath;
+        vscode.postMessage({ type: 'readFile', path: filePath, purpose: 'open_editor' });
+    }
+
+    /** Add a new tab or re-activate an existing one with updated content. */
+    function addOrActivateTab(fileData) {
+        const existing = openTabs.find(t => t.path === fileData.path);
+        if (existing) {
+            existing.content = fileData.content;
+            existing.error   = fileData.error;
+            existing.isDiff  = false;
+            activateTab(fileData.path);
+            return;
+        }
+        openTabs.push({
+            path:    fileData.path,
+            name:    fileData.name || pathBasename(fileData.path),
+            content: fileData.content,
+            error:   fileData.error,
+            isDiff:  false,
+        });
+        renderTabBar();
+        activateTab(fileData.path);
+    }
+
+    /** Open or replace a diff tab for an agent-edited file. */
+    function openDiffTab(filePath, before, after) {
+        const name     = pathBasename(filePath);
+        const existing = openTabs.find(t => t.path === filePath);
+        if (existing) {
+            existing.isDiff         = true;
+            existing.beforeContent  = before;
+            existing.afterContent   = after;
+            existing.content        = after;
+        } else {
+            openTabs.push({ path: filePath, name, content: after, isDiff: true, beforeContent: before, afterContent: after });
+        }
+        renderTabBar();
+        activateTab(filePath);
+    }
+
+    /** Make a tab active and render its content. */
+    function activateTab(filePath) {
+        activeTabPath = filePath;
+        renderTabBar();
+        const tab = openTabs.find(t => t.path === filePath);
+        if (tab) renderEditorContent(tab);
+    }
+
+    /** Close a tab (and show empty state if no tabs remain). */
+    function closeTab(filePath) {
+        const idx = openTabs.findIndex(t => t.path === filePath);
+        if (idx === -1) return;
+        openTabs.splice(idx, 1);
+        if (activeTabPath === filePath) {
+            const next = openTabs[idx] || openTabs[idx - 1];
+            activeTabPath = next ? next.path : null;
+        }
+        renderTabBar();
+        if (activeTabPath) {
+            const tab = openTabs.find(t => t.path === activeTabPath);
+            if (tab) renderEditorContent(tab);
+        } else {
+            showEditorEmptyState();
+        }
+    }
+
+    /** Close the currently active tab (Ctrl+W). */
+    function closeActiveTab() {
+        if (activeTabPath) closeTab(activeTabPath);
+    }
+
+    function showEditorEmptyState() {
+        if (!editorContentEl) return;
+        editorContentEl.innerHTML = '';
+        const empty = document.createElement('div');
+        empty.id = 'editor-empty-state';
+        empty.innerHTML =
+            '<div class="editor-empty-icon">\u{1F4DD}</div>' +
+            '<div class="editor-empty-title">No file open</div>' +
+            '<div class="editor-empty-hint">Click a file in the Explorer to open it here</div>';
+        editorContentEl.appendChild(empty);
+        if (diffToolbar) diffToolbar.style.display = 'none';
+    }
+
+    /** Rebuild the tab bar DOM from openTabs. */
+    function renderTabBar() {
+        if (!editorTabsEl) return;
+        editorTabsEl.innerHTML = '';
+        for (const tab of openTabs) {
+            const tabEl   = document.createElement('div');
+            tabEl.className = 'editor-tab'
+                + (tab.path === activeTabPath ? ' active' : '')
+                + (tab.isDiff ? ' diff-tab' : '');
+            tabEl.title = tab.path;
+
+            const iconEl = document.createElement('span');
+            iconEl.className   = 'editor-tab-icon';
+            iconEl.textContent = tab.isDiff
+                ? '\u26A1'
+                : getFileIcon((tab.name.split('.').pop() || '').toLowerCase());
+
+            const nameEl = document.createElement('span');
+            nameEl.className   = 'editor-tab-name';
+            nameEl.textContent = tab.name + (tab.isDiff ? ' \u26A1' : '');
+
+            const dotEl = document.createElement('span');
+            dotEl.className = 'editor-tab-dot';
+
+            const closeEl = document.createElement('button');
+            closeEl.className   = 'editor-tab-close';
+            closeEl.textContent = '\u00D7';
+            closeEl.title = 'Close tab';
+            closeEl.addEventListener('click', (e) => { e.stopPropagation(); closeTab(tab.path); });
+
+            tabEl.appendChild(iconEl);
+            tabEl.appendChild(nameEl);
+            tabEl.appendChild(dotEl);
+            tabEl.appendChild(closeEl);
+            tabEl.addEventListener('click', () => activateTab(tab.path));
+            editorTabsEl.appendChild(tabEl);
+        }
+    }
+
+    /** Render either file content or a diff view into the editor panel. */
+    function renderEditorContent(tab) {
+        if (!editorContentEl) return;
+        editorContentEl.innerHTML = '';
+        if (tab.isDiff && tab.beforeContent !== undefined && tab.afterContent !== undefined) {
+            editorContentEl.appendChild(buildEditorDiffView(tab.beforeContent, tab.afterContent));
+            if (diffToolbar) {
+                diffToolbar.style.display = '';
+                if (diffToolbarFilename) diffToolbarFilename.textContent = tab.name;
+            }
+        } else {
+            if (diffToolbar) diffToolbar.style.display = 'none';
+            if (tab.error) {
+                const errEl = document.createElement('div');
+                errEl.style.cssText = 'padding:16px;color:var(--error-text);font-family:var(--font-code);font-size:12px;';
+                errEl.textContent = 'Error: ' + tab.error;
+                editorContentEl.appendChild(errEl);
+            } else {
+                const pre = document.createElement('pre');
+                pre.id = 'editor-file-view';
+                pre.textContent = tab.content || '';
+                editorContentEl.appendChild(pre);
+            }
+        }
+    }
+
+    /** Build a diff DOM view for the editor panel using computeDiff(). */
+    function buildEditorDiffView(before, after) {
+        const container   = document.createElement('div');
+        container.id      = 'editor-diff-view';
+        const diff        = computeDiff((before || '').split('\n'), (after || '').split('\n'));
+        let beforeNum = 1, afterNum = 1;
+        for (const { type, line } of diff) {
+            const rowEl  = document.createElement('div');
+            let numText;
+            if (type === 'equal')  { rowEl.className = 'diff-context'; numText = beforeNum++; afterNum++; }
+            else if (type === 'remove') { rowEl.className = 'diff-removed'; numText = beforeNum++; }
+            else                   { rowEl.className = 'diff-added';   numText = afterNum++;  }
+            const numEl  = document.createElement('span');
+            numEl.className   = 'diff-line-num';
+            numEl.textContent = type !== 'add' ? String(numText) : '';
+            const textEl = document.createElement('span');
+            textEl.className   = 'diff-line-text';
+            textEl.textContent = line;
+            rowEl.appendChild(numEl);
+            rowEl.appendChild(textEl);
+            container.appendChild(rowEl);
+        }
+        return container;
+    }
+
+    // Diff accept / reject
+    if (diffAcceptBtn) {
+        diffAcceptBtn.addEventListener('click', () => {
+            if (!activeTabPath) return;
+            const tab = openTabs.find(t => t.path === activeTabPath);
+            if (!tab || !tab.isDiff) return;
+            tab.isDiff = false; tab.beforeContent = undefined; tab.afterContent = undefined;
+            renderTabBar();
+            renderEditorContent(tab);
+        });
+    }
+
+    if (diffRejectBtn) {
+        diffRejectBtn.addEventListener('click', () => {
+            if (!activeTabPath) return;
+            const tab = openTabs.find(t => t.path === activeTabPath);
+            if (!tab || !tab.isDiff) return;
+            const before = tab.beforeContent || '';
+            const fp = tab.path;
+            vscode.postMessage({ type: 'writeFile', path: fp, content: before, purpose: 'diff_reject' });
+            closeTab(fp);
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-COLUMN IDE — CONTEXT MENU
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    function showCtxMenu(x, y, target) {
+        ctxMenuTarget = target;
+        if (!ctxMenu) return;
+        const openItem   = document.getElementById('ctx-open');
+        const addCtxItem = document.getElementById('ctx-add-context');
+        if (openItem)   openItem.style.display   = target.type === 'file' ? '' : 'none';
+        if (addCtxItem) addCtxItem.style.display = target.type === 'file' ? '' : 'none';
+        ctxMenu.style.display = '';
+        ctxMenu.style.left    = x + 'px';
+        ctxMenu.style.top     = y + 'px';
+        requestAnimationFrame(() => {
+            const r = ctxMenu.getBoundingClientRect();
+            if (r.right  > window.innerWidth)  ctxMenu.style.left = (x - r.width)  + 'px';
+            if (r.bottom > window.innerHeight) ctxMenu.style.top  = (y - r.height) + 'px';
+        });
+    }
+
+    function hideCtxMenu() {
+        if (ctxMenu) ctxMenu.style.display = 'none';
+        ctxMenuTarget = null;
+    }
+
+    document.addEventListener('click',      (e) => { if (!ctxMenu?.contains(e.target)) hideCtxMenu(); });
+    document.addEventListener('contextmenu',(e) => { if (!e.target.closest?.('#explorer-tree')) hideCtxMenu(); });
+
+    if (ctxMenu) {
+        document.getElementById('ctx-open')?.addEventListener('click', () => {
+            if (ctxMenuTarget?.type === 'file') openFileInEditor(ctxMenuTarget.path, ctxMenuTarget.name);
+            hideCtxMenu();
+        });
+        document.getElementById('ctx-new-file')?.addEventListener('click', () => {
+            const dir  = ctxMenuTarget ? (ctxMenuTarget.type === 'dir' ? ctxMenuTarget.path : pathDirname(ctxMenuTarget.path)) : currentWorkspacePath;
+            const name = window.prompt('New file name:');
+            if (name && name.trim()) vscode.postMessage({ type: 'createFile', path: pathJoin(dir, name.trim()) });
+            hideCtxMenu();
+        });
+        document.getElementById('ctx-new-folder')?.addEventListener('click', () => {
+            const dir  = ctxMenuTarget ? (ctxMenuTarget.type === 'dir' ? ctxMenuTarget.path : pathDirname(ctxMenuTarget.path)) : currentWorkspacePath;
+            const name = window.prompt('New folder name:');
+            if (name && name.trim()) vscode.postMessage({ type: 'createDir', path: pathJoin(dir, name.trim()) });
+            hideCtxMenu();
+        });
+        document.getElementById('ctx-rename')?.addEventListener('click', () => {
+            if (!ctxMenuTarget) { hideCtxMenu(); return; }
+            const newName = window.prompt('Rename to:', ctxMenuTarget.name);
+            if (newName && newName.trim() && newName.trim() !== ctxMenuTarget.name) {
+                vscode.postMessage({ type: 'renameFile', oldPath: ctxMenuTarget.path, newPath: pathJoin(pathDirname(ctxMenuTarget.path), newName.trim()) });
+            }
+            hideCtxMenu();
+        });
+        document.getElementById('ctx-delete')?.addEventListener('click', () => {
+            if (!ctxMenuTarget) { hideCtxMenu(); return; }
+            if (window.confirm('Delete "' + ctxMenuTarget.name + '"?')) {
+                vscode.postMessage({ type: 'deleteFile', path: ctxMenuTarget.path });
+            }
+            hideCtxMenu();
+        });
+        document.getElementById('ctx-copy-path')?.addEventListener('click', () => {
+            if (ctxMenuTarget) vscode.postMessage({ type: 'copyToClipboard', text: ctxMenuTarget.path });
+            hideCtxMenu();
+        });
+        document.getElementById('ctx-add-context')?.addEventListener('click', () => {
+            if (ctxMenuTarget?.type === 'file') vscode.postMessage({ type: 'addContextFile', path: ctxMenuTarget.path });
+            hideCtxMenu();
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-COLUMN IDE — EXPLORER TOOLBAR BUTTONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    if (explorerNewFileBtn) {
+        explorerNewFileBtn.addEventListener('click', () => {
+            const name = window.prompt('New file name:');
+            if (name && name.trim()) vscode.postMessage({ type: 'createFile', path: pathJoin(currentWorkspacePath, name.trim()) });
+        });
+    }
+
+    if (explorerNewFolderBtn) {
+        explorerNewFolderBtn.addEventListener('click', () => {
+            const name = window.prompt('New folder name:');
+            if (name && name.trim()) vscode.postMessage({ type: 'createDir', path: pathJoin(currentWorkspacePath, name.trim()) });
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-COLUMN IDE — EXPLORER INIT + PATH HELPERS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    function initExplorer() {
+        if (explorerWorkspaceLabel) explorerWorkspaceLabel.textContent = currentWorkspacePath || '(home)';
+        if (currentWorkspacePath) loadExplorerTree(currentWorkspacePath);
+    }
+
+    function pathBasename(p) {
+        return (p || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+    }
+
+    function pathDirname(p) {
+        const norm  = (p || '').replace(/\\/g, '/');
+        const parts = norm.split('/').filter(Boolean);
+        if (parts.length <= 1) return norm.startsWith('/') ? '/' : '.';
+        parts.pop();
+        return (norm.startsWith('/') ? '/' : '') + parts.join('/');
+    }
+
+    function pathJoin(...parts) {
+        return parts.filter(Boolean).join('/').replace(/\\/g, '/').replace(/\/+/g, '/');
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 3-COLUMN IDE — PANEL COLLAPSE + KEYBOARD SHORTCUTS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    function togglePanel(panelEl) {
+        if (!panelEl) return;
+        panelEl.classList.toggle('panel-collapsed');
+    }
+
+    document.addEventListener('keydown', (kbEvt) => {
+        // Ctrl+B — toggle left (chat) panel
+        if ((kbEvt.ctrlKey || kbEvt.metaKey) && !kbEvt.shiftKey && kbEvt.key === 'b') {
+            kbEvt.preventDefault();
+            togglePanel(panelChatEl);
+        }
+        // Ctrl+Shift+E — focus / toggle explorer panel
+        if ((kbEvt.ctrlKey || kbEvt.metaKey) && kbEvt.shiftKey && kbEvt.key === 'E') {
+            kbEvt.preventDefault();
+            if (panelExplorerEl && panelExplorerEl.classList.contains('panel-collapsed')) {
+                panelExplorerEl.classList.remove('panel-collapsed');
+            } else {
+                togglePanel(panelExplorerEl);
+            }
+        }
+        // Ctrl+W — close active editor tab
+        if ((kbEvt.ctrlKey || kbEvt.metaKey) && !kbEvt.shiftKey && kbEvt.key === 'w' && activeTabPath) {
+            kbEvt.preventDefault();
+            closeActiveTab();
+        }
+    });
+
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });
 
 }());
+

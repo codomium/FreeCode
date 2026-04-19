@@ -2117,3 +2117,483 @@ select:focus { border-color: var(--accent); }
   tab-size: 4;
   margin: 0;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   3-COLUMN IDE LAYOUT
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Hide old stand-alone controls bar (now merged into #header) */
+#controls { display: none !important; }
+
+/* Header grows to hold model/mode controls */
+#header { flex-wrap: wrap; min-height: 34px; padding: 4px 8px; gap: 4px; }
+#header-spacer { flex: 1; min-width: 8px; }
+
+/* Header selects — narrower than generic selects */
+#header select, #model-select, #mode-select {
+  max-width: 130px;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+/* Workbench — fills remaining height below header/banners */
+#workbench {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Left panel: Chat ────────────────────────────────────────────── */
+#panel-chat {
+  width: 340px;
+  min-width: 220px;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  transition: width 0.2s ease;
+}
+
+#panel-chat.panel-collapsed {
+  width: 0 !important;
+  min-width: 0 !important;
+  overflow: hidden;
+  border-right: none;
+}
+
+/* ── Middle panel: Editor ─────────────────────────────────────────── */
+#panel-editor {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+/* ── Right panel: Explorer ───────────────────────────────────────── */
+#panel-explorer {
+  width: 240px;
+  min-width: 160px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  transition: width 0.2s ease;
+}
+
+#panel-explorer.panel-collapsed {
+  width: 0 !important;
+  min-width: 0 !important;
+  overflow: hidden;
+  border-left: none;
+}
+
+/* Explorer header row */
+#explorer-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+  min-height: 34px;
+}
+
+#explorer-panel-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.explorer-toolbar {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.explorer-tool-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius);
+  transition: all 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.explorer-tool-btn svg { width: 14px; height: 14px; }
+.explorer-tool-btn:hover {
+  background: var(--bg-input);
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+/* ── Resize handles ──────────────────────────────────────────────── */
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+  z-index: 1;
+}
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: var(--accent);
+}
+
+/* ── Editor tab bar ──────────────────────────────────────────────── */
+#editor-tabs {
+  display: flex;
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  min-height: 34px;
+  scrollbar-width: none;
+}
+#editor-tabs::-webkit-scrollbar { display: none; }
+
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  min-width: 100px;
+  max-width: 180px;
+  height: 34px;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg);
+  flex-shrink: 0;
+  user-select: none;
+  transition: background 0.1s, color 0.1s;
+  position: relative;
+}
+.editor-tab:hover { background: var(--bg-input); color: var(--text); }
+.editor-tab.active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-bottom: 2px solid var(--accent);
+}
+.editor-tab.diff-tab .editor-tab-name { color: var(--warning); }
+
+.editor-tab-icon { font-size: 11px; flex-shrink: 0; }
+.editor-tab-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  font-size: 11px;
+}
+.editor-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  display: none;
+}
+.editor-tab.modified .editor-tab-dot { display: block; }
+.editor-tab-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 1px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+.editor-tab:hover .editor-tab-close { opacity: 1; }
+.editor-tab.active .editor-tab-close { opacity: 0.6; }
+.editor-tab-close:hover { background: rgba(244,135,113,0.2); color: var(--error-text); opacity: 1; }
+
+/* ── Editor content area ─────────────────────────────────────────── */
+#editor-content {
+  flex: 1;
+  overflow: auto;
+  font-family: var(--font-code);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--bg-elevated);
+  position: relative;
+}
+
+/* Empty state placeholder */
+#editor-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--text-muted);
+  user-select: none;
+  padding: 20px;
+}
+.editor-empty-icon { font-size: 40px; opacity: 0.5; }
+.editor-empty-title { font-size: 14px; color: var(--text-dim); }
+.editor-empty-hint { font-size: 11px; text-align: center; max-width: 200px; }
+
+/* File content rendered in editor */
+#editor-file-view {
+  padding: 16px;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre;
+  tab-size: 4;
+  margin: 0;
+  min-height: 100%;
+  counter-reset: editor-lines;
+}
+
+.editor-line {
+  display: flex;
+  counter-increment: editor-lines;
+}
+.editor-line::before {
+  content: counter(editor-lines);
+  min-width: 36px;
+  padding-right: 12px;
+  text-align: right;
+  color: var(--text-muted);
+  opacity: 0.4;
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 0.9em;
+}
+.editor-line-text { flex: 1; }
+
+/* ── Diff view in editor ─────────────────────────────────────────── */
+#editor-diff-view {
+  padding: 8px 0;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.65;
+  min-height: 100%;
+}
+
+.diff-hunk-header {
+  display: block;
+  padding: 2px 16px;
+  background: rgba(0,122,204,0.1);
+  color: var(--text-muted);
+  font-size: 11px;
+  user-select: none;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-added {
+  display: flex;
+  background: rgba(78,201,176,0.1);
+  border-left: 3px solid var(--success);
+}
+.diff-added::before { content: '+'; }
+
+.diff-removed {
+  display: flex;
+  background: rgba(244,135,113,0.1);
+  border-left: 3px solid var(--error-text);
+}
+.diff-removed::before { content: '-'; }
+
+.diff-context {
+  display: flex;
+}
+.diff-context::before { content: ' '; }
+
+.diff-added::before,
+.diff-removed::before,
+.diff-context::before {
+  min-width: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 0 4px;
+}
+.diff-added::before { color: var(--success); }
+.diff-removed::before { color: var(--error-text); }
+
+.diff-line-num {
+  min-width: 36px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--text-muted);
+  opacity: 0.4;
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 0.9em;
+}
+
+.diff-line-text {
+  flex: 1;
+  white-space: pre;
+  word-break: break-all;
+  padding-left: 4px;
+}
+
+.diff-added .diff-line-text { color: var(--success); }
+.diff-removed .diff-line-text { color: var(--error-text); }
+.diff-context .diff-line-text { color: var(--text-dim); }
+
+/* ── Diff toolbar (accept / reject) ─────────────────────────────── */
+#diff-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#diff-toolbar-filename {
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-toolbar-actions { display: flex; gap: 6px; }
+.diff-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid;
+  transition: all 0.15s;
+}
+.diff-accept {
+  background: rgba(78,201,176,0.12);
+  border-color: rgba(78,201,176,0.4);
+  color: var(--success);
+}
+.diff-accept:hover { background: rgba(78,201,176,0.25); }
+.diff-reject {
+  background: rgba(244,135,113,0.12);
+  border-color: rgba(244,135,113,0.4);
+  color: var(--error-text);
+}
+.diff-reject:hover { background: rgba(244,135,113,0.25); }
+
+/* ── Context menu ────────────────────────────────────────────────── */
+#ctx-menu {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  z-index: 9000;
+  min-width: 160px;
+  overflow: hidden;
+  padding: 4px 0;
+}
+.ctx-menu-item {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.ctx-menu-item:hover { background: rgba(0,122,204,0.15); }
+.ctx-menu-danger { color: var(--error-text); }
+.ctx-menu-danger:hover { background: rgba(244,135,113,0.15); }
+.ctx-menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* ── Explorer inline rename ──────────────────────────────────────── */
+.explorer-rename-input {
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: 12px;
+  padding: 1px 4px;
+  outline: none;
+  width: 100%;
+  min-width: 80px;
+}
+
+/* ── Keyboard shortcut hints in panels ──────────────────────────── */
+.panel-collapse-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  transition: all 0.1s;
+  flex-shrink: 0;
+}
+.panel-collapse-btn:hover { background: var(--bg-input); color: var(--text); }
+
+/* Ensure overlays (history, settings) cover the full viewport */
+#history-panel,
+#settings-panel {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 200;
+}
+#history-panel { display: none; flex-direction: column; overflow: hidden; }
+#history-panel.visible { display: flex; }
+#settings-panel { display: none; flex-direction: column; overflow: hidden; }
+#settings-panel.visible { display: flex; }
+
+/* File-viewer modal is fixed */
+#file-viewer-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 300;
+}
+
+/* Apply modal is fixed */
+#apply-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 300;
+}
