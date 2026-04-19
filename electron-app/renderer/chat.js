@@ -216,6 +216,9 @@
     let currentWorkspacePath  = '';   // kept in sync with settings
     let fileViewerCurrentPath = null; // path of file currently shown in viewer
 
+    /** Tool names that perform file writes — used to trigger diff capture. */
+    const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file']);
+
     /** Models that support NVIDIA thinking mode toggle */
     const THINKING_CAPABLE_MODELS = new Set([
         'moonshotai/kimi-k2.5',
@@ -1524,8 +1527,7 @@
                 addToolCard(msg.tool, msg.input);
                 setLoading(true, `Running ${msg.tool}…`);
                 // Track write/edit operations for diff view
-                if (['Write', 'Edit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file'].includes(msg.tool)
-                    && msg.input) {
+                if (FILE_WRITE_TOOLS.has(msg.tool) && msg.input) {
                     const diffPath = msg.input.file_path || msg.input.path || null;
                     if (diffPath) {
                         pendingDiffEdit = { path: diffPath, tool: msg.tool, beforeContent: null };
@@ -3241,7 +3243,7 @@
         const empty = document.createElement('div');
         empty.id = 'editor-empty-state';
         empty.innerHTML =
-            '<div class="editor-empty-icon">\u{1F4DD}</div>' +
+            '<div class="editor-empty-icon">📝</div>' +
             '<div class="editor-empty-title">No file open</div>' +
             '<div class="editor-empty-hint">Click a file in the Explorer to open it here</div>';
         editorContentEl.appendChild(empty);
@@ -3262,19 +3264,19 @@
             const iconEl = document.createElement('span');
             iconEl.className   = 'editor-tab-icon';
             iconEl.textContent = tab.isDiff
-                ? '\u26A1'
+                ? '⚡'
                 : getFileIcon((tab.name.split('.').pop() || '').toLowerCase());
 
             const nameEl = document.createElement('span');
             nameEl.className   = 'editor-tab-name';
-            nameEl.textContent = tab.name + (tab.isDiff ? ' \u26A1' : '');
+            nameEl.textContent = tab.name + (tab.isDiff ? ' ⚡' : '');
 
             const dotEl = document.createElement('span');
             dotEl.className = 'editor-tab-dot';
 
             const closeEl = document.createElement('button');
             closeEl.className   = 'editor-tab-close';
-            closeEl.textContent = '\u00D7';
+            closeEl.textContent = '×';
             closeEl.title = 'Close tab';
             closeEl.addEventListener('click', (e) => { e.stopPropagation(); closeTab(tab.path); });
 

@@ -1060,7 +1060,9 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'watchWorkspace': {
             // Stop any existing watcher before starting a new one
             if (global._workspaceWatcher) {
-                try { global._workspaceWatcher.close(); } catch (_) {}
+                try { global._workspaceWatcher.close(); } catch (closeErr) {
+                    console.warn('watchWorkspace: error closing previous watcher:', closeErr.message);
+                }
                 global._workspaceWatcher = null;
             }
             const watchPath = msg.path || currentWorkspacePath;
@@ -1069,7 +1071,9 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
                         send({ type: 'fileWatchEvent', event, filename: filename || '' });
                     });
-                } catch (_) {}
+                } catch (watchErr) {
+                    console.warn('watchWorkspace: fs.watch failed for', watchPath, ':', watchErr.message);
+                }
             }
             break;
         }
