@@ -258,7 +258,7 @@
     let fileViewerCurrentPath = null; // path of file currently shown in viewer
 
     /** Tool names that perform file writes — used to trigger diff capture. */
-    const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file']);
+    const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file']);
 
     /** Models that support NVIDIA thinking mode toggle */
     const THINKING_CAPABLE_MODELS = new Set([
@@ -1652,7 +1652,9 @@
                 setLoading(true, `Running ${msg.tool}…`);
                 // Track write/edit operations for diff view
                 if (FILE_WRITE_TOOLS.has(msg.tool) && msg.input) {
-                    const diffPath = msg.input.file_path || msg.input.path || null;
+                    // For MultiEdit, the path is in edits[0].file_path (not top-level)
+                    const diffPath = msg.input.file_path || msg.input.path ||
+                        (Array.isArray(msg.input.edits) && msg.input.edits[0] && msg.input.edits[0].file_path) || null;
                     if (diffPath) {
                         pendingDiffEdit = { path: diffPath, tool: msg.tool, beforeContent: null, resultReady: false };
                         vscode.postMessage({ type: 'readFile', path: diffPath, purpose: 'before_diff' });
@@ -1685,6 +1687,10 @@
                         // the fileData handler can trigger after read when it arrives
                         pendingDiffEdit.resultReady = true;
                     }
+                }
+                // Sync TodoWrite results to the plan board
+                if (msg.tool === 'TodoWrite' && msg.input && Array.isArray(msg.input.todos)) {
+                    syncPlanFromTodos(msg.input.todos);
                 }
                 break;
 
@@ -1903,6 +1909,8 @@
                 loadExplorerTree(currentWorkspacePath);
                 // Restart workspace watcher
                 vscode.postMessage({ type: 'watchWorkspace', path: currentWorkspacePath });
+                // Keep terminal cwd label in sync
+                updateTerminalCwd();
                 break;
 
             case 'directoryListing':
@@ -1969,6 +1977,28 @@
                     loadExplorerTree(currentWorkspacePath);
                 }, 500);
                 break;
+
+            case 'terminalOutput': {
+                // Stream output from an integrated terminal command
+                if (!terminalOutputEl) break;
+                if (msg.data) {
+                    let cssClass = 'term-line-stdout';
+                    if (msg.stream === 'stderr') cssClass = 'term-line-stderr';
+                    else if (msg.stream === 'info') cssClass = 'term-line-info';
+                    appendTerminalLine(msg.data, cssClass);
+                }
+                break;
+            }
+
+            case 'customProvidersSaved': {
+                // Providers saved, update local state + models
+                if (Array.isArray(msg.providers)) {
+                    customProviders = msg.providers;
+                    renderCustomProviders();
+                    injectCustomProviderModels();
+                }
+                break;
+            }
 
             default:
                 break;
@@ -2949,6 +2979,189 @@
 
     // ── Settings Panel ────────────────────────────────────────────────────────
 
+    // ── Custom Providers state ────────────────────────────────────────────────
+    let customProviders = [];   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
+    let cpEditIndex = -1;       // -1 = adding new; >=0 = editing existing
+
+    const cpListEl      = document.getElementById('cp-list');
+    const cpFormEl      = document.getElementById('cp-form');
+    const cpFormTitleEl = document.getElementById('cp-form-title');
+    const cpAddBtn      = document.getElementById('cp-add-btn');
+    const cpFormSave    = document.getElementById('cp-form-save');
+    const cpFormCancel  = document.getElementById('cp-form-cancel');
+    const cpFId         = document.getElementById('cp-f-id');
+    const cpFName       = document.getElementById('cp-f-name');
+    const cpFUrl        = document.getElementById('cp-f-url');
+    const cpFKey        = document.getElementById('cp-f-key');
+    const cpFModels     = document.getElementById('cp-f-models');
+    const cpFHeaders    = document.getElementById('cp-f-headers');
+
+    /** Render the custom providers list in the settings panel */
+    function renderCustomProviders() {
+        if (!cpListEl) return;
+        cpListEl.innerHTML = '';
+        if (customProviders.length === 0) {
+            cpListEl.innerHTML = '<div class="settings-note">No custom providers yet.</div>';
+            return;
+        }
+        for (let i = 0; i < customProviders.length; i++) {
+            const p = customProviders[i];
+            const modelIds = (p.models || []).map(m => (typeof m === 'string' ? m : m.id));
+            const div = document.createElement('div');
+            div.className = 'cp-entry';
+            div.innerHTML = `
+                <div class="cp-entry-info">
+                    <div class="cp-entry-name">${escapeHtml(p.name || p.id)}</div>
+                    <div class="cp-entry-url">${escapeHtml(p.baseUrl || '')}</div>
+                    <div class="cp-entry-models">${modelIds.map(escapeHtml).join(', ')}</div>
+                </div>
+                <button class="cp-entry-btn" data-action="edit" data-idx="${i}">Edit</button>
+                <button class="cp-entry-btn del" data-action="delete" data-idx="${i}">✕</button>
+            `;
+            cpListEl.appendChild(div);
+        }
+    }
+
+    /** Parse models textarea lines ("id:Name" or "id") into [{id,name}] */
+    function parseModelsText(text) {
+        return (text || '').split('\n')
+            .map(l => l.trim())
+            .filter(Boolean)
+            .map(l => {
+                const colon = l.indexOf(':');
+                if (colon > 0) return { id: l.slice(0, colon).trim(), name: l.slice(colon + 1).trim() };
+                return { id: l, name: l };
+            });
+    }
+
+    /** Parse headers textarea lines ("Name:Value") into [{name,value}] */
+    function parseHeadersText(text) {
+        return (text || '').split('\n')
+            .map(l => l.trim())
+            .filter(Boolean)
+            .map(l => {
+                const colon = l.indexOf(':');
+                if (colon > 0) return { name: l.slice(0, colon).trim(), value: l.slice(colon + 1).trim() };
+                return null;
+            })
+            .filter(Boolean);
+    }
+
+    /** Convert [{id,name}] to textarea text */
+    function modelsToText(models) {
+        return (models || []).map(m => (typeof m === 'string' ? m : `${m.id}:${m.name}`)).join('\n');
+    }
+
+    /** Convert [{name,value}] to textarea text */
+    function headersToText(headers) {
+        return (headers || []).map(h => `${h.name}:${h.value}`).join('\n');
+    }
+
+    function openCpForm(idx) {
+        cpEditIndex = idx;
+        if (!cpFormEl) return;
+        if (idx === -1) {
+            if (cpFormTitleEl) cpFormTitleEl.textContent = 'Add Provider';
+            if (cpFId)      cpFId.value = '';
+            if (cpFName)    cpFName.value = '';
+            if (cpFUrl)     cpFUrl.value = '';
+            if (cpFKey)     cpFKey.value = '';
+            if (cpFModels)  cpFModels.value = '';
+            if (cpFHeaders) cpFHeaders.value = '';
+        } else {
+            const p = customProviders[idx];
+            if (cpFormTitleEl) cpFormTitleEl.textContent = 'Edit Provider';
+            if (cpFId)      cpFId.value    = p.id || '';
+            if (cpFName)    cpFName.value  = p.name || '';
+            if (cpFUrl)     cpFUrl.value   = p.baseUrl || '';
+            if (cpFKey)     cpFKey.value   = p.apiKey || '';
+            if (cpFModels)  cpFModels.value  = modelsToText(p.models);
+            if (cpFHeaders) cpFHeaders.value = headersToText(p.headers);
+        }
+        cpFormEl.style.display = 'block';
+        if (cpFId) cpFId.focus();
+    }
+
+    function closeCpForm() {
+        cpEditIndex = -1;
+        if (cpFormEl) cpFormEl.style.display = 'none';
+    }
+
+    function saveCpForm() {
+        const id      = (cpFId?.value || '').trim().replace(/\s+/g, '-');
+        const name    = (cpFName?.value || '').trim();
+        const baseUrl = (cpFUrl?.value || '').trim();
+        const apiKey  = (cpFKey?.value || '').trim();
+        const models  = parseModelsText(cpFModels?.value || '');
+        const headers = parseHeadersText(cpFHeaders?.value || '');
+
+        if (!id || !baseUrl) {
+            alert('Provider ID and Base URL are required.');
+            return;
+        }
+
+        const entry = { id, name: name || id, baseUrl, apiKey, models, headers };
+
+        if (cpEditIndex === -1) {
+            customProviders.push(entry);
+        } else {
+            customProviders[cpEditIndex] = entry;
+        }
+
+        saveCustomProviders();
+        closeCpForm();
+    }
+
+    function saveCustomProviders() {
+        renderCustomProviders();
+        injectCustomProviderModels();
+        vscode.postMessage({ type: 'saveCustomProviders', providers: customProviders });
+    }
+
+    /** Inject model options from custom providers into both model selects */
+    function injectCustomProviderModels() {
+        const selects = [modelSelect, settingModel].filter(Boolean);
+        for (const sel of selects) {
+            // Remove existing custom provider optgroups
+            const existing = sel.querySelectorAll('optgroup[data-custom]');
+            existing.forEach(og => og.remove());
+            // Add one optgroup per custom provider
+            for (const p of customProviders) {
+                const models = p.models || [];
+                if (models.length === 0) continue;
+                const og = document.createElement('optgroup');
+                og.label = p.name || p.id;
+                og.setAttribute('data-custom', p.id);
+                for (const m of models) {
+                    const opt = document.createElement('option');
+                    opt.value = typeof m === 'string' ? m : m.id;
+                    opt.textContent = typeof m === 'string' ? m : (m.name || m.id);
+                    og.appendChild(opt);
+                }
+                sel.appendChild(og);
+            }
+        }
+    }
+
+    if (cpAddBtn) cpAddBtn.addEventListener('click', () => openCpForm(-1));
+    if (cpFormSave) cpFormSave.addEventListener('click', saveCpForm);
+    if (cpFormCancel) cpFormCancel.addEventListener('click', closeCpForm);
+
+    if (cpListEl) {
+        cpListEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-action]');
+            if (!btn) return;
+            const idx = parseInt(btn.dataset.idx, 10);
+            if (btn.dataset.action === 'edit') {
+                openCpForm(idx);
+            } else if (btn.dataset.action === 'delete') {
+                customProviders.splice(idx, 1);
+                saveCustomProviders();
+                closeCpForm();
+            }
+        });
+    }
+
     function populateSettingsPanel(msg) {
         if (settingWorkspace)      settingWorkspace.value  = msg.workspacePath || '';
         if (settingModel)          settingModel.value       = msg.model || 'claude-sonnet-4-6';
@@ -2956,6 +3169,12 @@
         if (settingMaxTurns)       settingMaxTurns.value    = msg.maxTurns || 20;
         if (settingShowToolOutput) settingShowToolOutput.checked = msg.showToolOutput !== false;
         if (settingNvidiaKey)      settingNvidiaKey.placeholder = msg.hasNvidiaKey ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
+        // Custom providers
+        if (Array.isArray(msg.customProviders)) {
+            customProviders = msg.customProviders;
+            renderCustomProviders();
+            injectCustomProviderModels();
+        }
     }
 
     function openSettingsPanel() {
@@ -3462,6 +3681,19 @@
     }
 
     /** Mark the first in-progress item as done; mark next as in-progress */
+    /** Sync plan board from a TodoWrite todos array */
+    function syncPlanFromTodos(todos) {
+        if (!Array.isArray(todos) || todos.length === 0) return;
+        planItems = todos.map(t => ({
+            id:         t.id || String(planItemCounter++),
+            text:       t.content || '',
+            done:       t.status === 'completed',
+            inProgress: t.status === 'in_progress',
+        }));
+        renderPlanBoard();
+        updatePlanBoardVisibility();
+    }
+
     function advancePlanProgress() {
         const inProg = planItems.find(p => p.inProgress && !p.done);
         if (inProg) { inProg.done = true; inProg.inProgress = false; }
@@ -3481,10 +3713,14 @@
     /** Build plan context string to inject into prompts */
     function buildPlanContext() {
         if (planItems.length === 0) return '';
+        const pending = planItems.filter(p => !p.done);
         const lines = planItems.map(p =>
             `- [${p.done ? 'x' : ' '}] ${p.text}${p.inProgress && !p.done ? ' ← (in progress)' : ''}`
         );
-        return '\n\n[Active Plan]\n' + lines.join('\n');
+        const instruction = pending.length > 0
+            ? '\nExecute each pending step one by one using Read/Write/Edit/Bash/MultiEdit tools. After completing each step call TodoWrite to mark it completed. Do not just describe — actually make the changes.'
+            : '\nAll plan steps are complete.';
+        return '\n\n[Active Plan]\n' + lines.join('\n') + instruction;
     }
 
     // Wire plan board controls
@@ -4072,7 +4308,126 @@
             kbEvt.preventDefault();
             closeActiveTab();
         }
+        // Ctrl+` — toggle integrated terminal
+        if ((kbEvt.ctrlKey || kbEvt.metaKey) && kbEvt.key === '`') {
+            kbEvt.preventDefault();
+            if (terminalPanelEl && (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display)) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        }
     });
+
+    // ── Integrated Terminal ───────────────────────────────────────────────────
+    const terminalPanelEl   = document.getElementById('terminal-panel');
+    const terminalToggleBtn = document.getElementById('terminal-toggle-btn');
+    const terminalOutputEl  = document.getElementById('terminal-output');
+    const terminalInputEl   = document.getElementById('terminal-input');
+    const terminalRunBtn    = document.getElementById('terminal-run-btn');
+    const terminalClearBtn  = document.getElementById('terminal-clear-btn');
+    const terminalCloseBtn  = document.getElementById('terminal-close-btn');
+    const terminalCwdEl     = document.getElementById('terminal-cwd');
+
+    let terminalReqCounter = 0;
+    let terminalHistory    = [];   // command history
+    let terminalHistoryIdx = -1;   // navigation index
+
+    function appendTerminalLine(text, cssClass) {
+        if (!terminalOutputEl || !text) return;
+        const span = document.createElement('span');
+        span.className = cssClass;
+        span.textContent = text;
+        terminalOutputEl.appendChild(span);
+        // Auto-scroll
+        const wrap = document.getElementById('terminal-output-wrap');
+        if (wrap) wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    function updateTerminalCwd() {
+        if (terminalCwdEl) terminalCwdEl.textContent = currentWorkspacePath || '';
+    }
+
+    function openTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'flex';
+        if (terminalToggleBtn) terminalToggleBtn.classList.add('active');
+        updateTerminalCwd();
+        if (terminalInputEl) terminalInputEl.focus();
+    }
+
+    function closeTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'none';
+        if (terminalToggleBtn) terminalToggleBtn.classList.remove('active');
+    }
+
+    function runTerminalCommand() {
+        if (!terminalInputEl) return;
+        const cmd = terminalInputEl.value.trim();
+        if (!cmd) return;
+
+        // Add to history
+        terminalHistory.unshift(cmd);
+        if (terminalHistory.length > 100) terminalHistory.pop();
+        terminalHistoryIdx = -1;
+        terminalInputEl.value = '';
+
+        // Show the command prompt
+        appendTerminalLine(`$ ${cmd}\n`, 'term-line-cmd');
+
+        const reqId = `term-${++terminalReqCounter}`;
+        vscode.postMessage({ type: 'terminalRun', command: cmd, reqId });
+    }
+
+    if (terminalToggleBtn) {
+        terminalToggleBtn.addEventListener('click', () => {
+            if (!terminalPanelEl) return;
+            if (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        });
+    }
+
+    if (terminalCloseBtn) terminalCloseBtn.addEventListener('click', closeTerminal);
+
+    if (terminalClearBtn) {
+        terminalClearBtn.addEventListener('click', () => {
+            if (terminalOutputEl) terminalOutputEl.textContent = '';
+        });
+    }
+
+    if (terminalRunBtn) terminalRunBtn.addEventListener('click', runTerminalCommand);
+
+    if (terminalInputEl) {
+        terminalInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                runTerminalCommand();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (terminalHistoryIdx < terminalHistory.length - 1) {
+                    terminalHistoryIdx++;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                }
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (terminalHistoryIdx > 0) {
+                    terminalHistoryIdx--;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                } else {
+                    terminalHistoryIdx = -1;
+                    terminalInputEl.value = '';
+                }
+            }
+        });
+    }
+
+    // Handle terminalOutput messages from main process
+    // (injected into the normal message switch-case via a dedicated handler)
+    // This is wired in the main window.addEventListener('message'...) handler below.
 
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });

@@ -6,15 +6,27 @@
  * - isolation: "worktree" option
  * - run_in_background option
  * - model override
+ * - team mode: run multiple specialized agents collaboratively through phases
  */
 
 import { createAgentLoop } from '../core/agent-loop.mjs';
 import { createToolRegistry } from './registry.mjs';
 import { createPermissionChecker } from '../permissions/checker.mjs';
 
+/** Built-in subagent role system prompts */
+const TYPE_PROMPTS = {
+    coder:       'You are a coding agent. Write clean, well-structured code and use file tools (Read, Write, Edit, MultiEdit, Bash) to make actual changes. Do not just describe — implement.',
+    reviewer:    'You are a code reviewer. Analyze code for bugs, security issues, and improvements. Be specific.',
+    researcher:  'You are a research agent. Find and summarize information thoroughly.',
+    tester:      'You are a testing agent. Write and run tests to verify correctness.',
+    planner:     'You are a planning agent. Break tasks into clear, numbered, actionable steps.',
+    summarizer:  'You are a context summarizer. Produce concise, structured summaries of conversations and progress.',
+    prompter:    'You are a prompt engineer. Generate precise, detailed prompts for other agents based on requirements.',
+};
+
 export const AgentTool = {
     name: 'Agent',
-    description: 'Spawn a subagent to handle a task. The subagent has its own context and tools.',
+    description: 'Spawn a subagent to handle a task, or run a multi-agent team through phases.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -29,7 +41,8 @@ export const AgentTool = {
             },
             subagent_type: {
                 type: 'string',
-                description: 'Type of subagent (e.g. coder, reviewer, researcher)',
+                enum: ['coder', 'reviewer', 'researcher', 'tester', 'planner', 'summarizer', 'prompter'],
+                description: 'Specialized role for the subagent',
             },
             isolation: {
                 type: 'string',
@@ -43,6 +56,24 @@ export const AgentTool = {
             model: {
                 type: 'string',
                 description: 'Override model for this subagent',
+            },
+            team: {
+                type: 'array',
+                description: 'Multi-agent team configuration. Each entry defines a role and optional model.',
+                items: {
+                    type: 'object',
+                    properties: {
+                        role: { type: 'string', description: 'Agent role (coder, reviewer, planner, summarizer, prompter, etc.)' },
+                        model: { type: 'string', description: 'Model for this agent (optional)' },
+                        prompt: { type: 'string', description: 'Override prompt for this agent (optional)' },
+                    },
+                    required: ['role'],
+                },
+            },
+            phases: {
+                type: 'array',
+                description: 'Ordered list of phase names to execute in team mode.',
+                items: { type: 'string' },
             },
         },
         required: ['prompt'],
@@ -59,6 +90,11 @@ export const AgentTool = {
     _nextBgId: 0,
 
     async call(input) {
+        // ── Multi-agent team mode ─────────────────────────────────────────────
+        if (input.team && Array.isArray(input.team) && input.team.length > 0) {
+            return runTeam(input);
+        }
+
         const model = input.model || process.env.SUBAGENT_MODEL || 'claude-sonnet-4-6';
         const tools = createToolRegistry();
         const permissions = createPermissionChecker({ defaultMode: 'bypassPermissions' });
@@ -66,14 +102,7 @@ export const AgentTool = {
         // Build type-specific system prompt prefix
         let systemPrefix = '';
         if (input.subagent_type) {
-            const typePrompts = {
-                coder: 'You are a coding agent. Write clean, tested code.',
-                reviewer: 'You are a code reviewer. Analyze code for bugs and improvements.',
-                researcher: 'You are a research agent. Find and summarize information.',
-                tester: 'You are a testing agent. Write and run tests.',
-                planner: 'You are a planning agent. Break down tasks into steps.',
-            };
-            systemPrefix = typePrompts[input.subagent_type] || `You are a ${input.subagent_type} agent.`;
+            systemPrefix = TYPE_PROMPTS[input.subagent_type] || `You are a ${input.subagent_type} agent.`;
         }
 
         const fullPrompt = systemPrefix
@@ -125,3 +154,64 @@ async function runSubagent(loop, prompt) {
 
     return results.join('\n') || 'Subagent completed with no output.';
 }
+
+/**
+ * Run a multi-agent team through optional phases.
+ *
+ * Each team member runs sequentially; the output of one agent is passed
+ * as context to the next.  If phases are specified, they are used as
+ * section headers in the accumulated context so agents know which phase
+ * is active.
+ *
+ * @param {object} input - validated AgentTool input with team array
+ * @returns {Promise<string>}
+ */
+async function runTeam(input) {
+    const phases = input.phases && input.phases.length > 0 ? input.phases : ['execution'];
+    const team   = input.team;
+    const defaultModel = process.env.SUBAGENT_MODEL || 'claude-sonnet-4-6';
+
+    const log = [];
+    let sharedContext = `Original task:\n${input.prompt}`;
+
+    for (const phase of phases) {
+        log.push(`\n--- Phase: ${phase.toUpperCase()} ---`);
+
+        for (const member of team) {
+            const role    = member.role || 'assistant';
+            const model   = member.model || defaultModel;
+            const rolePrompt = TYPE_PROMPTS[role] || `You are a ${role} agent.`;
+            const memberPrompt = member.prompt || input.prompt;
+
+            const prompt = `${rolePrompt}
+
+Current phase: ${phase}
+Shared context:
+${sharedContext}
+
+Your task:
+${memberPrompt}`;
+
+            log.push(`\n[${role}@${model}] working on phase "${phase}"…`);
+
+            const tools      = createToolRegistry();
+            const perms      = createPermissionChecker({ defaultMode: 'bypassPermissions' });
+            const loop       = createAgentLoop({ model, tools, permissions: perms, settings: { stream: false } });
+
+            let result;
+            try {
+                result = await runSubagent(loop, prompt);
+            } catch (err) {
+                result = `Agent error (${role}): ${err.message}`;
+            }
+
+            log.push(`[${role}] output:\n${result.slice(0, 1000)}`);
+
+            // Feed this agent's output into shared context for subsequent agents
+            sharedContext += `\n\n[${role} — phase ${phase}]\n${result.slice(0, 2000)}`;
+        }
+    }
+
+    return log.join('\n');
+}
+

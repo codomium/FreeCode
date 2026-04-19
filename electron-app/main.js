@@ -99,6 +99,7 @@ const DEFAULT_SETTINGS = {
     autoAttachActiveFile: false,
     pinnedFiles:        [],
     workspacePath:      os.homedir(),
+    customProviders:    [],   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
 };
 
 function getSettings() {
@@ -227,6 +228,14 @@ class InProcessAgentBridge {
             this._loop.state._skillsLoader  = skillsLoader;
             this._loop.state._hooks         = settings.hooks;
             this._loop.state._permissionMode = permMode;
+
+            // Restore conversation context saved from a previous bridge (mode/setting change)
+            if (this._pendingMessages && this._pendingMessages.length > 0) {
+                this._loop.state.messages  = this._pendingMessages;
+                this._loop.state.turnCount = this._pendingMessages.filter(m => m.role === 'user').length;
+                this._pendingMessages = null;
+            }
+
             this._ready = true;
         })();
         return this._initPromise;
@@ -384,9 +393,32 @@ let agentBridge = null;
 /** @type {boolean} */
 let isCancelled = false;
 
+/**
+ * Messages saved from the old agent bridge before a reinit.
+ * These are raw agent-loop messages (role/content objects) that will be
+ * restored into the new bridge's loop state after it initialises.
+ * @type {Array|null}
+ */
+let savedAgentMessages = null;
+
+/**
+ * Capture the current conversation messages from the running agent bridge
+ * so they can be restored into the replacement bridge after a reinit.
+ */
+function captureAgentMessages() {
+    if (agentBridge && agentBridge._loop && Array.isArray(agentBridge._loop.state.messages)) {
+        savedAgentMessages = [...agentBridge._loop.state.messages];
+    }
+}
+
 function getBridge() {
     if (!agentBridge) {
         agentBridge = new InProcessAgentBridge();
+        // Restore conversation context that was saved before the last reinit
+        if (savedAgentMessages && savedAgentMessages.length > 0) {
+            agentBridge._pendingMessages = savedAgentMessages;
+            savedAgentMessages = null;
+        }
     }
     return agentBridge;
 }
@@ -400,6 +432,11 @@ function applyEnvFromSettings() {
     process.env.CLAUDE_CODE_PERMISSION_MODE = s.permissionMode || 'default';
     process.env.CLAUDE_CODE_MAX_TURNS       = String(s.maxTurns || 20);
     process.env.NVIDIA_THINKING_MODE        = String(s.nvidiaThinkingMode || false);
+
+    // Serialize custom providers so the agent-loop can call them
+    const cp = Array.isArray(s.customProviders) ? s.customProviders : [];
+    process.env.CUSTOM_PROVIDERS_JSON = cp.length > 0 ? JSON.stringify(cp) : '';
+
     // Set cwd to workspace
     try { process.chdir(s.workspacePath || os.homedir()); } catch { /* ignore */ }
 }
@@ -535,7 +572,7 @@ async function handleSetApiKey() {
     if (result && result.trim().length > 10) {
         storeApiKey(result.trim());
         applyEnvFromSettings();
-        if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+        if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
         mainWindow && mainWindow.webContents.send('main-message', { type: 'apiKeySet' });
         dialog.showMessageBoxSync(mainWindow, {
             type:    'info',
@@ -635,6 +672,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 maxTurns:           s.maxTurns || 20,
                 showToolOutput:     s.showToolOutput !== false,
                 hasNvidiaKey:       !!(s.nvidiaApiKey || process.env.NVIDIA_API_KEY),
+                customProviders:    Array.isArray(s.customProviders) ? s.customProviders : [],
             });
 
             // Auto-restore session into agent bridge
@@ -703,7 +741,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'mode': {
             saveSetting('permissionMode', msg.mode);
             process.env.CLAUDE_CODE_PERMISSION_MODE = msg.mode;
-            if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+            if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
             break;
         }
 
@@ -711,7 +749,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'thinkingMode': {
             saveSetting('nvidiaThinkingMode', !!msg.enabled);
             process.env.NVIDIA_THINKING_MODE = String(!!msg.enabled);
-            if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+            if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
             send({ type: 'thinkingModeChanged', enabled: !!msg.enabled });
             break;
         }
@@ -1031,6 +1069,12 @@ ipcMain.on('renderer-message', async (event, msg) => {
             break;
         }
 
+        // ── Integrated terminal: execute a command and stream output ──────────
+        case 'terminalRun': {
+            handleTerminalRun(String(msg.command || ''), msg.reqId || null, send);
+            break;
+        }
+
         // ── Save a single setting ─────────────────────────────────────────────
         case 'saveSettings': {
             const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath'];
@@ -1039,7 +1083,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 applyEnvFromSettings();
                 const reinitKeys = ['permissionMode','maxTurns','nvidiaApiKey'];
                 if (reinitKeys.includes(msg.key)) {
-                    if (agentBridge) { agentBridge.reinit(); agentBridge = null; }
+                    if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
                 }
                 if (msg.key === 'model' && agentBridge) {
                     agentBridge.switchModel(msg.value);
@@ -1051,6 +1095,17 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     });
                 }
             }
+            break;
+        }
+
+        // ── Save custom providers list ─────────────────────────────────────────
+        case 'saveCustomProviders': {
+            const providers = Array.isArray(msg.providers) ? msg.providers : [];
+            saveSetting('customProviders', providers);
+            applyEnvFromSettings();
+            // Reinit bridge so new providers are available on the next turn
+            if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
+            send({ type: 'customProvidersSaved', providers });
             break;
         }
 
@@ -1210,6 +1265,79 @@ function handleRunInTerminal(code) {
         const { spawn } = require('child_process');
         spawn('bash', ['-c', code], { cwd, detached: true, stdio: 'ignore' });
     }
+}
+
+// ── Integrated terminal: stream command output to renderer ────────────────────
+
+const MAX_TERMINAL_BYTES = 512 * 1024; // 512 KB
+
+function handleTerminalRun(command, reqId, send) {
+    if (!command || !command.trim()) {
+        send({ type: 'terminalOutput', reqId, stream: 'info', data: '(empty command)\n', done: true });
+        return;
+    }
+
+    const cwd = getSettings().workspacePath || os.homedir();
+
+    // Choose shell: WSL on Windows if available, else PowerShell, else bash
+    let shellExe, shellArgs;
+    if (process.platform === 'win32') {
+        // Try WSL first (same logic as bash.mjs)
+        const { spawnSync } = require('child_process');
+        let wslOk = false;
+        try {
+            const r = spawnSync('wsl.exe', ['--status'], { encoding: 'utf-8', timeout: 3000, windowsHide: true });
+            wslOk = r.status === 0;
+        } catch { /* ignore */ }
+
+        if (wslOk) {
+            shellExe = 'wsl.exe';
+            shellArgs = ['bash', '-c', command];
+        } else {
+            shellExe = 'powershell.exe';
+            shellArgs = ['-NoProfile', '-NonInteractive', '-Command', command];
+        }
+    } else {
+        shellExe = 'bash';
+        shellArgs = ['-c', command];
+    }
+
+    const { spawn } = require('child_process');
+    const proc = spawn(shellExe, shellArgs, {
+        cwd,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+    });
+
+    let totalBytes = 0;
+
+    const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+
+    proc.stdout.on('data', (chunk) => {
+        const text = stripAnsi(chunk.toString());
+        totalBytes += text.length;
+        if (totalBytes < MAX_TERMINAL_BYTES) {
+            send({ type: 'terminalOutput', reqId, stream: 'stdout', data: text, done: false });
+        }
+    });
+
+    proc.stderr.on('data', (chunk) => {
+        const text = stripAnsi(chunk.toString());
+        totalBytes += text.length;
+        if (totalBytes < MAX_TERMINAL_BYTES) {
+            send({ type: 'terminalOutput', reqId, stream: 'stderr', data: text, done: false });
+        }
+    });
+
+    proc.on('close', (code) => {
+        const exitMsg = code !== 0 ? `\nProcess exited with code ${code}\n` : '';
+        send({ type: 'terminalOutput', reqId, stream: 'info', data: exitMsg, done: true, exitCode: code });
+    });
+
+    proc.on('error', (err) => {
+        send({ type: 'terminalOutput', reqId, stream: 'stderr', data: `Error: ${err.message}\n`, done: true, exitCode: -1 });
+    });
 }
 
 // ── Handle prompt run with context files ─────────────────────────────────────

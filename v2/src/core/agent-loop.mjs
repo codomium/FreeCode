@@ -272,19 +272,48 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 }
 
 function detectProvider(model) {
+    // Check user-configured custom providers first
+    if (findCustomProvider(model)) return 'custom';
     if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) return 'openai';
     if (model.startsWith('gemini')) return 'google';
     if (isNvidiaModel(model)) return 'nvidia';
     return 'anthropic';
 }
 
+/**
+ * Find a custom provider definition (from CUSTOM_PROVIDERS_JSON) that owns
+ * the given model ID.  Returns the provider object or null.
+ */
+function findCustomProvider(model) {
+    const json = process.env.CUSTOM_PROVIDERS_JSON;
+    if (!json) return null;
+    try {
+        const providers = JSON.parse(json);
+        if (!Array.isArray(providers)) return null;
+        for (const p of providers) {
+            const models = p.models || [];
+            const matches = models.some(m =>
+                (typeof m === 'string' ? m : m.id) === model
+            );
+            if (matches) return p;
+        }
+    } catch { /* ignore malformed JSON */ }
+    return null;
+}
+
 async function callApi(provider, model, state, toolDefs, settings) {
+    if (provider === 'custom') {
+        return callCustomProvider(findCustomProvider(model), model, state, toolDefs, settings, false);
+    }
     const callers = { anthropic: callAnthropic, openai: callOpenAI, google: callGoogle, nvidia: callNvidia };
     const caller = callers[provider] || callers.anthropic;
     return caller(model, state, toolDefs, settings, false);
 }
 
 async function callApiStreaming(provider, model, state, toolDefs, settings) {
+    if (provider === 'custom') {
+        return callCustomProvider(findCustomProvider(model), model, state, toolDefs, settings, true);
+    }
     const callers = { anthropic: callAnthropic, openai: callOpenAI, google: callGoogle, nvidia: callNvidia };
     const caller = callers[provider] || callers.anthropic;
     return caller(model, state, toolDefs, settings, true);
@@ -543,6 +572,99 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
 
     const data = await res.json();
     return convertNvidiaResponse(data);
+}
+
+/**
+ * Custom Provider — generic OpenAI-compatible endpoint.
+ *
+ * Reads configuration from a provider object (stored in CUSTOM_PROVIDERS_JSON):
+ *   { id, name, baseUrl, apiKey, models, headers }
+ *
+ * Supports streaming and non-streaming modes, tools (function calling),
+ * and arbitrary extra HTTP headers (e.g. Accept: text/event-stream).
+ */
+async function callCustomProvider(providerCfg, model, state, toolDefs, settings, stream) {
+    if (!providerCfg) throw new Error('Custom provider not found for model: ' + model);
+
+    const apiKey  = providerCfg.apiKey || process.env[`CUSTOM_${providerCfg.id.toUpperCase().replace(/-/g, '_')}_API_KEY`];
+    const baseUrl = (providerCfg.baseUrl || '').replace(/\/$/, '');
+    if (!baseUrl) throw new Error(`Custom provider "${providerCfg.id}": baseUrl is required`);
+    if (!apiKey)  throw new Error(`Custom provider "${providerCfg.id}": apiKey is required`);
+
+    const messages = buildOpenAIMessages(state);
+
+    const body = {
+        model,
+        messages,
+        max_tokens: settings.maxTokens || 16384,
+        temperature: 1.00,
+        top_p: 1.00,
+        stream: !!stream,
+        ...(!stream && toolDefs.length > 0 && {
+            tools: toolDefs.map(t => ({
+                type: 'function',
+                function: { name: t.name, description: t.description, parameters: t.input_schema },
+            })),
+        }),
+        // streaming + tool_call_delta requires tools in body too
+        ...(stream && toolDefs.length > 0 && {
+            tools: toolDefs.map(t => ({
+                type: 'function',
+                function: { name: t.name, description: t.description, parameters: t.input_schema },
+            })),
+        }),
+    };
+
+    // Build headers: start with mandatory auth + content-type, then add custom headers
+    const reqHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+    };
+    if (stream) {
+        reqHeaders['Accept'] = 'text/event-stream';
+    }
+    for (const h of (providerCfg.headers || [])) {
+        if (h.name && h.value !== undefined) {
+            reqHeaders[h.name] = h.value;
+        }
+    }
+
+    const rateLimiter = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
+    let res;
+    for (;;) {
+        res = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: reqHeaders,
+            body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') continue;
+            const err = await res.text();
+            throw new Error(`Custom provider "${providerCfg.id}" error ${res.status}: ${err}`);
+        }
+        break;
+    }
+
+    if (stream) {
+        const collected = [];
+        const eventGenerator = async function* () {
+            for await (const event of streamOpenAIResponse(res)) {
+                collected.push(event);
+                yield event;
+            }
+        };
+        return {
+            events: eventGenerator(),
+            get accumulated() {
+                return accumulateOpenAIStream(collected);
+            },
+        };
+    }
+
+    const data = await res.json();
+    return convertNvidiaResponse(data); // reuse OpenAI-compatible converter
 }
 
 /**
