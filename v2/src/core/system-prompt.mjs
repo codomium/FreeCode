@@ -332,7 +332,8 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `- Never say "I don't see any files" or ask the user to share code — you can read`,
         `  the workspace directly with your tools.`,
         process.platform === 'win32'
-            ? `- On Windows: use PowerShell commands (not bash/sh). Prefer Get-ChildItem, Get-Content, Copy-Item, etc.`
+            ? `- On Windows: bash/sh commands run via WSL if installed (full POSIX compatibility). ` +
+              `If WSL is not available, commands run in PowerShell — use Get-ChildItem, Get-Content, etc.`
             : '',
     ].filter(Boolean).join('\n');
 
