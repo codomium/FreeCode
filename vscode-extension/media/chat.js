@@ -538,9 +538,48 @@
      * Falls back to showing all new lines when files are too large.
      */
     function computeDiff(aLines, bLines) {
+        // For large files where the full O(n*m) LCS is too expensive, use a
+        // fast hash-based approximation that correctly marks equal lines as context.
         if (aLines.length * bLines.length > 400000) {
-            return bLines.map(l => ({ type: 'add', line: l }));
+            const result = [];
+            const bSet = new Map();
+            for (let j = 0; j < bLines.length; j++) {
+                if (!bSet.has(bLines[j])) bSet.set(bLines[j], []);
+                bSet.get(bLines[j]).push(j);
+            }
+            const usedB = new Uint8Array(bLines.length);
+            const mapping = new Array(aLines.length).fill(-1);
+            for (let i = 0; i < aLines.length; i++) {
+                const candidates = bSet.get(aLines[i]);
+                if (candidates) {
+                    for (const bIdx of candidates) {
+                        if (!usedB[bIdx]) {
+                            mapping[i] = bIdx;
+                            usedB[bIdx] = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            let bi = 0;
+            for (let ai = 0; ai < aLines.length; ai++) {
+                const bMapped = mapping[ai];
+                if (bMapped === -1) {
+                    result.push({ type: 'remove', line: aLines[ai] });
+                } else {
+                    while (bi < bMapped) {
+                        result.push({ type: 'add', line: bLines[bi++] });
+                    }
+                    result.push({ type: 'equal', line: aLines[ai] });
+                    bi = bMapped + 1;
+                }
+            }
+            while (bi < bLines.length) {
+                result.push({ type: 'add', line: bLines[bi++] });
+            }
+            return result;
         }
+
         const n = aLines.length, m = bLines.length;
         const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
         for (let i = 1; i <= n; i++) {

@@ -710,9 +710,57 @@
      * Falls back to showing all new lines when files are too large.
      */
     function computeDiff(aLines, bLines) {
+        // For large files where the full O(n*m) LCS is too expensive, use a
+        // fast hash-based patience-diff approximation:
+        //   1. Mark lines with matching hashes as "equal"
+        //   2. Emit truly-removed lines from `a` and truly-added lines from `b`
+        // This avoids the old fallback that marked ALL lines in `b` as added.
         if (aLines.length * bLines.length > 400000) {
-            return bLines.map(l => ({ type: 'add', line: l }));
+            const result = [];
+            const bSet = new Map();
+            for (let j = 0; j < bLines.length; j++) {
+                if (!bSet.has(bLines[j])) bSet.set(bLines[j], []);
+                bSet.get(bLines[j]).push(j);
+            }
+            // Build a simple patience-like mapping: for each line in a, find if it
+            // exists in b (first unused occurrence) and mark as equal.
+            const usedB = new Uint8Array(bLines.length);
+            const mapping = new Array(aLines.length).fill(-1); // aIdx -> bIdx
+            for (let i = 0; i < aLines.length; i++) {
+                const candidates = bSet.get(aLines[i]);
+                if (candidates) {
+                    for (const bIdx of candidates) {
+                        if (!usedB[bIdx]) {
+                            mapping[i] = bIdx;
+                            usedB[bIdx] = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            // Walk both arrays using the mapping
+            let bi = 0;
+            for (let ai = 0; ai < aLines.length; ai++) {
+                const bMapped = mapping[ai];
+                if (bMapped === -1) {
+                    // Line removed from a
+                    result.push({ type: 'remove', line: aLines[ai] });
+                } else {
+                    // Emit any b-lines before bMapped as additions
+                    while (bi < bMapped) {
+                        result.push({ type: 'add', line: bLines[bi++] });
+                    }
+                    result.push({ type: 'equal', line: aLines[ai] });
+                    bi = bMapped + 1;
+                }
+            }
+            // Emit any remaining b-lines as additions
+            while (bi < bLines.length) {
+                result.push({ type: 'add', line: bLines[bi++] });
+            }
+            return result;
         }
+
         const n = aLines.length, m = bLines.length;
         const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
         for (let i = 1; i <= n; i++) {
@@ -3120,22 +3168,34 @@
         if (!cpListEl) return;
         cpListEl.innerHTML = '';
         if (customProviders.length === 0) {
-            cpListEl.innerHTML = '<div class="settings-note">No custom providers yet.</div>';
+            cpListEl.innerHTML = '<div class="settings-note" style="padding:12px 0;text-align:center;opacity:0.6">No custom providers yet. Click "+ Add Provider" to connect any OpenAI-compatible API.</div>';
             return;
         }
         for (let i = 0; i < customProviders.length; i++) {
             const p = customProviders[i];
-            const modelIds = (p.models || []).map(m => (typeof m === 'string' ? m : m.id));
+            const modelList = (p.models || []).map(m => (typeof m === 'string' ? m : (m.name || m.id)));
+            const modelStr = modelList.length > 0 ? modelList.join('  ·  ') : '(no models)';
+            // Pick a simple icon based on domain
+            const domain = (p.baseUrl || '').replace(/https?:\/\//, '').split('/')[0];
+            let icon = '🔌';
+            if (/openai|gpt/i.test(domain))    icon = '🤖';
+            else if (/nvidia|nim/i.test(domain)) icon = '⚡';
+            else if (/google|gemini/i.test(domain)) icon = '🌐';
+            else if (/mistral/i.test(domain))    icon = '🌪';
+            else if (/ollama|local/i.test(domain)) icon = '💻';
             const div = document.createElement('div');
             div.className = 'cp-entry';
             div.innerHTML = `
+                <span class="cp-entry-icon">${icon}</span>
                 <div class="cp-entry-info">
                     <div class="cp-entry-name">${escapeHtml(p.name || p.id)}</div>
                     <div class="cp-entry-url">${escapeHtml(p.baseUrl || '')}</div>
-                    <div class="cp-entry-models">${modelIds.map(escapeHtml).join(', ')}</div>
+                    <div class="cp-entry-models">${escapeHtml(modelStr)}</div>
                 </div>
-                <button class="cp-entry-btn" data-action="edit" data-idx="${i}">Edit</button>
-                <button class="cp-entry-btn del" data-action="delete" data-idx="${i}">✕</button>
+                <div class="cp-entry-actions">
+                    <button class="cp-entry-btn" data-action="edit" data-idx="${i}" title="Edit provider">✏ Edit</button>
+                    <button class="cp-entry-btn del" data-action="delete" data-idx="${i}" title="Remove provider">✕</button>
+                </div>
             `;
             cpListEl.appendChild(div);
         }
@@ -3180,7 +3240,7 @@
         cpEditIndex = idx;
         if (!cpFormEl) return;
         if (idx === -1) {
-            if (cpFormTitleEl) cpFormTitleEl.textContent = 'Add Provider';
+            if (cpFormTitleEl) cpFormTitleEl.innerHTML = '🔌 Add Custom Provider';
             if (cpFId)      cpFId.value = '';
             if (cpFName)    cpFName.value = '';
             if (cpFUrl)     cpFUrl.value = '';
@@ -3189,7 +3249,7 @@
             if (cpFHeaders) cpFHeaders.value = '';
         } else {
             const p = customProviders[idx];
-            if (cpFormTitleEl) cpFormTitleEl.textContent = 'Edit Provider';
+            if (cpFormTitleEl) cpFormTitleEl.innerHTML = '✏ Edit Provider';
             if (cpFId)      cpFId.value    = p.id || '';
             if (cpFName)    cpFName.value  = p.name || '';
             if (cpFUrl)     cpFUrl.value   = p.baseUrl || '';
@@ -4125,6 +4185,14 @@
                 errEl.textContent = 'Error: ' + tab.error;
                 editorContentEl.appendChild(errEl);
             } else {
+                // Wrap textarea with a line-number gutter (VSCode-style)
+                const editorWrapper = document.createElement('div');
+                editorWrapper.className = 'editor-with-line-nums';
+
+                const lineNumsEl = document.createElement('div');
+                lineNumsEl.className = 'editor-line-nums';
+                lineNumsEl.setAttribute('aria-hidden', 'true');
+
                 const textarea = document.createElement('textarea');
                 textarea.id = 'editor-file-view';
                 textarea.value = tab.content || '';
@@ -4132,6 +4200,23 @@
                 textarea.autocomplete = 'off';
                 textarea.setAttribute('autocorrect', 'off');
                 textarea.setAttribute('autocapitalize', 'off');
+
+                /** Rebuild the line-number gutter to match current content. */
+                function syncLineNums() {
+                    const lineCount = (textarea.value.match(/\n/g) || []).length + 1;
+                    lineNumsEl.innerHTML = '';
+                    for (let ln = 1; ln <= lineCount; ln++) {
+                        const span = document.createElement('span');
+                        span.textContent = ln;
+                        lineNumsEl.appendChild(span);
+                    }
+                }
+                syncLineNums();
+
+                // Keep the gutter scroll in sync with the textarea scroll
+                textarea.addEventListener('scroll', () => {
+                    lineNumsEl.scrollTop = textarea.scrollTop;
+                });
 
                 // Debounced auto-save timer
                 let saveTimer = null;
@@ -4145,6 +4230,7 @@
                 }
 
                 textarea.addEventListener('input', () => {
+                    syncLineNums();
                     markTabModified(tab.path);
                     scheduleAutoSave();
                 });
@@ -4167,12 +4253,15 @@
                         textarea.value = textarea.value.substring(0, start) + '    ' + textarea.value.substring(end);
                         textarea.selectionStart = textarea.selectionEnd = start + 4;
                         tab.content = textarea.value;
+                        syncLineNums();
                         markTabModified(tab.path);
                         scheduleAutoSave();
                     }
                 });
 
-                editorContentEl.appendChild(textarea);
+                editorWrapper.appendChild(lineNumsEl);
+                editorWrapper.appendChild(textarea);
+                editorContentEl.appendChild(editorWrapper);
             }
         }
     }

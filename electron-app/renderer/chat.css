@@ -2493,10 +2493,42 @@ select:focus { border-color: var(--accent); }
 .editor-empty-title { font-size: 14px; color: var(--text-dim); }
 .editor-empty-hint { font-size: 11px; text-align: center; max-width: 200px; }
 
-/* File content rendered in editor — editable textarea */
+/* File content rendered in editor — editable textarea with line number gutter */
+.editor-with-line-nums {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.editor-line-nums {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 16px 6px 16px 10px;
+  min-width: 42px;
+  box-sizing: border-box;
+  font-family: var(--font-code);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  overflow: hidden; /* scrolled programmatically in sync with textarea */
+  flex-shrink: 0;
+}
+.editor-line-nums span {
+  display: block;
+  opacity: 0.45;
+  text-align: right;
+  min-height: 1.65em;
+}
+
 #editor-file-view {
   display: block;
-  width: 100%;
+  flex: 1;
   height: 100%;
   padding: 16px;
   box-sizing: border-box;
@@ -3264,12 +3296,23 @@ select:focus { border-color: var(--accent); }
 .cp-entry {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: var(--bg-input);
+  gap: 10px;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 6px 10px;
+  border-radius: 8px;
+  padding: 10px 12px;
   font-size: 12px;
+  margin-bottom: 6px;
+  transition: border-color 0.15s;
+}
+.cp-entry:hover {
+  border-color: var(--accent);
+}
+
+.cp-entry-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .cp-entry-info {
@@ -3283,6 +3326,7 @@ select:focus { border-color: var(--accent); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 13px;
 }
 
 .cp-entry-url {
@@ -3291,32 +3335,47 @@ select:focus { border-color: var(--accent); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  margin-top: 1px;
 }
 
 .cp-entry-models {
   font-size: 10px;
-  color: var(--text-muted);
-  margin-top: 2px;
+  color: var(--accent);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-entry-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .cp-entry-btn {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-dim);
-  padding: 2px 6px;
-  border-radius: var(--radius);
+  padding: 3px 8px;
+  border-radius: 6px;
   font-size: 11px;
   cursor: pointer;
+  transition: all 0.15s;
   flex-shrink: 0;
 }
-.cp-entry-btn:hover { background: var(--bg-elevated); color: var(--text); }
+.cp-entry-btn:hover { background: var(--bg-input); color: var(--text); border-color: var(--accent); }
+.cp-entry-btn.del { border-color: transparent; }
 .cp-entry-btn.del:hover { background: var(--error-bg); color: var(--error-text); border-color: var(--error-text); }
 
 .cp-form-title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--accent);
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .cp-textarea {
@@ -3329,13 +3388,15 @@ select:focus { border-color: var(--accent); }
 .cp-form-actions {
   display: flex;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 #cp-form {
   border: 1px solid var(--accent);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  margin-top: 8px;
+  border-radius: 8px;
+  padding: 14px 14px 10px;
+  margin-top: 10px;
   background: var(--bg-elevated);
 }
