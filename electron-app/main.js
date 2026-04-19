@@ -1257,12 +1257,13 @@ ipcMain.on('renderer-message', async (event, msg) => {
 function handleRunInTerminal(code) {
     if (!code.trim()) return;
     const cwd = getSettings().workspacePath || os.homedir();
-    // On Windows: open a new cmd.exe window and run the code
+    const { spawn } = require('child_process');
+    // On Windows: open a new PowerShell window and run the code
     if (process.platform === 'win32') {
-        const { spawn } = require('child_process');
-        spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', code], { cwd, detached: true });
+        spawn('powershell.exe', [
+            '-NoProfile', '-NoExit', '-Command', code,
+        ], { cwd, detached: true, stdio: 'ignore', windowsHide: false });
     } else {
-        const { spawn } = require('child_process');
         spawn('bash', ['-c', code], { cwd, detached: true, stdio: 'ignore' });
     }
 }

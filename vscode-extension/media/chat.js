@@ -2619,6 +2619,126 @@
         });
     }
 
+    // ── Integrated Terminal Panel ─────────────────────────────────────────────
+    const terminalPanelEl   = document.getElementById('terminal-panel');
+    const terminalToggleBtn = document.getElementById('terminal-toggle-btn');
+    const terminalOutputEl  = document.getElementById('terminal-output');
+    const terminalInputEl   = document.getElementById('terminal-input');
+    const terminalRunBtn    = document.getElementById('terminal-run-btn');
+    const terminalClearBtn  = document.getElementById('terminal-clear-btn');
+    const terminalCloseBtn  = document.getElementById('terminal-close-btn');
+    const terminalCwdEl     = document.getElementById('terminal-cwd');
+
+    let terminalReqCounter = 0;
+    let terminalHistory    = [];
+    let terminalHistoryIdx = -1;
+
+    function appendTerminalLine(text, cssClass) {
+        if (!terminalOutputEl || !text) return;
+        const span = document.createElement('span');
+        span.className = cssClass || 'term-line-stdout';
+        span.textContent = text;
+        terminalOutputEl.appendChild(span);
+        const wrap = document.getElementById('terminal-output-wrap');
+        if (wrap) wrap.scrollTop = wrap.scrollHeight;
+    }
+
+    function openTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'flex';
+        if (terminalToggleBtn) terminalToggleBtn.classList.add('active');
+        if (terminalInputEl) terminalInputEl.focus();
+    }
+
+    function closeTerminal() {
+        if (!terminalPanelEl) return;
+        terminalPanelEl.style.display = 'none';
+        if (terminalToggleBtn) terminalToggleBtn.classList.remove('active');
+    }
+
+    function runTerminalCommand() {
+        if (!terminalInputEl) return;
+        const cmd = terminalInputEl.value.trim();
+        if (!cmd) return;
+        terminalHistory.unshift(cmd);
+        if (terminalHistory.length > 100) terminalHistory.pop();
+        terminalHistoryIdx = -1;
+        terminalInputEl.value = '';
+
+        appendTerminalLine(`$ ${cmd}\n`, 'term-line-cmd');
+
+        const reqId = `term-${++terminalReqCounter}`;
+        vscode.postMessage({ type: 'terminalRun', command: cmd, reqId });
+    }
+
+    if (terminalToggleBtn) {
+        terminalToggleBtn.addEventListener('click', () => {
+            if (!terminalPanelEl) return;
+            if (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        });
+    }
+
+    if (terminalCloseBtn) terminalCloseBtn.addEventListener('click', closeTerminal);
+
+    if (terminalClearBtn) {
+        terminalClearBtn.addEventListener('click', () => {
+            if (terminalOutputEl) terminalOutputEl.textContent = '';
+        });
+    }
+
+    if (terminalRunBtn) terminalRunBtn.addEventListener('click', runTerminalCommand);
+
+    if (terminalInputEl) {
+        terminalInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                runTerminalCommand();
+            } else if (e.key === 'ArrowUp') {
+                if (terminalHistoryIdx < terminalHistory.length - 1) {
+                    terminalHistoryIdx++;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                }
+                e.preventDefault();
+            } else if (e.key === 'ArrowDown') {
+                if (terminalHistoryIdx > 0) {
+                    terminalHistoryIdx--;
+                    terminalInputEl.value = terminalHistory[terminalHistoryIdx] || '';
+                } else {
+                    terminalHistoryIdx = -1;
+                    terminalInputEl.value = '';
+                }
+                e.preventDefault();
+            }
+        });
+    }
+
+    // Handle terminalOutput messages from extension host
+    window.addEventListener('message', (event) => {
+        const msg = event.data;
+        if (msg.type !== 'terminalOutput') return;
+        if (!terminalOutputEl) return;
+        const cssClass = msg.stream === 'stderr' ? 'term-line-stderr'
+                       : msg.stream === 'cmd'    ? 'term-line-cmd'
+                       : msg.stream === 'info'   ? 'term-line-info'
+                       : 'term-line-stdout';
+        if (msg.data) appendTerminalLine(msg.data, cssClass);
+    });
+
+    // Ctrl+` — toggle terminal
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+            e.preventDefault();
+            if (terminalPanelEl && (terminalPanelEl.style.display === 'none' || !terminalPanelEl.style.display)) {
+                openTerminal();
+            } else {
+                closeTerminal();
+            }
+        }
+    });
+
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });
 
