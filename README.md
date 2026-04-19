@@ -1,6 +1,6 @@
-# Open Claude Code
+# FreeCode
 
-An open-source, **Cursor-style AI coding assistant** with full tool access — read files, edit code, run commands, search the web, and more.  Runs everywhere: as a VS Code extension, a standalone Windows desktop app, or a Node.js CLI.
+An open-source, **VS Code-inspired AI coding assistant** with full tool access — read files, edit code, run commands, search the web, and more.  Runs everywhere: as a VS Code extension, a standalone Windows desktop app, or a Node.js CLI.
 
 ---
 
@@ -11,6 +11,80 @@ An open-source, **Cursor-style AI coding assistant** with full tool access — r
 | [`vscode-extension/`](./vscode-extension/README.md) | VS Code extension — Cursor-style sidebar chat panel + `@claude` chat participant |
 | [`electron-app/`](./electron-app/README.md) | Standalone Windows 11 desktop app built with Electron |
 | [`v2/`](./v2/README.md) | Agent loop CLI library — the engine used by both front-ends |
+
+---
+
+## What's New in v2.0
+
+### 🗂️ 3-Column IDE Layout (Electron app)
+
+The Electron app has been completely redesigned into a **VS Code-inspired 3-column IDE layout**:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  ✦ FreeCode  [session]  [Model ▾] [Mode ▾]  [History] [⚙]  │  ← Titlebar
+├─────────────────┬──────────────────────┬─────────────────────┤
+│   CHAT (left)   │  EDITOR (middle)     │  EXPLORER (right)   │
+│                 │                      │                      │
+│  messages       │  [tab][tab][tab ✕]   │  WORKSPACE/          │
+│  ...            │  ──────────────────  │  ▶ src/              │
+│  tool cards     │  syntax-highlighted  │    ├ main.js         │
+│                 │  file content        │    └ preload.js      │
+│  ─────────────  │  OR diff view        │  ▶ renderer/         │
+│  [input area]   │                      │    ├ index.html      │
+│  [stats bar]    │  [✓ Accept][✗ Reject]│    └ chat.js         │
+│                 │  (on diff tabs)      │                      │
+│                 │                      │  [+File][+Folder][↺] │
+└─────────────────┴──────────────────────┴─────────────────────┘
+   ↑ drag to resize ↑                  ↑ drag to resize ↑
+```
+
+- **Draggable resize handles** between each column (persisted across restarts)
+- **Panel collapse**: `Ctrl+B` hides/shows the chat column; `Ctrl+Shift+E` toggles the explorer
+
+### 📑 Editor Tabs (middle column)
+
+- Click any file in the Explorer to open it in the editor panel
+- Multiple tabs with **×** close buttons — `Ctrl+W` closes the active tab
+- Tabs persist file content and diff state independently
+
+### ⚡ Diff View with Accept / Reject
+
+When the agent edits a file a **diff tab opens automatically**:
+
+- 🔴 Removed lines in red, 🟢 added lines in green
+- **✓ Accept** — keeps the new content and converts to a normal view
+- **✗ Reject** — writes the original content back via `writeFile` IPC and closes the diff tab
+
+### 🔗 Clickable File Links in Chat
+
+File names and paths that the agent mentions in its replies are automatically rendered as **clickable links** (shown with an accent-coloured border):
+
+- Click any inline path like `` `renderer/chat.js` `` → opens the file in the editor panel
+- If the agent **just edited** that file, clicking it jumps straight to the **diff tab** so you can see exactly what changed
+- Works for relative paths (resolved against the current workspace), absolute paths, and plain filenames with known extensions
+
+### 🖱️ File Explorer Context Menu
+
+Right-click any file or folder to get:
+
+| Action | Description |
+|--------|-------------|
+| Open in Editor | Opens the file in a new editor tab |
+| New File | Prompts for a name and creates an empty file |
+| New Folder | Prompts for a name and creates a directory |
+| Rename | Renames the entry in-place |
+| Delete | Confirms then permanently deletes |
+| Copy Path | Copies the absolute path to the clipboard |
+| Add to Chat Context | Injects the file into the active chat prompt |
+
+### ⌨️ New Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+B` | Toggle chat panel (left column) |
+| `Ctrl+Shift+E` | Toggle file explorer (right column) |
+| `Ctrl+W` | Close the active editor tab |
 
 ---
 

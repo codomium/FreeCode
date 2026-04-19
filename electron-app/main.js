@@ -990,13 +990,90 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 const stats = fs.statSync(msg.path);
                 if (stats.size > MAX_BYTES) {
                     send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content: null,
-                        error: `File too large to display (${Math.round(stats.size/1024)} KB)` });
+                        error: `File too large to display (${Math.round(stats.size/1024)} KB)`,
+                        purpose: msg.purpose || null });
                 } else {
                     const content = fs.readFileSync(msg.path, 'utf8');
-                    send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content, size: stats.size });
+                    send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content, size: stats.size,
+                        purpose: msg.purpose || null });
                 }
             } catch (err) {
-                send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content: null, error: err.message });
+                send({ type: 'fileData', path: msg.path, name: path.basename(msg.path), content: null, error: err.message,
+                    purpose: msg.purpose || null });
+            }
+            break;
+        }
+
+        // ── IDE file operations ───────────────────────────────────────────────
+        case 'createFile': {
+            try {
+                const dir = path.dirname(msg.path);
+                fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(msg.path, '', 'utf8');
+                send({ type: 'fileCreated', path: msg.path, name: path.basename(msg.path) });
+            } catch (err) {
+                send({ type: 'fileOpError', op: 'createFile', path: msg.path, error: err.message });
+            }
+            break;
+        }
+
+        case 'createDir': {
+            try {
+                fs.mkdirSync(msg.path, { recursive: true });
+                send({ type: 'dirCreated', path: msg.path, name: path.basename(msg.path) });
+            } catch (err) {
+                send({ type: 'fileOpError', op: 'createDir', path: msg.path, error: err.message });
+            }
+            break;
+        }
+
+        case 'renameFile': {
+            try {
+                fs.renameSync(msg.oldPath, msg.newPath);
+                send({ type: 'fileRenamed', oldPath: msg.oldPath, newPath: msg.newPath });
+            } catch (err) {
+                send({ type: 'fileOpError', op: 'renameFile', path: msg.oldPath, error: err.message });
+            }
+            break;
+        }
+
+        case 'deleteFile': {
+            try {
+                fs.rmSync(msg.path, { recursive: true, force: true });
+                send({ type: 'fileDeleted', path: msg.path });
+            } catch (err) {
+                send({ type: 'fileOpError', op: 'deleteFile', path: msg.path, error: err.message });
+            }
+            break;
+        }
+
+        case 'writeFile': {
+            try {
+                fs.writeFileSync(msg.path, msg.content || '', 'utf8');
+                send({ type: 'fileWritten', path: msg.path, purpose: msg.purpose || null });
+            } catch (err) {
+                send({ type: 'fileOpError', op: 'writeFile', path: msg.path, error: err.message });
+            }
+            break;
+        }
+
+        case 'watchWorkspace': {
+            // Stop any existing watcher before starting a new one
+            if (global._workspaceWatcher) {
+                try { global._workspaceWatcher.close(); } catch (closeErr) {
+                    console.warn('watchWorkspace: error closing previous watcher:', closeErr.message);
+                }
+                global._workspaceWatcher = null;
+            }
+            const watchPath = msg.path || currentWorkspacePath;
+            if (watchPath && fs.existsSync(watchPath)) {
+                try {
+                    global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
+                        send({ type: 'fileWatchEvent', event, filename: filename || '' });
+                    });
+                } catch (watchErr) {
+                    console.warn('watchWorkspace: fs.watch failed for', watchPath, ':', watchErr.message);
+                }
             }
             break;
         }

@@ -1,8 +1,80 @@
-# Open Claude Code — Standalone Windows App
+# FreeCode — Standalone Windows App
 
-A standalone Windows 11 desktop application that implements the **Open Claude Code** AI coding assistant without requiring Visual Studio Code.
+A standalone Windows 11 desktop application that implements the **FreeCode** AI coding assistant without requiring Visual Studio Code.
 
-Built with [Electron](https://www.electronjs.org/), it reuses the same agent loop (`v2/src`) and chat UI from the VS Code extension, adapting them to run as a native Windows app.
+Built with [Electron](https://www.electronjs.org/), it reuses the same agent loop (`v2/src`) from the VS Code extension and presents it in a full **VS Code-inspired 3-column IDE layout**.
+
+---
+
+## What's New in v2.0
+
+### 🗂️ 3-Column IDE Layout
+
+The entire UI has been restructured into three resizable columns:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  ✦ FreeCode  [session]  [Model ▾] [Mode ▾]  [History] [⚙]  │  ← Titlebar
+├─────────────────┬──────────────────────┬─────────────────────┤
+│   CHAT (left)   │  EDITOR (middle)     │  EXPLORER (right)   │
+│                 │                      │                      │
+│  messages       │  [tab][tab][tab ✕]   │  WORKSPACE/          │
+│  ...            │  ──────────────────  │  ▶ src/              │
+│  tool cards     │  syntax-highlighted  │    ├ main.js         │
+│                 │  file content        │    └ preload.js      │
+│  ─────────────  │  OR diff view        │  ▶ renderer/         │
+│  [input area]   │                      │    ├ index.html      │
+│  [stats bar]    │  [✓ Accept][✗ Reject]│    └ chat.js         │
+│                 │  (on diff tabs)      │                      │
+│                 │                      │  [+File][+Folder][↺] │
+└─────────────────┴──────────────────────┴─────────────────────┘
+   ↑ drag to resize ↑                  ↑ drag to resize ↑
+```
+
+- Drag either **resize handle** between columns to set custom widths — remembered across restarts
+- **`Ctrl+B`** — collapse/expand the chat panel
+- **`Ctrl+Shift+E`** — collapse/expand the file explorer
+
+### 📑 Editor Tabs (middle column)
+
+Clicking a file in the Explorer opens it in the editor panel as a tab:
+
+- Multiple tabs open simultaneously — each shows file content in a monospace view
+- **`×`** button or **`Ctrl+W`** closes the active tab
+- Diff tabs are highlighted with ⚡ and show a before/after view
+
+### ⚡ Automatic Diff View
+
+When the AI agent edits a file a diff tab opens automatically:
+
+- 🔴 Removed lines highlighted in red
+- 🟢 Added lines highlighted in green
+- **✓ Accept** — keeps the agent's changes and switches to a normal view
+- **✗ Reject** — restores the original file and closes the diff tab
+
+### 🔗 Clickable File Links in Chat
+
+File names and paths mentioned by the agent in chat are rendered as **clickable links**:
+
+- Click an inline path like `` `renderer/chat.js` `` → opens the file in the editor tab
+- If the agent just edited that file, clicking it activates the **diff tab** so you see exactly what changed
+- Supports relative paths (resolved against the workspace), absolute paths, and plain filenames
+
+### 🖱️ File Explorer Context Menu
+
+Right-click any file or folder in the Explorer column for quick actions:
+
+| Action | Description |
+|--------|-------------|
+| Open in Editor | Opens the file in a new tab |
+| New File | Creates an empty file in the same directory |
+| New Folder | Creates a new directory |
+| Rename | Renames the entry |
+| Delete | Permanently deletes after confirmation |
+| Copy Path | Copies the absolute path to clipboard |
+| Add to Chat Context | Injects the file into the active prompt |
+
+Explorer toolbar buttons also let you create files/folders at the workspace root and refresh the tree.
 
 ---
 
@@ -118,14 +190,16 @@ The file explorer automatically refreshes when you change the workspace.
 
 ## Using the File Explorer
 
-Click the **Files** button in the header to open the file tree panel:
+The file explorer is now a **permanent right column** — always visible, no button needed.
 
 | Action | Result |
 |--------|--------|
 | Click a folder | Expand/collapse |
-| Click a file | Open in file viewer |
-| Hover a file → **+** | Add file to agent context |
-| Click ↻ (refresh) | Reload the file tree |
+| Click a file | Open in editor tab |
+| Right-click any item | Context menu (New File, Rename, Delete, Copy Path, …) |
+| `+File` button | New file at workspace root |
+| `+Folder` button | New folder at workspace root |
+| `↺` (refresh) button | Reload the file tree |
 
 Folders like `node_modules`, `.git`, `dist`, and `build` are hidden automatically.
 
@@ -171,13 +245,14 @@ electron-app/
 ├── main.js          # Electron main process
 │                    # — creates BrowserWindow
 │                    # — runs agent loop (v2/src) in-process
-│                    # — handles IPC messages from renderer
-│                    # — stores settings & history in %APPDATA%\Open Claude Code\
+│                    # — handles IPC: readFile, writeFile, createFile,
+│                    #     createDir, renameFile, deleteFile, watchWorkspace
+│                    # — stores settings & history in %APPDATA%\FreeCode\
 ├── preload.js       # Electron preload — exposes electronBridge IPC to renderer
 └── renderer/
-    ├── index.html   # Chat UI (with settings panel, file explorer, file viewer)
-    ├── chat.js      # Chat UI logic (settings, explorer, viewer, acquireVsCodeApi → electronBridge)
-    ├── chat.css     # Chat UI styles
+    ├── index.html   # 3-column IDE layout (chat | editor | explorer)
+    ├── chat.js      # UI logic: tabs, diff view, resize handles, context menu
+    ├── chat.css     # UI styles: workbench layout, panels, tabs, diff colours
     └── icon.svg     # App icon
 ```
 
@@ -217,6 +292,9 @@ All persistent data is stored in the Electron `userData` directory:
 
 | Shortcut | Action |
 |---|---|
+| `Ctrl+B` | Toggle chat panel (left column) |
+| `Ctrl+Shift+E` | Toggle file explorer (right column) |
+| `Ctrl+W` | Close the active editor tab |
 | `Ctrl+Shift+K` | Set API Key |
 | `Ctrl+Shift+O` | Open Workspace Folder |
 | `Ctrl+Shift+C` | Clear Session |
