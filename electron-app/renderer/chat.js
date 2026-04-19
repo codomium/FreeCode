@@ -3686,13 +3686,13 @@
                 function scheduleAutoSave() {
                     if (saveTimer) clearTimeout(saveTimer);
                     saveTimer = setTimeout(() => {
-                        vscode.postMessage({ type: 'writeFile', path: tab.path, content: tab.content, purpose: 'editor_autosave' });
+                        vscode.postMessage({ type: 'writeFile', path: tab.path, content: textarea.value, purpose: 'editor_autosave' });
+                        tab.content = textarea.value;
                         markTabSaved(tab.path);
                     }, 1000);
                 }
 
                 textarea.addEventListener('input', () => {
-                    tab.content = textarea.value;
                     markTabModified(tab.path);
                     scheduleAutoSave();
                 });
@@ -3702,7 +3702,9 @@
                     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                         e.preventDefault();
                         if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-                        vscode.postMessage({ type: 'writeFile', path: tab.path, content: tab.content, purpose: 'editor_save' });
+                        const content = textarea.value;
+                        vscode.postMessage({ type: 'writeFile', path: tab.path, content, purpose: 'editor_save' });
+                        tab.content = content;
                         markTabSaved(tab.path);
                     }
                     // Tab key inserts spaces instead of focusing next element
