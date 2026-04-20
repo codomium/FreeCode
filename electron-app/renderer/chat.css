@@ -1970,6 +1970,8 @@ select:focus { border-color: var(--accent); }
 }
 
 .settings-section-label {
+  display: flex;
+  align-items: center;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1978,6 +1980,13 @@ select:focus { border-color: var(--accent); }
   padding: 8px 12px 6px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+
+/* Reset padding for notes/subtitles embedded directly in a section label */
+.settings-section-label .settings-note {
+  padding: 0;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .settings-row {
@@ -3323,6 +3332,7 @@ select:focus { border-color: var(--accent); }
   flex-direction: column;
   gap: 6px;
   margin-bottom: 8px;
+  padding: 0 12px;
 }
 
 .cp-entry {
@@ -3429,7 +3439,7 @@ select:focus { border-color: var(--accent); }
   border: 1px solid var(--accent);
   border-radius: 8px;
   padding: 14px 14px 10px;
-  margin-top: 10px;
+  margin: 10px 12px 12px;
   background: var(--bg-elevated);
 }
 

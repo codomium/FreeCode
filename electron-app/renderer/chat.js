@@ -3773,7 +3773,11 @@
             if (cpFHeaders) cpFHeaders.value = headersToText(p.headers);
         }
         cpFormEl.style.display = 'block';
-        if (cpFId) cpFId.focus();
+        // Ensure the form is visible — it may be below the fold when the panel scrolls
+        requestAnimationFrame(() => {
+            cpFormEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            if (cpFId) cpFId.focus();
+        });
     }
 
     function closeCpForm() {
@@ -4055,7 +4059,6 @@
     function formatShellAvailability(shells) {
         const status = (ok) => (ok ? 'available' : 'unavailable');
         return `PowerShell: ${status(!!shells.powershell)} · WSL: ${status(!!shells.wsl)} · Ubuntu: ${status(!!shells.ubuntu)} · Bash: ${status(!!shells.bash)} · cmd: ${status(!!shells.cmd)}`;
-        updateMultiAgentUiState();
     }
 
     function openSettingsPanel() {
