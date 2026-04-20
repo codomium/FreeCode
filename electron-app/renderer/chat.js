@@ -2178,8 +2178,6 @@
             case 'fileRenamed':
             case 'fileDeleted':
             case 'fileWritten':
-                // Refresh explorer tree after any file operation
-                loadExplorerTree(currentWorkspacePath);
                 if (msg.type === 'fileDeleted') {
                     closeTab(msg.path);
                 }
@@ -2187,6 +2185,15 @@
                 if ((msg.purpose === 'editor_save' || msg.purpose === 'editor_autosave') && msg.path) {
                     markTabSaved(msg.path);
                 }
+                // Debounced tree refresh — prevents flooding when the agent writes many
+                // files in rapid succession (each write would otherwise trigger an
+                // immediate full directory scan that blocks the main process).
+                // Shares the same debounce timer as fileWatchEvent so that the
+                // workspace-watcher event that follows a write doesn't add a second scan.
+                if (fileWatchDebounce) clearTimeout(fileWatchDebounce);
+                fileWatchDebounce = setTimeout(() => {
+                    loadExplorerTree(currentWorkspacePath);
+                }, 500);
                 break;
 
             case 'fileOpError':

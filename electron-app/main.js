@@ -1445,10 +1445,12 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'listDirectory': {
             const dirPath = msg.path || getSettings().workspacePath || os.homedir();
             const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
-            function buildTree(dir, depth) {
+            // Async recursive builder — uses fs.promises.readdir so each readdir
+            // yields to the event loop, keeping the main process responsive.
+            const buildTree = async (dir, depth) => {
                 if (depth > 5) return [];
                 let entries;
-                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+                try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
                 const items = [];
                 for (const e of entries) {
                     if (e.isDirectory()) {
@@ -1457,7 +1459,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                             name:     e.name,
                             path:     path.join(dir, e.name),
                             type:     'dir',
-                            children: buildTree(path.join(dir, e.name), depth + 1),
+                            children: await buildTree(path.join(dir, e.name), depth + 1),
                         });
                     } else {
                         items.push({ name: e.name, path: path.join(dir, e.name), type: 'file' });
@@ -1468,9 +1470,9 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
                 });
                 return items;
-            }
+            };
             try {
-                const tree = buildTree(dirPath, 0);
+                const tree = await buildTree(dirPath, 0);
                 send({ type: 'directoryListing', path: dirPath, tree });
             } catch (err) {
                 send({ type: 'directoryListing', path: dirPath, tree: [], error: err.message });
