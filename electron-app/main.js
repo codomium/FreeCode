@@ -939,7 +939,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     const httpMod = targetUrl.startsWith('https://') ? require('https') : require('http');
                     const reqOpts = new URL(targetUrl);
                     const req = httpMod.get({ hostname: reqOpts.hostname, path: reqOpts.pathname + (reqOpts.search || ''),
-                        port: reqOpts.port, headers: { 'User-Agent': 'FreeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
+                        port: reqOpts.port, headers: { 'User-Agent': 'OpenClaudeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
                         (res) => {
                             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                                 resolve(`(redirect to ${res.headers.location} — please use the final URL directly)`);
@@ -949,14 +949,15 @@ ipcMain.on('renderer-message', async (event, msg) => {
                             res.on('data', (c) => chunks.push(c));
                             res.on('end', () => {
                                 let text = Buffer.concat(chunks).toString('utf8');
-                                // Strip HTML tags for readability
-                                text = text.replace(/<style[\s\S]*?<\/style>/gi, '')
-                                           .replace(/<script[\s\S]*?<\/script>/gi, '')
-                                           .replace(/<[^>]+>/g, ' ')
-                                           .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-                                           .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-                                           .replace(/\s{3,}/g, '\n\n')
-                                           .trim();
+                                // Remove embedded scripts and styles completely (content is used as
+                                // AI context text, not rendered as HTML — strip tags for readability).
+                                // Use character-class negation to avoid false tag reconstruction:
+                                text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, ' ');
+                                text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, ' ');
+                                // Remove remaining tags (non-greedy, no nesting needed for plain text)
+                                text = text.replace(/<[^>]*>/g, ' ');
+                                // Collapse whitespace
+                                text = text.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
                                 // Limit to ~20KB
                                 if (text.length > 20000) text = text.slice(0, 20000) + '\n…(truncated)';
                                 resolve(text);
