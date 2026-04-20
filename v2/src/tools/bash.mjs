@@ -10,82 +10,32 @@
  * - Live streaming output via async generator
  * - Interactive stdin via sendBashStdin(jobId, text)
  * - Windows support:
- *     1. Tries WSL (wsl.exe) first — works on Windows 11 with WSL installed.
- *     2. Falls back to PowerShell if WSL is not available.
+ *     Always uses PowerShell (powershell.exe) on Windows.
+ *     POSIX compatibility shims are injected so that common Unix commands
+ *     like `which`, `grep`, `cat`, and `touch` work inside PowerShell.
+ *     WSL is intentionally skipped to avoid line-ending (\r\n) issues and
+ *     path-translation errors that occur when mixing Windows and WSL paths.
  */
-import { spawn, spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 
 /** Detect platform once at module load time. */
 const IS_WINDOWS = process.platform === 'win32';
 
 /**
- * Check whether WSL is available on this Windows machine.
- * Runs `wsl.exe --status` synchronously and caches the result.
- * Returns false on non-Windows platforms.
- */
-let _wslAvailable = null;
-function isWslAvailable() {
-    if (!IS_WINDOWS) return false;
-    if (_wslAvailable !== null) return _wslAvailable;
-    try {
-        const result = spawnSync('wsl.exe', ['--status'], {
-            encoding: 'utf-8',
-            timeout: 5000,
-            windowsHide: true,
-        });
-        _wslAvailable = result.status === 0;
-    } catch {
-        _wslAvailable = false;
-    }
-    return _wslAvailable;
-}
-
-/**
- * Check whether the Ubuntu WSL distro is installed.
- * Uses `wsl.exe -d Ubuntu -- echo ok` to test the specific distro.
- * Falls back to the default WSL distro when Ubuntu is not available.
- *
- * Preferred priority on Windows:
- *   1. Ubuntu distro  (`wsl.exe -d Ubuntu -- bash -c "..."`)
- *   2. Default WSL    (`wsl.exe bash -c "..."`)
- *   3. PowerShell     (POSIX shims injected)
- */
-let _ubuntuAvailable = null;
-function isUbuntuWslAvailable() {
-    if (!isWslAvailable()) return false;
-    if (_ubuntuAvailable !== null) return _ubuntuAvailable;
-    try {
-        const result = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
-            encoding: 'utf-8',
-            timeout: 5000,
-            windowsHide: true,
-        });
-        _ubuntuAvailable = result.status === 0 && (result.stdout || '').trim() === 'ok';
-    } catch {
-        _ubuntuAvailable = false;
-    }
-    return _ubuntuAvailable;
-}
-
-/**
  * Return the name of the active shell for display purposes.
- * Used by UI components to show "Ubuntu", "WSL", or "PowerShell".
+ * Used by UI components to show "PowerShell" (Windows) or "bash" (Unix/macOS).
  */
 export function getActiveShellName() {
-    if (!IS_WINDOWS) return 'bash';
-    if (isUbuntuWslAvailable()) return 'Ubuntu';
-    if (isWslAvailable()) return 'WSL';
-    return 'PowerShell';
+    return IS_WINDOWS ? 'PowerShell' : 'bash';
 }
 
 /**
  * Return [shell, args] for executing a command string.
  *
- * Priority on Windows:
- *   1. WSL  — `wsl.exe bash -c "<command>"`  (preferred; full POSIX bash)
- *   2. PowerShell — `powershell.exe -NoProfile -NonInteractive -Command "<command>"`
- *      Prepends POSIX compatibility shims so that common Unix commands like
- *      `which`, `grep`, `cat`, and `touch` work correctly without WSL.
+ * On Windows: always uses PowerShell (`powershell.exe -NoProfile -NonInteractive -Command ...`).
+ *   POSIX compatibility shims are prepended so that common Unix commands work
+ *   without requiring WSL.  WSL is intentionally bypassed to prevent
+ *   `bash\r` line-ending errors and Windows-path / WSL-path mismatches.
  *
  * On Unix / macOS: `bash -c "<command>"`
  */
@@ -230,15 +180,8 @@ const POWERSHELL_POSIX_SHIMS = [
 
 function getShellArgs(command) {
     if (IS_WINDOWS) {
-        if (isUbuntuWslAvailable()) {
-            // Run inside the Ubuntu WSL distro — best POSIX compatibility.
-            return ['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-c', command]];
-        }
-        if (isWslAvailable()) {
-            // Run inside the default WSL distro's bash shell.
-            return ['wsl.exe', ['bash', '-c', command]];
-        }
-        // WSL not available — fall back to PowerShell with POSIX shims prepended.
+        // Always use PowerShell on Windows — no WSL, no bash.
+        // Prepend POSIX shims so common Unix utilities work out of the box.
         const wrapped = `${POWERSHELL_POSIX_SHIMS}; ${command}`;
         return ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', wrapped]];
     }

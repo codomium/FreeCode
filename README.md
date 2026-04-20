@@ -14,6 +14,49 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## Windows Terminal — PowerShell First
+
+On **Windows**, FreeCode always runs commands through **PowerShell** (`powershell.exe`).  
+WSL (Windows Subsystem for Linux) is intentionally **not used**, even when it is installed.
+
+### Why PowerShell instead of WSL?
+
+| Issue with WSL | How PowerShell fixes it |
+|----------------|------------------------|
+| Shell scripts saved with Windows line endings (`\r\n`) cause `/usr/bin/env: 'bash\r': No such file or directory` | PowerShell parses commands directly — no shebang lines, no `\r` errors |
+| Windows paths (`C:\Users\...`) are invalid inside WSL's Linux filesystem | PowerShell uses native Windows paths without translation |
+| Alpine/Ubuntu distro mismatch causes `No such file or directory` for packages | No WSL distro needed at all |
+
+### POSIX shims
+
+Because many AI-generated commands use Unix utilities (`grep`, `cat`, `touch`, `ls`, `find`, `sed`, …), FreeCode automatically injects **PowerShell POSIX shims** before every command.  These thin wrappers map the most common Unix commands to their PowerShell equivalents so commands like:
+
+```powershell
+grep "error" log.txt
+find . -name "*.dart"
+cat pubspec.yaml
+```
+
+work out of the box inside PowerShell without any extra setup.
+
+### Running Flutter / Dart commands
+
+All Flutter and Dart CLI commands work exactly as expected:
+
+```powershell
+flutter analyze
+flutter pub get
+dart format .
+```
+
+You can also invoke them explicitly via PowerShell:
+
+```powershell
+powershell.exe -Command "flutter analyze"
+```
+
+---
+
 ## What's New in v2.3
 
 ### 🔌 Custom Providers UI — Redesigned Settings Cards
