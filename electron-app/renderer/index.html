@@ -551,6 +551,15 @@
         </select>
       </div>
       <div class="settings-row">
+        <label class="settings-label" for="setting-persona">AI Persona</label>
+        <select id="setting-persona" class="settings-select">
+          <option value="expert-engineer">expert-engineer</option>
+          <option value="pair-programmer">pair-programmer</option>
+          <option value="code-reviewer">code-reviewer</option>
+          <option value="architect">architect</option>
+        </select>
+      </div>
+      <div class="settings-row">
         <label class="settings-label" for="setting-max-turns">Max Agent Turns</label>
         <input type="number" id="setting-max-turns" class="settings-input settings-input-sm" min="1" max="200" step="1">
       </div>
@@ -560,6 +569,22 @@
           <input type="checkbox" id="setting-show-tool-output">
           <span class="toggle-slider"></span>
         </label>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-multi-agent-enabled">Enable Multi-Agent Mode</label>
+        <label class="toggle-switch" id="setting-multi-agent-enabled-wrap">
+          <input type="checkbox" id="setting-multi-agent-enabled">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="settings-row" id="setting-multi-agent-strategy-row" style="display:none">
+        <label class="settings-label" for="setting-multi-agent-strategy">Multi-Agent Strategy</label>
+        <select id="setting-multi-agent-strategy" class="settings-select">
+          <option value="parallel">parallel</option>
+          <option value="sequential">sequential</option>
+          <option value="debate">debate</option>
+          <option value="voting">voting</option>
+        </select>
       </div>
     </div>
 
@@ -584,6 +609,9 @@
       <div class="settings-section-label">Custom Providers
         <button class="settings-action-btn" id="cp-add-btn" style="margin-left:8px;font-size:11px">+ Add Provider</button>
       </div>
+      <div class="settings-note" id="cp-multi-agent-banner" style="margin-bottom:8px">
+        Multi-Agent Mode requires at least 3 active providers. You have 0/3.
+      </div>
       <div id="cp-list">
         <!-- Rendered dynamically -->
       </div>
@@ -601,7 +629,23 @@
         </div>
         <div class="settings-row">
           <label class="settings-label" for="cp-f-url">Base URL</label>
-          <input type="text" id="cp-f-url" class="settings-input" placeholder="https://integrate.api.nvidia.com/v1">
+          <input type="text" id="cp-f-url" list="cp-provider-base-urls" class="settings-input" placeholder="https://integrate.api.nvidia.com/v1">
+          <datalist id="cp-provider-base-urls">
+            <option value="https://api.anthropic.com/v1">Anthropic (Claude)</option>
+            <option value="https://api.openai.com/v1">OpenAI</option>
+            <option value="https://generativelanguage.googleapis.com/v1beta/openai">Google Gemini</option>
+            <option value="https://integrate.api.nvidia.com/v1">NVIDIA NIM</option>
+            <option value="https://api.groq.com/openai/v1">Groq</option>
+            <option value="https://api.together.xyz/v1">Together AI</option>
+            <option value="https://openrouter.ai/api/v1">OpenRouter</option>
+            <option value="https://api.mistral.ai/v1">Mistral AI</option>
+            <option value="https://api.cohere.ai/compatibility/v1">Cohere</option>
+            <option value="https://api.deepseek.com/v1">DeepSeek</option>
+            <option value="https://api.perplexity.ai">Perplexity</option>
+            <option value="https://api.x.ai/v1">xAI (Grok)</option>
+            <option value="https://api.fireworks.ai/inference/v1">Fireworks AI</option>
+            <option value="https://api.cerebras.ai/v1">Cerebras</option>
+          </datalist>
         </div>
         <div class="settings-row">
           <label class="settings-label" for="cp-f-key">API Key</label>

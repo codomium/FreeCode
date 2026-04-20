@@ -1,7 +1,7 @@
 {
   "name": "open-claude-code",
-  "productName": "Open Claude Code",
-  "version": "1.0.0",
+  "productName": "FreeCode AI IDE",
+  "version": "2.0.0",
   "description": "Open Claude Code — standalone AI coding assistant for Windows 11",
   "main": "main.js",
   "scripts": {
@@ -24,8 +24,8 @@
   },
   "build": {
     "appId": "com.openclaudecode.app",
-    "productName": "Open Claude Code",
-    "copyright": "Copyright © 2025 Open Claude Code",
+    "productName": "FreeCode AI IDE",
+    "copyright": "Copyright © 2026 FreeCode AI IDE",
     "directories": {
       "output": "dist"
     },
@@ -35,7 +35,8 @@
       "dialog-preload.js",
       "api-key-dialog.html",
       "renderer/**/*",
-      "!renderer/node_modules/**/*"
+      "!renderer/node_modules/**/*",
+      "multi-agent-orchestrator.js"
     ],
     "extraResources": [
       {

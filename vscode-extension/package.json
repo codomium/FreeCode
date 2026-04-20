@@ -1,8 +1,8 @@
 {
   "name": "open-claude-code",
-  "displayName": "Open Claude Code",
-  "description": "AI coding assistant powered by Claude \u2014 Cursor-style chat panel with file context, code apply, tool visualization and more",
-  "version": "1.5.0",
+  "displayName": "FreeCode — AI IDE",
+  "description": "Powerful AI coding IDE with multi-agent orchestration, codebase indexing, inline diff editing, and support for 20+ AI providers.",
+  "version": "2.0.0",
   "publisher": "open-claude-code",
   "engines": {
     "vscode": "^1.90.0"
@@ -17,7 +17,14 @@
     "chat",
     "coding assistant",
     "anthropic",
-    "cursor"
+    "cursor",
+    "multi-agent",
+    "ai-ide",
+    "openai",
+    "gemini",
+    "groq",
+    "together",
+    "openrouter"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -86,6 +93,14 @@
       {
         "command": "openClaudeCode.inlineEdit",
         "title": "Open Claude Code: Inline Edit Selection (Ctrl+K)"
+      },
+      {
+        "command": "openClaudeCode.manageProviders",
+        "title": "Open Claude Code: Manage Providers"
+      },
+      {
+        "command": "openClaudeCode.toggleMultiAgent",
+        "title": "Open Claude Code: Toggle Multi-Agent Mode"
       }
     ],
     "keybindings": [
@@ -128,13 +143,13 @@
             "OpenAI GPT-4o",
             "OpenAI GPT-4o Mini",
             "Google Gemini 2.0 Flash",
-            "NVIDIA NIM \u2014 Moonshot AI Kimi K2.5 (full tool access; enable nvidiaThinkingMode for reasoning mode)",
-            "NVIDIA NIM \u2014 Llama 3.1 Nemotron 70B Instruct",
-            "NVIDIA NIM \u2014 Meta Llama 3.1 405B Instruct",
-            "NVIDIA NIM \u2014 Meta Llama 3.3 70B Instruct",
-            "NVIDIA NIM \u2014 Mistral Large 2 Instruct",
-            "NVIDIA NIM \u2014 Mixtral 8x22B Instruct",
-            "NVIDIA NIM \u2014 DeepSeek R1 (full tool access; enable nvidiaThinkingMode for reasoning mode)"
+            "NVIDIA NIM — Moonshot AI Kimi K2.5 (full tool access; enable nvidiaThinkingMode for reasoning mode)",
+            "NVIDIA NIM — Llama 3.1 Nemotron 70B Instruct",
+            "NVIDIA NIM — Meta Llama 3.1 405B Instruct",
+            "NVIDIA NIM — Meta Llama 3.3 70B Instruct",
+            "NVIDIA NIM — Mistral Large 2 Instruct",
+            "NVIDIA NIM — Mixtral 8x22B Instruct",
+            "NVIDIA NIM — DeepSeek R1 (full tool access; enable nvidiaThinkingMode for reasoning mode)"
           ],
           "description": "AI model to use for the chat participant"
         },
@@ -146,7 +161,7 @@
         "openClaudeCode.nvidiaThinkingMode": {
           "type": "boolean",
           "default": false,
-          "description": "Enable extended thinking (reasoning) mode for capable NVIDIA NIM models (kimi-k2.5, deepseek-r1). When enabled, the model reasons step-by-step but cannot use live tools (Read, Bash, Grep, etc.) \u2014 a workspace snapshot is injected instead. When disabled (default), these models use full tool-calling mode just like any other provider."
+          "description": "Enable extended thinking (reasoning) mode for capable NVIDIA NIM models (kimi-k2.5, deepseek-r1). When enabled, the model reasons step-by-step but cannot use live tools (Read, Bash, Grep, etc.) — a workspace snapshot is injected instead. When disabled (default), these models use full tool-calling mode just like any other provider."
         },
         "openClaudeCode.permissionMode": {
           "type": "string",
@@ -161,7 +176,7 @@
           "enumDescriptions": [
             "Ask for permission before each tool use",
             "Automatically approve safe operations",
-            "Plan mode \u2014 read only, no file edits",
+            "Plan mode — read only, no file edits",
             "Automatically accept file edits without asking",
             "Bypass all permission checks"
           ],
@@ -196,6 +211,43 @@
             "type": "string"
           },
           "description": "File paths pinned to every new conversation as context"
+        },
+        "openClaudeCode.multiAgentEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable multi-agent orchestration when 3+ providers are configured."
+        },
+        "openClaudeCode.multiAgentStrategy": {
+          "type": "string",
+          "default": "parallel",
+          "enum": [
+            "parallel",
+            "sequential",
+            "debate",
+            "voting"
+          ],
+          "description": "Multi-agent orchestration strategy."
+        },
+        "openClaudeCode.providers": {
+          "type": "array",
+          "default": [],
+          "description": "Configured AI providers used for multi-agent mode."
+        },
+        "openClaudeCode.autoContextFromIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Attach top relevant indexed files as additional context."
+        },
+        "openClaudeCode.systemPromptPreset": {
+          "type": "string",
+          "default": "expert-engineer",
+          "enum": [
+            "expert-engineer",
+            "pair-programmer",
+            "code-reviewer",
+            "architect"
+          ],
+          "description": "AI persona preset used for system prompt behavior."
         }
       }
     }
