@@ -32,6 +32,7 @@ const { MultiAgentOrchestrator } = require('./multi-agent-orchestrator');
 
 const MAX_SESSION_MESSAGES = 200;
 const RETRY_DELAYS_MS = [3000, 8000, 20000];
+const MIN_MULTI_AGENT_PROVIDERS = 3;
 
 /** Returns true for rate-limit / server-overload errors worth retrying. */
 function isRateLimitError(msg) {
@@ -1143,7 +1144,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 ? msg.multiAgentEnabled
                 : !!curr.multiAgentEnabled;
             const multiAgentStrategy = msg.multiAgentStrategy || curr.multiAgentStrategy || 'parallel';
-            if (multiAgentEnabled && providers.length < 3) {
+            if (multiAgentEnabled && providers.length < MIN_MULTI_AGENT_PROVIDERS) {
                 send({
                     type: 'customProvidersError',
                     message: 'Multi-Agent Mode requires at least 3 configured providers.',

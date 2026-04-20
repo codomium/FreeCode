@@ -59,8 +59,9 @@ class MultiAgentOrchestrator {
     async run(message, onEvent) {
         this._isCancelled = false;
         const providers = this._activeProviders();
-        if (providers.length < 2) {
-            onEvent({ type: 'error', message: 'Multi-Agent mode needs at least 2 active providers for fallback.' });
+        const MIN_ACTIVE_RUNTIME_PROVIDERS = 2;
+        if (providers.length < MIN_ACTIVE_RUNTIME_PROVIDERS) {
+            onEvent({ type: 'error', message: 'Multi-Agent mode needs at least 2 active providers at runtime (UI setup still requires 3 configured providers).' });
             onEvent({ type: 'stop', reason: 'error' });
             return;
         }

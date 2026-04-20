@@ -31,6 +31,7 @@ const BRIDGE_SCRIPT  = path.join(__dirname, 'agent-bridge.mjs');
 // Maximum number of user/assistant messages kept in a persisted session.
 // Applies to both the in-progress activeSession and updated history entries.
 const MAX_SESSION_MESSAGES = 200;
+const MIN_MULTI_AGENT_PROVIDERS = 3;
 
 // ── Rate-limit retry ─────────────────────────────────────────────────────────
 /** Backoff delays (ms) for successive retry attempts */
@@ -1114,8 +1115,16 @@ async function testProviderConnection(provider) {
     const url = String(provider.baseUrl || '').replace(/\/+$/, '') + '/models';
     const headers = { Authorization: `Bearer ${provider.apiKey || ''}` };
     const res = await fetch(url, { method: 'GET', headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+        const providerLabel = provider?.name || provider?.id || 'Unknown provider';
+        throw new Error(`HTTP ${res.status} ${res.statusText} when testing ${providerLabel}`);
+    }
     return true;
+}
+
+function extractCodeBlockText(text) {
+    const m = String(text || '').match(/```(?:[\w+-]+)?\n([\s\S]*?)```/);
+    return (m ? m[1] : text || '').trim();
 }
 
 // ── Activation / deactivation ────────────────────────────────────────────────
@@ -1218,11 +1227,11 @@ function activate(context) {
             }
             const selection = editor.selection;
             const selectedText = editor.document.getText(selection.isEmpty ? undefined : selection);
-            const instruction = await vscode.window.showInputBox({
+            const editInstruction = await vscode.window.showInputBox({
                 prompt: 'Inline edit instruction',
                 placeHolder: 'e.g., optimize this function and add error handling',
             });
-            if (!instruction) return;
+            if (!editInstruction) return;
             let cancelled = false;
             let proposed = '';
             await vscode.window.withProgress({
@@ -1235,7 +1244,7 @@ function activate(context) {
                 const prompt = [
                     'Rewrite the provided code according to the instruction.',
                     'Return only the edited code.',
-                    `Instruction: ${instruction}`,
+                    `Instruction: ${editInstruction}`,
                     'Code:',
                     '```',
                     selectedText,
@@ -1248,8 +1257,7 @@ function activate(context) {
                 });
             });
             if (cancelled || !proposed.trim()) return;
-            const codeMatch = proposed.match(/```(?:[\w+-]+)?\n([\s\S]*?)```/);
-            const editedCode = (codeMatch ? codeMatch[1] : proposed).trim();
+            const editedCode = extractCodeBlockText(proposed);
             if (!editedCode) return;
             const originalDoc = editor.document;
             const before = selectedText;
@@ -1340,8 +1348,8 @@ function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand('openClaudeCode.toggleMultiAgent', async () => {
             const providers = context.globalState.get('openClaudeCode.providers', []);
-            if (providers.length < 3) {
-                vscode.window.showErrorMessage('Configure at least 3 providers in "Open Claude Code: Manage Providers" before enabling Multi-Agent Mode.');
+            if (providers.length < MIN_MULTI_AGENT_PROVIDERS) {
+                vscode.window.showErrorMessage(`Configure at least ${MIN_MULTI_AGENT_PROVIDERS} providers in "Open Claude Code: Manage Providers" before enabling Multi-Agent Mode.`);
                 return;
             }
             const config = vscode.workspace.getConfiguration('openClaudeCode');

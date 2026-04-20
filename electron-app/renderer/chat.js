@@ -3170,6 +3170,7 @@
     // ── Custom Providers state ────────────────────────────────────────────────
     let customProviders = [];   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
     let cpEditIndex = -1;       // -1 = adding new; >=0 = editing existing
+    const MIN_MULTI_AGENT_PROVIDERS = 3;
     let multiAgentEnabled = false;
     let multiAgentStrategy = 'parallel';
     const providerValidation = new Map();
@@ -3190,9 +3191,9 @@
 
     function updateMultiAgentUiState() {
         const count = customProviders.length;
-        const canEnable = count >= 3;
+        const canEnable = count >= MIN_MULTI_AGENT_PROVIDERS;
         if (cpMultiAgentBanner) {
-            cpMultiAgentBanner.textContent = `Multi-Agent Mode requires at least 3 active providers. You have ${count}/3.`;
+            cpMultiAgentBanner.textContent = `Multi-Agent Mode requires at least ${MIN_MULTI_AGENT_PROVIDERS} active providers. You have ${count}/${MIN_MULTI_AGENT_PROVIDERS}.`;
             cpMultiAgentBanner.style.color = canEnable ? 'var(--success)' : 'var(--warning)';
         }
         if (settingMultiAgentEnabled) {
@@ -3219,6 +3220,7 @@
             const modelStr = modelList.length > 0 ? modelList.join('  ·  ') : '(no models)';
             const status = providerValidation.get(p.id);
             const badge = status === true ? '✅' : (status === false ? '❌' : '⚪');
+            const statusText = status === true ? 'validated' : (status === false ? 'validation failed' : 'not tested');
             // Pick a simple icon based on domain
             const domain = (p.baseUrl || '').replace(/https?:\/\//, '').split('/')[0];
             let icon = '🔌';
@@ -3234,7 +3236,7 @@
                 <div class="cp-entry-info">
                     <div class="cp-entry-name">${escapeHtml(p.name || p.id)}</div>
                     <div class="cp-entry-url">${escapeHtml(p.baseUrl || '')}</div>
-                    <div class="cp-entry-models">${badge} ${escapeHtml(modelStr)}</div>
+                    <div class="cp-entry-models" title="Provider status: ${escapeHtml(statusText)}">${badge} ${escapeHtml(statusText)} · ${escapeHtml(modelStr)}</div>
                 </div>
                 <div class="cp-entry-actions">
                     <button class="cp-entry-btn" data-action="test" data-idx="${i}" title="Test provider connection">Test</button>
@@ -3468,10 +3470,10 @@
     }
     if (settingMultiAgentEnabled) {
         settingMultiAgentEnabled.addEventListener('change', () => {
-            if (customProviders.length < 3) {
+            if (customProviders.length < MIN_MULTI_AGENT_PROVIDERS) {
                 settingMultiAgentEnabled.checked = false;
                 multiAgentEnabled = false;
-                addSystemMessage('⚠ Add at least 3 providers to enable Multi-Agent Mode.');
+                addSystemMessage(`⚠ Add at least ${MIN_MULTI_AGENT_PROVIDERS} providers to enable Multi-Agent Mode (minimum is 3).`);
                 updateMultiAgentUiState();
                 return;
             }
