@@ -194,8 +194,12 @@
     const settingsPickWorkspace = document.getElementById('settings-pick-workspace');
     const settingModel         = document.getElementById('setting-model');
     const settingMode          = document.getElementById('setting-mode');
+    const settingPersona       = document.getElementById('setting-persona');
     const settingMaxTurns      = document.getElementById('setting-max-turns');
     const settingShowToolOutput = document.getElementById('setting-show-tool-output');
+    const settingMultiAgentEnabled = document.getElementById('setting-multi-agent-enabled');
+    const settingMultiAgentStrategy = document.getElementById('setting-multi-agent-strategy');
+    const settingMultiAgentStrategyRow = document.getElementById('setting-multi-agent-strategy-row');
     const settingsSetKeyBtn    = document.getElementById('settings-set-key-btn');
     const settingNvidiaKey     = document.getElementById('setting-nvidia-key');
     const settingsSaveNvidiaBtn = document.getElementById('settings-save-nvidia-btn');
@@ -2060,6 +2064,23 @@
                 break;
             }
 
+            case 'customProvidersError': {
+                addSystemMessage(`⚠ ${msg.message || 'Failed to save providers.'}`);
+                if (settingMultiAgentEnabled) settingMultiAgentEnabled.checked = false;
+                multiAgentEnabled = false;
+                updateMultiAgentUiState();
+                break;
+            }
+
+            case 'providerValidated': {
+                if (msg && msg.id) providerValidation.set(msg.id, !!msg.ok);
+                renderCustomProviders();
+                addSystemMessage(msg.ok
+                    ? `✅ Provider "${msg.id}" validated.`
+                    : `❌ Provider "${msg.id}" validation failed: ${msg.error || 'unknown error'}`);
+                break;
+            }
+
             default:
                 break;
         }
@@ -3149,6 +3170,10 @@
     // ── Custom Providers state ────────────────────────────────────────────────
     let customProviders = [];   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
     let cpEditIndex = -1;       // -1 = adding new; >=0 = editing existing
+    const MIN_MULTI_AGENT_PROVIDERS = 3;
+    let multiAgentEnabled = false;
+    let multiAgentStrategy = 'parallel';
+    const providerValidation = new Map();
 
     const cpListEl      = document.getElementById('cp-list');
     const cpFormEl      = document.getElementById('cp-form');
@@ -3162,6 +3187,24 @@
     const cpFKey        = document.getElementById('cp-f-key');
     const cpFModels     = document.getElementById('cp-f-models');
     const cpFHeaders    = document.getElementById('cp-f-headers');
+    const cpMultiAgentBanner = document.getElementById('cp-multi-agent-banner');
+
+    function updateMultiAgentUiState() {
+        const count = customProviders.length;
+        const canEnable = count >= MIN_MULTI_AGENT_PROVIDERS;
+        if (cpMultiAgentBanner) {
+            cpMultiAgentBanner.textContent = `Multi-Agent Mode requires at least ${MIN_MULTI_AGENT_PROVIDERS} active providers. You have ${count}/${MIN_MULTI_AGENT_PROVIDERS}.`;
+            cpMultiAgentBanner.style.color = canEnable ? 'var(--success)' : 'var(--warning)';
+        }
+        if (settingMultiAgentEnabled) {
+            settingMultiAgentEnabled.disabled = !canEnable;
+            if (!canEnable) settingMultiAgentEnabled.checked = false;
+        }
+        if (!canEnable) multiAgentEnabled = false;
+        if (settingMultiAgentStrategyRow) {
+            settingMultiAgentStrategyRow.style.display = multiAgentEnabled ? '' : 'none';
+        }
+    }
 
     /** Render the custom providers list in the settings panel */
     function renderCustomProviders() {
@@ -3175,6 +3218,9 @@
             const p = customProviders[i];
             const modelList = (p.models || []).map(m => (typeof m === 'string' ? m : (m.name || m.id)));
             const modelStr = modelList.length > 0 ? modelList.join('  ·  ') : '(no models)';
+            const status = providerValidation.get(p.id);
+            const badge = status === true ? '✅' : (status === false ? '❌' : '⚪');
+            const statusText = status === true ? 'validated' : (status === false ? 'validation failed' : 'not tested');
             // Pick a simple icon based on domain
             const domain = (p.baseUrl || '').replace(/https?:\/\//, '').split('/')[0];
             let icon = '🔌';
@@ -3190,15 +3236,17 @@
                 <div class="cp-entry-info">
                     <div class="cp-entry-name">${escapeHtml(p.name || p.id)}</div>
                     <div class="cp-entry-url">${escapeHtml(p.baseUrl || '')}</div>
-                    <div class="cp-entry-models">${escapeHtml(modelStr)}</div>
+                    <div class="cp-entry-models" title="Provider status: ${escapeHtml(statusText)}">${badge} ${escapeHtml(statusText)} · ${escapeHtml(modelStr)}</div>
                 </div>
                 <div class="cp-entry-actions">
+                    <button class="cp-entry-btn" data-action="test" data-idx="${i}" title="Test provider connection">Test</button>
                     <button class="cp-entry-btn" data-action="edit" data-idx="${i}" title="Edit provider">✏ Edit</button>
                     <button class="cp-entry-btn del" data-action="delete" data-idx="${i}" title="Remove provider">✕</button>
                 </div>
             `;
             cpListEl.appendChild(div);
         }
+        updateMultiAgentUiState();
     }
 
     /** Parse models textarea lines ("id:Name" or "id") into [{id,name}] */
@@ -3294,7 +3342,12 @@
     function saveCustomProviders() {
         renderCustomProviders();
         injectCustomProviderModels();
-        vscode.postMessage({ type: 'saveCustomProviders', providers: customProviders });
+        vscode.postMessage({
+            type: 'saveCustomProviders',
+            providers: customProviders,
+            multiAgentEnabled,
+            multiAgentStrategy,
+        });
     }
 
     /** Inject model options from custom providers into both model selects */
@@ -3333,6 +3386,9 @@
             const idx = parseInt(btn.dataset.idx, 10);
             if (btn.dataset.action === 'edit') {
                 openCpForm(idx);
+            } else if (btn.dataset.action === 'test') {
+                const p = customProviders[idx];
+                vscode.postMessage({ type: 'validateProvider', provider: p });
             } else if (btn.dataset.action === 'delete') {
                 customProviders.splice(idx, 1);
                 saveCustomProviders();
@@ -3347,13 +3403,19 @@
         if (settingMode)           settingMode.value        = msg.mode || 'default';
         if (settingMaxTurns)       settingMaxTurns.value    = msg.maxTurns || 20;
         if (settingShowToolOutput) settingShowToolOutput.checked = msg.showToolOutput !== false;
+        if (settingPersona)        settingPersona.value = msg.systemPromptPreset || 'expert-engineer';
         if (settingNvidiaKey)      settingNvidiaKey.placeholder = msg.hasNvidiaKey ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
+        multiAgentEnabled = !!msg.multiAgentEnabled;
+        multiAgentStrategy = msg.multiAgentStrategy || 'parallel';
+        if (settingMultiAgentEnabled) settingMultiAgentEnabled.checked = multiAgentEnabled;
+        if (settingMultiAgentStrategy) settingMultiAgentStrategy.value = multiAgentStrategy;
         // Custom providers
-        if (Array.isArray(msg.customProviders)) {
-            customProviders = msg.customProviders;
+        if (Array.isArray(msg.providers || msg.customProviders)) {
+            customProviders = msg.providers || msg.customProviders;
             renderCustomProviders();
             injectCustomProviderModels();
         }
+        updateMultiAgentUiState();
     }
 
     function openSettingsPanel() {
@@ -3386,6 +3448,11 @@
             if (modeSelect) modeSelect.value = val;
         });
     }
+    if (settingPersona) {
+        settingPersona.addEventListener('change', () => {
+            vscode.postMessage({ type: 'saveSettings', key: 'systemPromptPreset', value: settingPersona.value || 'expert-engineer' });
+        });
+    }
 
     if (settingMaxTurns) {
         settingMaxTurns.addEventListener('change', () => {
@@ -3399,6 +3466,26 @@
     if (settingShowToolOutput) {
         settingShowToolOutput.addEventListener('change', () => {
             vscode.postMessage({ type: 'saveSettings', key: 'showToolOutput', value: settingShowToolOutput.checked });
+        });
+    }
+    if (settingMultiAgentEnabled) {
+        settingMultiAgentEnabled.addEventListener('change', () => {
+            if (customProviders.length < MIN_MULTI_AGENT_PROVIDERS) {
+                settingMultiAgentEnabled.checked = false;
+                multiAgentEnabled = false;
+                addSystemMessage(`⚠ Add at least ${MIN_MULTI_AGENT_PROVIDERS} providers to enable Multi-Agent Mode (minimum is 3).`);
+                updateMultiAgentUiState();
+                return;
+            }
+            multiAgentEnabled = !!settingMultiAgentEnabled.checked;
+            updateMultiAgentUiState();
+            saveCustomProviders();
+        });
+    }
+    if (settingMultiAgentStrategy) {
+        settingMultiAgentStrategy.addEventListener('change', () => {
+            multiAgentStrategy = settingMultiAgentStrategy.value || 'parallel';
+            saveCustomProviders();
         });
     }
 
@@ -4641,4 +4728,3 @@
     vscode.postMessage({ type: 'ready' });
 
 }());
-

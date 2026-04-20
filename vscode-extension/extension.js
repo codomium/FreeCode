@@ -24,12 +24,14 @@ const vscode = require('vscode');
 const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { CodebaseIndexer } = require('./indexer');
 
 const PARTICIPANT_ID = 'open-claude-code.claude';
 const BRIDGE_SCRIPT  = path.join(__dirname, 'agent-bridge.mjs');
 // Maximum number of user/assistant messages kept in a persisted session.
 // Applies to both the in-progress activeSession and updated history entries.
 const MAX_SESSION_MESSAGES = 200;
+const MIN_MULTI_AGENT_PROVIDERS = 3;
 
 // ── Rate-limit retry ─────────────────────────────────────────────────────────
 /** Backoff delays (ms) for successive retry attempts */
@@ -238,6 +240,8 @@ let extensionContext = null;
 
 /** @type {ClaudeCodeViewProvider | null} */
 let viewProvider = null;
+let codeIndexer = null;
+let indexStats = null;
 
 async function getBridge() {
     if (bridge && bridge.isRunning) return bridge;
@@ -262,6 +266,14 @@ async function getBridge() {
     env.CLAUDE_CODE_PERMISSION_MODE  = permissionMode;
     env.CLAUDE_CODE_MAX_TURNS        = String(config.get('maxTurns') || 20);
     env.NVIDIA_THINKING_MODE         = String(config.get('nvidiaThinkingMode') || false);
+    env.SYSTEM_PROMPT_PRESET         = String(config.get('systemPromptPreset') || 'expert-engineer');
+    env.MULTI_AGENT_ENABLED          = String(!!config.get('multiAgentEnabled'));
+    env.MULTI_AGENT_STRATEGY         = String(config.get('multiAgentStrategy') || 'parallel');
+    const providers = extensionContext?.globalState.get('openClaudeCode.providers', []) || [];
+    if (providers.length > 0) {
+        env.MULTI_AGENT_PROVIDERS_JSON = JSON.stringify(providers);
+        env.CUSTOM_PROVIDERS_JSON = JSON.stringify(providers);
+    }
 
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
@@ -349,6 +361,7 @@ class ClaudeCodeViewProvider {
                     activeSession: activeMessages,
                     activeSessionId,
                 });
+                if (indexStats) this.postMessage({ type: 'workspaceIndexed', stats: indexStats });
                 break;
             }
 
@@ -800,6 +813,23 @@ class ClaudeCodeViewProvider {
             }
         }
 
+        const promptConfig2 = vscode.workspace.getConfiguration('openClaudeCode');
+        if (promptConfig2.get('autoContextFromIndex') !== false && codeIndexer) {
+            const idxFiles = codeIndexer.searchIndex(message || '', 5).map((f) => f.path);
+            if (idxFiles.length > 0) {
+                const blocks = [];
+                for (const fp of idxFiles) {
+                    if (allPaths.has(fp)) continue;
+                    try {
+                        const content = fs.readFileSync(fp, 'utf8');
+                        const rel = vscode.workspace.asRelativePath(fp);
+                        blocks.push('\n\n--- Indexed file: ' + rel + ' ---\n' + content);
+                    } catch { /* ignore */ }
+                }
+                if (blocks.length > 0) fullPrompt += '\n\n[Indexed context:]' + blocks.join('');
+            }
+        }
+
         let agentBridge;
         try {
             agentBridge = await getBridge();
@@ -928,6 +958,10 @@ class ClaudeCodeViewProvider {
     }
 
     async _searchFiles(query) {
+        if (codeIndexer && codeIndexer.ready && query) {
+            const fromIndex = codeIndexer.searchIndex(query, 20);
+            if (fromIndex.length > 0) return fromIndex;
+        }
         const pattern = query ? ('**/*' + query + '*') : '**/*';
         const uris = await vscode.workspace.findFiles(pattern, '**/node_modules/**', 20);
         return uris.map((u) => ({
@@ -1059,10 +1093,45 @@ async function handleChatRequest(request, _context, stream, token) {
     flushText();
 }
 
+const PROVIDER_PRESETS = [
+    ['anthropic', 'Anthropic (Claude)', 'https://api.anthropic.com/v1'],
+    ['openai', 'OpenAI', 'https://api.openai.com/v1'],
+    ['gemini', 'Google Gemini', 'https://generativelanguage.googleapis.com/v1beta/openai'],
+    ['nvidia', 'NVIDIA NIM', 'https://integrate.api.nvidia.com/v1'],
+    ['groq', 'Groq', 'https://api.groq.com/openai/v1'],
+    ['together', 'Together AI', 'https://api.together.xyz/v1'],
+    ['openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1'],
+    ['mistral', 'Mistral AI', 'https://api.mistral.ai/v1'],
+    ['cohere', 'Cohere', 'https://api.cohere.ai/compatibility/v1'],
+    ['deepseek', 'DeepSeek', 'https://api.deepseek.com/v1'],
+    ['perplexity', 'Perplexity', 'https://api.perplexity.ai'],
+    ['xai', 'xAI (Grok)', 'https://api.x.ai/v1'],
+    ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1'],
+    ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1'],
+    ['custom', 'Custom', ''],
+];
+
+async function testProviderConnection(provider) {
+    const url = String(provider.baseUrl || '').replace(/\/+$/, '') + '/models';
+    const headers = { Authorization: `Bearer ${provider.apiKey || ''}` };
+    const res = await fetch(url, { method: 'GET', headers });
+    if (!res.ok) {
+        const providerLabel = provider?.name || provider?.id || 'Unknown provider';
+        throw new Error(`HTTP ${res.status} ${res.statusText} when testing ${providerLabel}`);
+    }
+    return true;
+}
+
+function extractCodeBlockText(text) {
+    const m = String(text || '').match(/```(?:[\w+-]+)?\n([\s\S]*?)```/);
+    return (m ? m[1] : text || '').trim();
+}
+
 // ── Activation / deactivation ────────────────────────────────────────────────
 
 function activate(context) {
     extensionContext = context;
+    codeIndexer = new CodebaseIndexer();
 
     // Sidebar webview panel
     viewProvider = new ClaudeCodeViewProvider(context);
@@ -1158,16 +1227,136 @@ function activate(context) {
             }
             const selection = editor.selection;
             const selectedText = editor.document.getText(selection.isEmpty ? undefined : selection);
-            const fileName = path.basename(editor.document.fileName);
-            await vscode.commands.executeCommand('claudeCode.chatView.focus');
-            if (viewProvider) {
-                viewProvider.postMessage({
-                    type: 'inlineEditRequest',
+            const editInstruction = await vscode.window.showInputBox({
+                prompt: 'Inline edit instruction',
+                placeHolder: 'e.g., optimize this function and add error handling',
+            });
+            if (!editInstruction) return;
+            let cancelled = false;
+            let proposed = '';
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Open Claude Code: generating inline edit…',
+                cancellable: true,
+            }, async (_progress, token) => {
+                token.onCancellationRequested(() => { cancelled = true; });
+                const bridge = await getBridge();
+                const prompt = [
+                    'Rewrite the provided code according to the instruction.',
+                    'Return only the edited code.',
+                    `Instruction: ${editInstruction}`,
+                    'Code:',
+                    '```',
                     selectedText,
-                    fileName,
-                    hasSelection: !selection.isEmpty,
+                    '```',
+                ].join('\n');
+                await bridge.run(prompt, (event) => {
+                    if (cancelled) return;
+                    if (event.type === 'stream_event' && event.text) proposed += event.text;
+                    if (event.type === 'assistant' && event.content && !event._streamed) proposed += event.content;
+                });
+            });
+            if (cancelled || !proposed.trim()) return;
+            const editedCode = extractCodeBlockText(proposed);
+            if (!editedCode) return;
+            const originalDoc = editor.document;
+            const before = selectedText;
+            const after = editedCode;
+            const left = await vscode.workspace.openTextDocument({ content: before, language: originalDoc.languageId });
+            const right = await vscode.workspace.openTextDocument({ content: after, language: originalDoc.languageId });
+            await vscode.commands.executeCommand(
+                'vscode.diff',
+                left.uri,
+                right.uri,
+                `Inline Edit Diff: ${path.basename(originalDoc.fileName)}`
+            );
+            const choice = await vscode.window.showInformationMessage(
+                'Inline edit ready',
+                '✅ Accept',
+                '❌ Reject'
+            );
+            if (choice === '✅ Accept') {
+                await editor.edit((eb) => {
+                    const range = selection.isEmpty
+                        ? new vscode.Range(originalDoc.positionAt(0), originalDoc.positionAt(originalDoc.getText().length))
+                        : selection;
+                    eb.replace(range, editedCode);
                 });
             }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('openClaudeCode.manageProviders', async () => {
+            const key = 'openClaudeCode.providers';
+            let providers = context.globalState.get(key, []);
+            while (true) {
+                const choice = await vscode.window.showQuickPick(
+                    ['Add Provider', 'Remove Provider', 'Test Provider', 'Done'],
+                    { title: `Providers configured: ${providers.length}` }
+                );
+                if (!choice || choice === 'Done') break;
+                if (choice === 'Add Provider') {
+                    const preset = await vscode.window.showQuickPick(
+                        PROVIDER_PRESETS.map(([id, label, url]) => ({ label, id, url })),
+                        { title: 'Select provider preset' }
+                    );
+                    if (!preset) continue;
+                    const apiKey = await vscode.window.showInputBox({ prompt: `${preset.label} API key`, password: true });
+                    if (!apiKey) continue;
+                    let baseUrl = preset.url;
+                    if (preset.id === 'custom') {
+                        baseUrl = await vscode.window.showInputBox({ prompt: 'Custom provider base URL (OpenAI-compatible)' }) || '';
+                    }
+                    const model = await vscode.window.showInputBox({ prompt: 'Default model ID for this provider' });
+                    if (!model) continue;
+                    providers.push({
+                        id: `${preset.id}-${Date.now()}`,
+                        name: preset.label,
+                        baseUrl,
+                        apiKey,
+                        models: [{ id: model, name: model }],
+                        headers: [],
+                    });
+                    await context.globalState.update(key, providers);
+                } else if (choice === 'Remove Provider') {
+                    if (!providers.length) { vscode.window.showInformationMessage('No providers to remove.'); continue; }
+                    const pick = await vscode.window.showQuickPick(
+                        providers.map((p, i) => ({ label: p.name || p.id, description: p.baseUrl, i }))
+                    );
+                    if (pick) {
+                        providers.splice(pick.i, 1);
+                        await context.globalState.update(key, providers);
+                    }
+                } else if (choice === 'Test Provider') {
+                    if (!providers.length) { vscode.window.showInformationMessage('No providers to test.'); continue; }
+                    const pick = await vscode.window.showQuickPick(
+                        providers.map((p, i) => ({ label: p.name || p.id, description: p.baseUrl, i }))
+                    );
+                    if (!pick) continue;
+                    try {
+                        await testProviderConnection(providers[pick.i]);
+                        vscode.window.showInformationMessage(`✅ ${providers[pick.i].name || providers[pick.i].id} connected.`);
+                    } catch (err) {
+                        vscode.window.showErrorMessage(`❌ Provider test failed: ${err.message}`);
+                    }
+                }
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('openClaudeCode.toggleMultiAgent', async () => {
+            const providers = context.globalState.get('openClaudeCode.providers', []);
+            if (providers.length < MIN_MULTI_AGENT_PROVIDERS) {
+                vscode.window.showErrorMessage(`Configure at least ${MIN_MULTI_AGENT_PROVIDERS} providers in "Open Claude Code: Manage Providers" before enabling Multi-Agent Mode.`);
+                return;
+            }
+            const config = vscode.workspace.getConfiguration('openClaudeCode');
+            const next = !config.get('multiAgentEnabled');
+            await config.update('multiAgentEnabled', next, vscode.ConfigurationTarget.Global);
+            vscode.window.showInformationMessage(`Multi-Agent Mode ${next ? 'enabled' : 'disabled'}.`);
+            if (bridge) { bridge.dispose(); bridge = null; }
         })
     );
 
@@ -1179,6 +1368,13 @@ function activate(context) {
             }
         })
     );
+
+    setTimeout(async () => {
+        try {
+            indexStats = await codeIndexer.build();
+            if (viewProvider) viewProvider.postMessage({ type: 'workspaceIndexed', stats: indexStats });
+        } catch { /* no-op */ }
+    }, 0);
 }
 
 function deactivate() {
