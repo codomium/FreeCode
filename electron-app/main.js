@@ -411,7 +411,6 @@ class InProcessAgentBridge {
     }
 
     setGoal(goal, sessionId) {
-        this._model = this._model; // no-op touch
         if (this._loop) {
             this._loop.state.sessionGoal = goal || null;
             if (sessionId) this._loop.state.sessionId = sessionId;
