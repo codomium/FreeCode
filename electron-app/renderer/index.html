@@ -252,6 +252,10 @@
               <div class="welcome-tip"><span class="tip-key">Enter</span> send message</div>
               <div class="welcome-tip"><span class="tip-key">Shift+Enter</span> newline</div>
               <div class="welcome-tip"><span class="tip-key">@file</span> add file to context</div>
+              <div class="welcome-tip"><span class="tip-key">@folder</span> inject directory tree</div>
+              <div class="welcome-tip"><span class="tip-key">@url:https://…</span> fetch page</div>
+              <div class="welcome-tip"><span class="tip-key">@symbols</span> workspace symbols</div>
+              <div class="welcome-tip"><span class="tip-key">Ctrl+↑/↓</span> history cycling</div>
               <div class="welcome-tip"><span class="tip-key">📄</span> pick file from workspace</div>
             </div>
             <div class="welcome-examples">
@@ -291,7 +295,7 @@
           <textarea
             id="user-input"
             rows="1"
-            placeholder="Ask something… (@file for context)"
+            placeholder="Ask something… (@file, @folder, @url:… for context)"
             spellcheck="true"
           ></textarea>
           <div id="input-actions">
@@ -343,6 +347,7 @@
           <span><span class="hint-key">Ctrl+L</span> focus</span>
           <span><span class="hint-key">Esc</span> stop</span>
           <span><span class="hint-key">@</span> add file</span>
+          <span><span class="hint-key">Ctrl+↑↓</span> history</span>
           <span id="char-count" class="char-count-hint"></span>
         </div>
       </div>
@@ -600,6 +605,20 @@
         </div>
       </div>
       <div class="settings-note" id="settings-key-status"></div>
+    </div>
+
+    <!-- ── MCP Servers ─────────────────────────────────────────── -->
+    <div class="settings-section">
+      <div class="settings-section-label">MCP Servers
+        <span class="settings-note" style="font-weight:normal;margin-left:6px">Model Context Protocol — extend the agent with extra tools</span>
+      </div>
+      <div id="mcp-list">
+        <!-- Rendered dynamically -->
+      </div>
+      <div class="settings-note" style="margin-top:8px">
+        Enabled servers are started automatically when you send a message. Requires the server package to be installed (e.g. via <code>npm install -g</code>).
+        Changes take effect on the next conversation turn.
+      </div>
     </div>
 
     <!-- ── Custom Providers ─────────────────────────────────── -->

@@ -52,7 +52,36 @@
     let pendingApply = null;     // { code, language }
     let activeToolCards = {};    // toolName -> dom element
     let sessionMessages = [];    // tracked messages for history saving
-    let lastUserMessage = '';    // for ↑ recall and regenerate
+    let lastUserMessage = '';    // for regenerate
+
+    // ── Prompt history (Ctrl+Up / Ctrl+Down cycling) ─────────────────────────
+    const PROMPT_HISTORY_MAX = 50;
+    let promptHistory = [];      // newest first
+    let promptHistoryIdx = -1;   // -1 = not cycling; 0..N = current position
+    let promptHistoryDraft = ''; // text saved before cycling began
+
+    (function loadPromptHistory() {
+        try {
+            const raw = localStorage.getItem('freecode_prompt_history');
+            if (raw) promptHistory = JSON.parse(raw).slice(0, PROMPT_HISTORY_MAX);
+        } catch { /* ignore */ }
+    }());
+
+    function savePromptHistory() {
+        try {
+            localStorage.setItem('freecode_prompt_history', JSON.stringify(promptHistory.slice(0, PROMPT_HISTORY_MAX)));
+        } catch { /* ignore */ }
+    }
+
+    function pushPromptHistory(text) {
+        if (!text || !text.trim()) return;
+        // Deduplicate: remove existing copy so it moves to front
+        promptHistory = promptHistory.filter(h => h !== text);
+        promptHistory.unshift(text);
+        if (promptHistory.length > PROMPT_HISTORY_MAX) promptHistory.length = PROMPT_HISTORY_MAX;
+        savePromptHistory();
+        promptHistoryIdx = -1;
+    }
     let autoScroll = true;       // auto-scroll while streaming
     let pinnedFiles = [];        // files pinned across sessions
     let currentSessionId = null; // null for new sessions; history entry ID when continuing a saved session
@@ -1545,6 +1574,65 @@
         vscode.postMessage({ type: 'getOpenEditors' });
     }
 
+    // ── @folder — inject workspace directory tree as context chip ────────────
+    function requestFolderContext() {
+        vscode.postMessage({ type: 'getFolderTree' });
+    }
+    function addFolderContext(tree) {
+        if (contextFiles.find(f => f.isFolder)) {
+            contextFiles = contextFiles.filter(f => !f.isFolder);
+        }
+        contextFiles.push({
+            name: '📁 folder tree',
+            path: '__folder__',
+            isFolder: true,
+            content: tree,
+            isGit: false,
+            isErrors: false,
+        });
+        renderContextFiles();
+    }
+
+    // ── @url — fetch URL and inject content as context chip ───────────────────
+    function requestUrlContext(url) {
+        vscode.postMessage({ type: 'fetchUrl', url });
+    }
+    function addUrlContext(url, content) {
+        const shortName = url.replace(/^https?:\/\//, '').slice(0, 40) + (url.length > 43 ? '…' : '');
+        if (contextFiles.find(f => f.urlSource === url)) {
+            contextFiles = contextFiles.filter(f => f.urlSource !== url);
+        }
+        contextFiles.push({
+            name: `🌐 ${shortName}`,
+            path: `__url__:${url}`,
+            urlSource: url,
+            isUrl: true,
+            isGit: false,
+            isErrors: false,
+            content,
+        });
+        renderContextFiles();
+    }
+
+    // ── @symbols — grep workspace for function/class names ───────────────────
+    function requestSymbolsContext() {
+        vscode.postMessage({ type: 'getSymbols' });
+    }
+    function addSymbolsContext(symbols) {
+        if (contextFiles.find(f => f.isSymbols)) {
+            contextFiles = contextFiles.filter(f => !f.isSymbols);
+        }
+        contextFiles.push({
+            name: '🔍 symbols',
+            path: '__symbols__',
+            isSymbols: true,
+            isGit: false,
+            isErrors: false,
+            content: symbols,
+        });
+        renderContextFiles();
+    }
+
     // ── Image paste chip ──────────────────────────────────────────────────────
     function addImageContext(name, dataUrl) {
         if (!contextFilesEl) return;
@@ -1947,6 +2035,18 @@
                 renderAutocomplete(msg.files || []);
                 break;
 
+            case 'folderTree':
+                addFolderContext(msg.content || '');
+                break;
+
+            case 'urlContent':
+                addUrlContext(msg.url || '', msg.content || '');
+                break;
+
+            case 'symbolsContext':
+                addSymbolsContext(msg.content || '');
+                break;
+
             case 'autoAttachState':
                 autoAttachActive = !!msg.enabled;
                 if (autoAttachBtn) autoAttachBtn.classList.toggle('active', autoAttachActive);
@@ -2235,14 +2335,18 @@
         for (const f of contextFiles) {
             const chip = document.createElement('div');
             chip.className = 'context-chip'
-                + (f.pinned    ? ' pinned'      : '')
-                + (f.isGit     ? ' chip-git'    : '')
-                + (f.isErrors  ? ' chip-errors' : '');
+                + (f.pinned    ? ' pinned'         : '')
+                + (f.isGit     ? ' chip-git'       : '')
+                + (f.isErrors  ? ' chip-errors'    : '')
+                + (f.isFolder  ? ' chip-folder'    : '')
+                + (f.isUrl     ? ' chip-url'       : '')
+                + (f.isSymbols ? ' chip-symbols'   : '');
             if (f.title) chip.title = f.title;
 
             const nameSpan = document.createElement('span');
             // Special chips carry their icon in the name; files get an icon prefix
-            const icon = f.isImage ? '🖼 ' : (f.isCodebase || f.isGit || f.isErrors) ? '' : (f.pinned ? '📌 ' : '📄 ');
+            const isSpecial = f.isImage || f.isCodebase || f.isGit || f.isErrors || f.isFolder || f.isUrl || f.isSymbols;
+            const icon = f.isImage ? '🖼 ' : isSpecial ? '' : (f.pinned ? '📌 ' : '📄 ');
             nameSpan.textContent = icon + f.name;
 
             if (f.isImage && f.dataUrl) {
@@ -2255,7 +2359,7 @@
                 chip.appendChild(img);
             }
 
-            if (!f.isCodebase && !f.isImage && !f.isGit && !f.isErrors) {
+            if (!f.isCodebase && !f.isImage && !f.isGit && !f.isErrors && !f.isFolder && !f.isUrl && !f.isSymbols) {
                 const pinBtn = document.createElement('button');
                 pinBtn.className = 'pin-btn';
                 pinBtn.title = f.pinned ? 'Unpin file' : 'Pin to all sessions';
@@ -2339,6 +2443,37 @@
                 return;
             }
 
+            // @folder — inject workspace directory tree as context chip
+            if (/@folder\b/.test(val)) {
+                inputEl.value = val.replace(/@folder\b/g, '').trim();
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                requestFolderContext();
+                hideAutocomplete();
+                return;
+            }
+
+            // @url:<address> or @url <address> — fetch URL and inject as context
+            const urlMention = val.match(/@url[:\s]+(https?:\/\/\S+)/);
+            if (urlMention) {
+                inputEl.value = val.replace(/@url[:\s]+https?:\/\/\S+/g, '').trim();
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                requestUrlContext(urlMention[1]);
+                hideAutocomplete();
+                return;
+            }
+
+            // @symbols — grep workspace for function/class symbols
+            if (/@symbols\b/.test(val)) {
+                inputEl.value = val.replace(/@symbols\b/g, '').trim();
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                requestSymbolsContext();
+                hideAutocomplete();
+                return;
+            }
+
             // Slash command autocomplete (when first char is /)
             const slashMatch = val.match(/^(\/[\w]*)$/);
             if (slashMatch) {
@@ -2373,15 +2508,41 @@
                 }
                 if (e.key === 'Escape') { hideAutocomplete(); return; }
             }
-            // Up arrow in empty input → recall last message
-            if (e.key === 'ArrowUp' && !inputEl.value && !autocompleteEl.classList.contains('visible')) {
-                if (lastUserMessage) {
-                    e.preventDefault();
-                    inputEl.value = lastUserMessage;
-                    inputEl.style.height = 'auto';
-                    inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
-                    inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+            // Ctrl+Up / Ctrl+Down — cycle through prompt history
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !autocompleteEl.classList.contains('visible')) {
+                e.preventDefault();
+                if (promptHistory.length === 0) return;
+                if (e.key === 'ArrowUp') {
+                    if (promptHistoryIdx === -1) promptHistoryDraft = inputEl.value;
+                    promptHistoryIdx = Math.min(promptHistoryIdx + 1, promptHistory.length - 1);
+                } else {
+                    promptHistoryIdx = promptHistoryIdx - 1;
                 }
+                const text = promptHistoryIdx < 0 ? promptHistoryDraft : (promptHistory[promptHistoryIdx] || '');
+                inputEl.value = text;
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+                return;
+            }
+            // Any other key resets history cycling so the draft is correct next time
+            if (!e.ctrlKey && !e.metaKey && e.key !== 'Shift' && e.key !== 'Alt' &&
+                e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
+                if (promptHistoryIdx !== -1) {
+                    promptHistoryDraft = '';
+                    promptHistoryIdx = -1;
+                }
+            }
+            // Up arrow in empty input → quick recall last message (keep legacy behavior)
+            if (e.key === 'ArrowUp' && !inputEl.value && !autocompleteEl.classList.contains('visible') &&
+                !e.ctrlKey && !e.metaKey && promptHistory.length > 0) {
+                e.preventDefault();
+                promptHistoryDraft = '';
+                promptHistoryIdx = 0;
+                inputEl.value = promptHistory[0] || '';
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
                 return;
             }
             // Escape cancels loading
@@ -2515,6 +2676,10 @@
         const rawText = inputEl.value.trim();
         if (!rawText || isLoading) return;
 
+        // Save to prompt history
+        pushPromptHistory(rawText);
+        promptHistoryIdx = -1;
+
         // ── /team slash command: transform into a structured multi-agent prompt ──
         // Syntax: first line = "/team [build|review|fullstack|debug]"
         //         remaining lines = the actual task description
@@ -2583,7 +2748,8 @@
             setLoading(true, `${cfg.label}: Thinking…`);
 
             const sendContextFiles = contextFiles
-                .filter(f => !f.isImage && !f.isCodebase && !f.isGit && !f.isErrors)
+                .filter(f => !f.isImage && !f.isCodebase && !f.isGit && !f.isErrors &&
+                             !f.isFolder && !f.isUrl && !f.isSymbols)
                 .map(f => f.path);
 
             vscode.postMessage({
@@ -2610,11 +2776,14 @@
         setSending(true);
         setLoading(true, 'Thinking…');
 
-        // Append inline content from special context chips (@git, @errors)
+        // Append inline content from special context chips (@git, @errors, @folder, @url, @symbols)
         const specialParts = [];
         for (const f of contextFiles) {
-            if (f.isGit && f.content)    specialParts.push('\n\n[Git Context]\n' + f.content);
-            if (f.isErrors && f.content) specialParts.push('\n\n[Workspace Problems]\n' + f.content);
+            if (f.isGit     && f.content) specialParts.push('\n\n[Git Context]\n' + f.content);
+            if (f.isErrors  && f.content) specialParts.push('\n\n[Workspace Problems]\n' + f.content);
+            if (f.isFolder  && f.content) specialParts.push('\n\n[Project Directory Tree]\n' + f.content);
+            if (f.isUrl     && f.content) specialParts.push(`\n\n[Web Page: ${f.urlSource || ''}]\n` + f.content);
+            if (f.isSymbols && f.content) specialParts.push('\n\n[Workspace Symbols]\n' + f.content);
         }
         // Inject active plan context so the agent always remembers the to-do list
         const planCtx = buildPlanContext();
@@ -2622,7 +2791,8 @@
 
         // Separate file paths from image/codebase/special context entries
         const sendContextFiles = contextFiles
-            .filter(f => !f.isImage && !f.isCodebase && !f.isGit && !f.isErrors)
+            .filter(f => !f.isImage && !f.isCodebase && !f.isGit && !f.isErrors &&
+                         !f.isFolder && !f.isUrl && !f.isSymbols)
             .map(f => f.path);
         const hasCodebase = contextFiles.some(f => f.isCodebase);
 
@@ -2644,6 +2814,36 @@
     let acSelectedIdx = -1;
 
     function showFileAutocomplete(query) {
+        // Show @ special mention suggestions first if query matches a keyword prefix
+        const AT_SPECIALS = [
+            { key: 'codebase', desc: 'Inject full codebase into context', icon: '📦' },
+            { key: 'folder',   desc: 'Inject workspace directory tree',   icon: '📁' },
+            { key: 'git',      desc: 'Inject git status & diff summary',  icon: '⎇' },
+            { key: 'errors',   desc: 'Inject workspace errors/warnings',  icon: '⚠' },
+            { key: 'symbols',  desc: 'Inject function/class symbols list',icon: '🔍' },
+            { key: 'url',      desc: 'Fetch a URL and inject its content (@url:https://…)', icon: '🌐' },
+        ];
+        const lq = query.toLowerCase();
+        const matched = AT_SPECIALS.filter(s => s.key.startsWith(lq));
+        if (matched.length > 0 && !query.includes('/') && !query.includes('\\') && !query.includes('.')) {
+            acItems = matched.map(s => ({ isAtSpecial: true, ...s }));
+            acSelectedIdx = 0;
+            autocompleteEl.innerHTML = '';
+            for (let i = 0; i < matched.length; i++) {
+                const s = matched[i];
+                const item = document.createElement('div');
+                item.className = 'ac-item' + (i === 0 ? ' selected' : '');
+                item.innerHTML = `
+                    <span class="ac-icon">${s.icon}</span>
+                    <span class="ac-name">@${escapeHtml(s.key)}</span>
+                    <span class="ac-desc">${escapeHtml(s.desc)}</span>
+                `;
+                item.addEventListener('click', () => { acSelectedIdx = i; selectAcItem(); });
+                autocompleteEl.appendChild(item);
+            }
+            autocompleteEl.classList.add('visible');
+            return;
+        }
         vscode.postMessage({ type: 'fileSearch', query });
     }
 
@@ -2714,7 +2914,7 @@
             case '/help':
                 addSystemMessage(
                     'Keyboard shortcuts: Enter=send · Shift+Enter=newline · @=add file · ' +
-                    '@codebase=full codebase · /=commands · ↑=recall last message · ' +
+                    '@codebase=full codebase · /=commands · ↑=recall last · Ctrl+↑/↓=history · ' +
                     'Ctrl+L=focus input · Ctrl+F=search · Ctrl+K=inline edit · Ctrl+`=terminal · Esc=stop\n\n' +
                     'Template commands: /explain · /fix · /refactor · /test · /review · /docs · /commit · /optimize\n\n' +
                     'Multi-agent: /team build · /team review · /team fullstack · /team debug\n' +
@@ -2771,6 +2971,21 @@
             inputEl.style.height = 'auto';
             hideAutocomplete();
             executeSlashCommand(item.cmd);
+            return;
+        }
+
+        // @ special mention selection — inject the mention text which the input handler will process
+        if (item.isAtSpecial) {
+            const val = inputEl.value;
+            const cursorPos = inputEl.selectionStart;
+            const before = val.slice(0, cursorPos);
+            // Replace partial @query with the full @keyword
+            const replaced = before.replace(/@[\w./\\-]*$/, '@' + item.key + ' ');
+            inputEl.value = replaced + val.slice(cursorPos);
+            inputEl.setSelectionRange(replaced.length, replaced.length);
+            hideAutocomplete();
+            // Trigger the input event so the @ handler fires
+            inputEl.dispatchEvent(new Event('input'));
             return;
         }
 
@@ -3365,6 +3580,169 @@
             renderCustomProviders();
             injectCustomProviderModels();
         }
+        // MCP servers
+        if (msg.mcpServers) {
+            mcpEnabledServers = msg.mcpServers || {};
+            renderMcpMarketplace();
+        }
+    }
+
+    // ── MCP Server Marketplace ────────────────────────────────────────────────
+
+    /**
+     * Popular MCP servers registry.
+     * Each entry: { id, name, description, icon, command, args, installHint }
+     *  - command/args: how the server is launched (passed to mcpServers config)
+     *  - installHint: how to install if not present
+     */
+    const MCP_MARKETPLACE = [
+        {
+            id: 'filesystem',
+            name: 'Filesystem',
+            description: 'Read & write files outside the workspace; directory listings.',
+            icon: '📁',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-filesystem', '{workspace}'],
+            installHint: 'npx -y @modelcontextprotocol/server-filesystem',
+        },
+        {
+            id: 'github',
+            name: 'GitHub',
+            description: 'Search repos, read files, manage issues and pull requests via the GitHub API.',
+            icon: '🐙',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-github'],
+            installHint: 'Requires GITHUB_PERSONAL_ACCESS_TOKEN env var.',
+        },
+        {
+            id: 'brave-search',
+            name: 'Brave Search',
+            description: 'Web and local search powered by the Brave Search API.',
+            icon: '🦁',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-brave-search'],
+            installHint: 'Requires BRAVE_API_KEY env var.',
+        },
+        {
+            id: 'memory',
+            name: 'Memory',
+            description: 'Persistent key-value memory so the agent remembers facts across sessions.',
+            icon: '🧠',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-memory'],
+            installHint: 'npx -y @modelcontextprotocol/server-memory',
+        },
+        {
+            id: 'postgres',
+            name: 'PostgreSQL',
+            description: 'Connect to a Postgres database — run queries, inspect schema.',
+            icon: '🐘',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/mydb'],
+            installHint: 'Edit connection string after enabling.',
+        },
+        {
+            id: 'sqlite',
+            name: 'SQLite',
+            description: 'Query and explore a local SQLite database file.',
+            icon: '🗄',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-sqlite', '--db-path', '{workspace}/data.db'],
+            installHint: 'Edit --db-path after enabling.',
+        },
+        {
+            id: 'puppeteer',
+            name: 'Puppeteer',
+            description: 'Control a headless Chrome browser — screenshot, click, scrape pages.',
+            icon: '🤖',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-puppeteer'],
+            installHint: 'npx -y @modelcontextprotocol/server-puppeteer',
+        },
+        {
+            id: 'slack',
+            name: 'Slack',
+            description: 'Read channels, post messages, and search Slack workspaces.',
+            icon: '💬',
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-slack'],
+            installHint: 'Requires SLACK_BOT_TOKEN and SLACK_TEAM_ID env vars.',
+        },
+    ];
+
+    /** Currently enabled servers: { serverId: {command, args} } — mirrors mcpServers in settings.json */
+    let mcpEnabledServers = {};
+
+    const mcpListEl = document.getElementById('mcp-list');
+
+    function renderMcpMarketplace() {
+        if (!mcpListEl) return;
+        mcpListEl.innerHTML = '';
+        for (const srv of MCP_MARKETPLACE) {
+            const enabled = !!mcpEnabledServers[srv.id];
+            const row = document.createElement('div');
+            row.className = 'mcp-entry' + (enabled ? ' mcp-entry-enabled' : '');
+
+            const left = document.createElement('div');
+            left.className = 'mcp-entry-left';
+
+            const iconEl = document.createElement('span');
+            iconEl.className = 'mcp-entry-icon';
+            iconEl.textContent = srv.icon;
+
+            const info = document.createElement('div');
+            info.className = 'mcp-entry-info';
+            const nameEl = document.createElement('div');
+            nameEl.className = 'mcp-entry-name';
+            nameEl.textContent = srv.name;
+            const descEl = document.createElement('div');
+            descEl.className = 'mcp-entry-desc';
+            descEl.textContent = srv.description;
+            if (srv.installHint) {
+                const hint = document.createElement('div');
+                hint.className = 'mcp-entry-hint';
+                hint.textContent = srv.installHint;
+                info.appendChild(nameEl);
+                info.appendChild(descEl);
+                info.appendChild(hint);
+            } else {
+                info.appendChild(nameEl);
+                info.appendChild(descEl);
+            }
+
+            left.appendChild(iconEl);
+            left.appendChild(info);
+
+            const toggleLabel = document.createElement('label');
+            toggleLabel.className = 'toggle-switch';
+            const toggleInput = document.createElement('input');
+            toggleInput.type = 'checkbox';
+            toggleInput.checked = enabled;
+            toggleInput.addEventListener('change', () => {
+                if (toggleInput.checked) {
+                    // Substitute {workspace} placeholder with actual workspace path
+                    const ws = currentWorkspacePath || '';
+                    const args = srv.args.map(a => a.replace('{workspace}', ws));
+                    mcpEnabledServers[srv.id] = { command: srv.command, args };
+                } else {
+                    delete mcpEnabledServers[srv.id];
+                }
+                row.classList.toggle('mcp-entry-enabled', toggleInput.checked);
+                saveMcpServers();
+            });
+            const toggleSlider = document.createElement('span');
+            toggleSlider.className = 'toggle-slider';
+            toggleLabel.appendChild(toggleInput);
+            toggleLabel.appendChild(toggleSlider);
+
+            row.appendChild(left);
+            row.appendChild(toggleLabel);
+            mcpListEl.appendChild(row);
+        }
+    }
+
+    function saveMcpServers() {
+        vscode.postMessage({ type: 'saveMcpServers', mcpServers: mcpEnabledServers });
     }
 
     function formatShellAvailability(shells) {
@@ -4092,6 +4470,11 @@
         }
         renderTabBar();
         activateTab(filePath);
+
+        // Auto-show the editor panel so diffs are immediately visible
+        if (panelEditorEl && panelEditorEl.classList.contains('panel-collapsed')) {
+            panelEditorEl.classList.remove('panel-collapsed');
+        }
     }
 
     /** Make a tab active and render its content. */

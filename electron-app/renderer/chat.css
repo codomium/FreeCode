@@ -1583,6 +1583,27 @@ select:focus { border-color: var(--accent); }
   color: var(--error-text);
 }
 
+/* Folder tree chip */
+.context-chip.chip-folder {
+  background: rgba(80,180,80,0.1);
+  border-color: rgba(80,180,80,0.3);
+  color: #5ab55a;
+}
+
+/* URL chip */
+.context-chip.chip-url {
+  background: rgba(0,140,220,0.1);
+  border-color: rgba(0,140,220,0.3);
+  color: #3ab0e8;
+}
+
+/* Symbols chip */
+.context-chip.chip-symbols {
+  background: rgba(160,80,220,0.1);
+  border-color: rgba(160,80,220,0.3);
+  color: #b56ee8;
+}
+
 /* Active state for context inject buttons (auto-attach on) */
 .input-btn.active {
   color: var(--accent);
@@ -3409,4 +3430,69 @@ select:focus { border-color: var(--accent); }
   padding: 14px 14px 10px;
   margin-top: 10px;
   background: var(--bg-elevated);
+}
+
+/* ── MCP Marketplace ──────────────────────────────────────────── */
+#mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mcp-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+.mcp-entry:hover { border-color: var(--accent); }
+.mcp-entry.mcp-entry-enabled {
+  border-color: rgba(80,200,120,0.5);
+  background: rgba(80,200,120,0.05);
+}
+
+.mcp-entry-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-entry-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.mcp-entry-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-entry-name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.mcp-entry-desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mcp-entry-hint {
+  font-size: 10px;
+  color: var(--accent);
+  margin-top: 3px;
+  font-family: var(--font-code);
 }

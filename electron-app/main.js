@@ -101,6 +101,7 @@ const DEFAULT_SETTINGS = {
     workspacePath:      os.homedir(),
     defaultShell:       'auto', // 'auto' | 'powershell' | 'wsl' | 'ubuntu' | 'bash' | 'cmd'
     customProviders:    [],   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
+    mcpServers:         {},   // { serverId: { command, args } }
 };
 
 function getSettings() {
@@ -224,9 +225,33 @@ class InProcessAgentBridge {
 
             const model = this._model || appSettings.model || 'claude-sonnet-4-6';
 
+            // Connect MCP servers saved in app settings
+            const mcpClients = [];
+            const appMcpServers = appSettings.mcpServers || {};
+            // Merge with any in ~/.claude/settings.json (already loaded in `settings`)
+            const allMcpServers = Object.assign({}, settings.mcpServers || {}, appMcpServers);
+            if (Object.keys(allMcpServers).length > 0) {
+                const { McpClient } = await import(v2url('mcp/client.mjs'));
+                for (const [name, config] of Object.entries(allMcpServers)) {
+                    try {
+                        const client = new McpClient(config);
+                        await client.connect();
+                        const mcpTools = await client.listTools();
+                        tools.registerMcpTools(mcpTools, (toolName, toolArgs) => client.callTool(toolName, toolArgs));
+                        mcpClients.push(client);
+                    } catch (err) {
+                        console.warn(`MCP server "${name}" failed to connect: ${err.message}`);
+                    }
+                }
+            }
+
+            const mcpResourceTool = tools.get('ReadMcpResource');
+            if (mcpResourceTool) mcpResourceTool._mcpClients = mcpClients;
+
             this._loop = createAgentLoop({ model, tools, permissions, settings, hooks });
             this._loop.state._agentLoader   = agentLoader;
             this._loop.state._skillsLoader  = skillsLoader;
+            this._loop.state._mcpClients    = mcpClients;
             this._loop.state._hooks         = settings.hooks;
             this._loop.state._permissionMode = permMode;
 
@@ -675,6 +700,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 showToolOutput:     s.showToolOutput !== false,
                 hasNvidiaKey:       !!(s.nvidiaApiKey || process.env.NVIDIA_API_KEY),
                 customProviders:    Array.isArray(s.customProviders) ? s.customProviders : [],
+                mcpServers:         (s.mcpServers && typeof s.mcpServers === 'object') ? s.mcpServers : {},
             });
 
             // Report which shell the integrated terminal will use
@@ -867,6 +893,123 @@ ipcMain.on('renderer-message', async (event, msg) => {
             parts.push(status ? 'Changed files:\n' + status : 'Working tree clean');
             if (diffStat) parts.push('Diff summary:\n' + diffStat);
             send({ type: 'gitContext', content: parts.join('\n\n'), branch: branch || '' });
+            break;
+        }
+
+        // ── Folder tree for @folder context chip ─────────────────────────────
+        case 'getFolderTree': {
+            const rootDir = getSettings().workspacePath || os.homedir();
+            const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
+            function buildTextTree(dir, prefix, depth) {
+                if (depth > 4) return '';
+                let entries;
+                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return ''; }
+                entries.sort((a, b) => {
+                    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+                    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+                });
+                let out = '';
+                for (let i = 0; i < entries.length; i++) {
+                    const e = entries[i];
+                    if (e.isDirectory() && SKIP_DIRS.has(e.name)) continue;
+                    const isLast = i === entries.length - 1;
+                    const connector = isLast ? '└── ' : '├── ';
+                    const childPrefix = prefix + (isLast ? '    ' : '│   ');
+                    out += prefix + connector + e.name + (e.isDirectory() ? '/' : '') + '\n';
+                    if (e.isDirectory()) {
+                        out += buildTextTree(path.join(dir, e.name), childPrefix, depth + 1);
+                    }
+                }
+                return out;
+            }
+            const tree = path.basename(rootDir) + '/\n' + buildTextTree(rootDir, '', 0);
+            send({ type: 'folderTree', content: tree });
+            break;
+        }
+
+        // ── Fetch URL for @url context chip ───────────────────────────────────
+        case 'fetchUrl': {
+            const targetUrl = String(msg.url || '');
+            if (!targetUrl || !/^https?:\/\//.test(targetUrl)) {
+                send({ type: 'urlContent', url: targetUrl, content: '(invalid URL)', error: 'Invalid URL' });
+                break;
+            }
+            try {
+                const content = await new Promise((resolve, reject) => {
+                    const httpMod = targetUrl.startsWith('https://') ? require('https') : require('http');
+                    const reqOpts = new URL(targetUrl);
+                    const req = httpMod.get({ hostname: reqOpts.hostname, path: reqOpts.pathname + (reqOpts.search || ''),
+                        port: reqOpts.port, headers: { 'User-Agent': 'FreeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
+                        (res) => {
+                            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                                resolve(`(redirect to ${res.headers.location} — please use the final URL directly)`);
+                                return;
+                            }
+                            const chunks = [];
+                            res.on('data', (c) => chunks.push(c));
+                            res.on('end', () => {
+                                let text = Buffer.concat(chunks).toString('utf8');
+                                // Strip HTML tags for readability
+                                text = text.replace(/<style[\s\S]*?<\/style>/gi, '')
+                                           .replace(/<script[\s\S]*?<\/script>/gi, '')
+                                           .replace(/<[^>]+>/g, ' ')
+                                           .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+                                           .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+                                           .replace(/\s{3,}/g, '\n\n')
+                                           .trim();
+                                // Limit to ~20KB
+                                if (text.length > 20000) text = text.slice(0, 20000) + '\n…(truncated)';
+                                resolve(text);
+                            });
+                        }
+                    );
+                    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
+                    req.on('error', reject);
+                });
+                send({ type: 'urlContent', url: targetUrl, content });
+            } catch (err) {
+                send({ type: 'urlContent', url: targetUrl, content: `(failed to fetch: ${err.message})`, error: err.message });
+            }
+            break;
+        }
+
+        // ── Grep workspace for function/class symbols ─────────────────────────
+        case 'getSymbols': {
+            const wsPath = getSettings().workspacePath || os.homedir();
+            const SYMBOL_EXTS = new Set(['.js','.ts','.jsx','.tsx','.mjs','.cjs','.py','.go','.rs','.java','.cpp','.c','.cs','.rb','.php','.swift','.kt']);
+            const SKIP_DIRS2 = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','build','out']);
+            const results = [];
+            function scanDir(dir, depth) {
+                if (depth > 6 || results.length > 500) return;
+                let entries;
+                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+                for (const e of entries) {
+                    if (e.isDirectory()) {
+                        if (!SKIP_DIRS2.has(e.name)) scanDir(path.join(dir, e.name), depth + 1);
+                    } else {
+                        const ext = path.extname(e.name).toLowerCase();
+                        if (!SYMBOL_EXTS.has(ext)) continue;
+                        try {
+                            const relPath = path.relative(wsPath, path.join(dir, e.name));
+                            const content = fs.readFileSync(path.join(dir, e.name), 'utf8');
+                            const lines = content.split('\n');
+                            for (let i = 0; i < lines.length && results.length < 500; i++) {
+                                const line = lines[i];
+                                // Match common function/class/method declarations
+                                if (/^\s*(export\s+)?(default\s+)?(async\s+)?function\s+\w|^\s*(export\s+)?(abstract\s+)?class\s+\w|^\s*def\s+\w|^\s*func\s+\w|^\s*(pub\s+)?(async\s+)?fn\s+\w/
+                                    .test(line)) {
+                                    results.push(`${relPath}:${i + 1}: ${line.trim()}`);
+                                }
+                            }
+                        } catch { /* skip */ }
+                    }
+                }
+            }
+            scanDir(wsPath, 0);
+            const content = results.length > 0
+                ? results.join('\n')
+                : '(no function/class symbols found in workspace)';
+            send({ type: 'symbolsContext', content });
             break;
         }
 
@@ -1176,6 +1319,29 @@ ipcMain.on('renderer-message', async (event, msg) => {
             // Reinit bridge so new providers are available on the next turn
             if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
             send({ type: 'customProvidersSaved', providers });
+            break;
+        }
+
+        // ── Save MCP servers config ────────────────────────────────────────────
+        case 'saveMcpServers': {
+            const mcpServers = (msg.mcpServers && typeof msg.mcpServers === 'object') ? msg.mcpServers : {};
+            // Write to ~/.claude/settings.json so the v2 agent-loop picks it up
+            try {
+                const claudeDir  = path.join(require('os').homedir(), '.claude');
+                const settingsFile = path.join(claudeDir, 'settings.json');
+                fs.mkdirSync(claudeDir, { recursive: true });
+                let claudeSettings = {};
+                try { claudeSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch { /* new file */ }
+                claudeSettings.mcpServers = mcpServers;
+                fs.writeFileSync(settingsFile, JSON.stringify(claudeSettings, null, 2), 'utf8');
+            } catch (err) {
+                console.warn('saveMcpServers: could not write ~/.claude/settings.json:', err.message);
+            }
+            // Also save in app settings for persistence across restarts
+            saveSetting('mcpServers', mcpServers);
+            // Reinit bridge so new servers are connected on the next turn
+            if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
+            send({ type: 'mcpServersSaved', mcpServers });
             break;
         }
 
