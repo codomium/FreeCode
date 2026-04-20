@@ -564,6 +564,29 @@
     </div>
 
     <div class="settings-section">
+      <div class="settings-section-label">Terminal &amp; Shell</div>
+      <div class="settings-row">
+        <label class="settings-label" for="setting-default-shell">Default Shell</label>
+        <select id="setting-default-shell" class="settings-select">
+          <option value="auto">Auto (PowerShell preferred on Windows)</option>
+          <option value="powershell">PowerShell</option>
+          <option value="wsl">WSL</option>
+          <option value="ubuntu">Ubuntu (WSL)</option>
+          <option value="bash">Bash</option>
+          <option value="cmd">Command Prompt (cmd)</option>
+        </select>
+      </div>
+      <div class="settings-note">Used by the AI agent for all terminal commands.</div>
+      <div class="settings-row">
+        <span class="settings-label">Available shells</span>
+        <div class="settings-path-row">
+          <span class="settings-note" id="setting-shell-availability">Not detected yet.</span>
+          <button class="settings-action-btn" id="settings-detect-shells-btn">Detect Available Shells</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-section-label">API Keys</div>
       <div class="settings-row">
         <label class="settings-label">Anthropic / OpenAI / Google key</label>

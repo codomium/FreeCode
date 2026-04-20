@@ -196,6 +196,9 @@
     const settingMode          = document.getElementById('setting-mode');
     const settingMaxTurns      = document.getElementById('setting-max-turns');
     const settingShowToolOutput = document.getElementById('setting-show-tool-output');
+    const settingDefaultShell  = document.getElementById('setting-default-shell');
+    const settingShellAvailability = document.getElementById('setting-shell-availability');
+    const settingsDetectShellsBtn = document.getElementById('settings-detect-shells-btn');
     const settingsSetKeyBtn    = document.getElementById('settings-set-key-btn');
     const settingNvidiaKey     = document.getElementById('setting-nvidia-key');
     const settingsSaveNvidiaBtn = document.getElementById('settings-save-nvidia-btn');
@@ -1953,10 +1956,17 @@
                 // Update the terminal shell badge to show the active shell type
                 const badge = document.getElementById('terminal-shell-badge');
                 if (badge) {
-                    const labels = { ubuntu: '🐧 Ubuntu', wsl: '⚙ WSL', powershell: '💙 PS', bash: '$ bash' };
+                    const labels = { ubuntu: '🐧 Ubuntu', wsl: '⚙ WSL', powershell: '💙 PS', bash: '$ bash', cmd: '⊞ cmd' };
                     badge.textContent = labels[msg.shell] || msg.shell;
                     badge.dataset.shell = msg.shell || '';
                     badge.title = `Active shell: ${msg.shell}`;
+                }
+                break;
+            }
+
+            case 'shellsDetected': {
+                if (settingShellAvailability) {
+                    settingShellAvailability.textContent = formatShellAvailability(msg.shells || {});
                 }
                 break;
             }
@@ -3347,6 +3357,7 @@
         if (settingMode)           settingMode.value        = msg.mode || 'default';
         if (settingMaxTurns)       settingMaxTurns.value    = msg.maxTurns || 20;
         if (settingShowToolOutput) settingShowToolOutput.checked = msg.showToolOutput !== false;
+        if (settingDefaultShell)   settingDefaultShell.value = msg.defaultShell || 'auto';
         if (settingNvidiaKey)      settingNvidiaKey.placeholder = msg.hasNvidiaKey ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
         // Custom providers
         if (Array.isArray(msg.customProviders)) {
@@ -3354,6 +3365,11 @@
             renderCustomProviders();
             injectCustomProviderModels();
         }
+    }
+
+    function formatShellAvailability(shells) {
+        const icon = (ok) => (ok ? '✅' : '❌');
+        return `PowerShell ${icon(!!shells.powershell)}  WSL ${icon(!!shells.wsl)}  Ubuntu ${icon(!!shells.ubuntu)}  Bash ${icon(!!shells.bash)}  cmd ${icon(!!shells.cmd)}`;
     }
 
     function openSettingsPanel() {
@@ -3399,6 +3415,19 @@
     if (settingShowToolOutput) {
         settingShowToolOutput.addEventListener('change', () => {
             vscode.postMessage({ type: 'saveSettings', key: 'showToolOutput', value: settingShowToolOutput.checked });
+        });
+    }
+
+    if (settingDefaultShell) {
+        settingDefaultShell.addEventListener('change', () => {
+            vscode.postMessage({ type: 'saveSettings', key: 'defaultShell', value: settingDefaultShell.value || 'auto' });
+        });
+    }
+
+    if (settingsDetectShellsBtn) {
+        settingsDetectShellsBtn.addEventListener('click', () => {
+            if (settingShellAvailability) settingShellAvailability.textContent = 'Detecting…';
+            vscode.postMessage({ type: 'detectShells' });
         });
     }
 
@@ -4641,4 +4670,3 @@
     vscode.postMessage({ type: 'ready' });
 
 }());
-

@@ -2032,6 +2032,11 @@ select:focus { border-color: var(--accent); }
   padding: 0 12px 8px;
 }
 
+#setting-shell-availability {
+  flex: 1;
+  padding: 0;
+}
+
 .settings-link {
   font-size: 11px;
   color: var(--accent);
@@ -3204,6 +3209,11 @@ select:focus { border-color: var(--accent); }
   background: rgba(78,201,176,0.12);
   border-color: rgba(78,201,176,0.35);
   color: #4ec9b0;
+}
+.terminal-shell-badge[data-shell="cmd"] {
+  background: rgba(255,176,64,0.12);
+  border-color: rgba(255,176,64,0.35);
+  color: #ffb040;
 }
 
 .terminal-btn {

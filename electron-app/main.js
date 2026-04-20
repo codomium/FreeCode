@@ -24,7 +24,7 @@ const path   = require('path');
 const fs     = require('fs');
 const os     = require('os');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, spawnSync } = require('child_process');
 const { pathToFileURL } = require('url');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -99,6 +99,7 @@ const DEFAULT_SETTINGS = {
     autoAttachActiveFile: false,
     pinnedFiles:        [],
     workspacePath:      os.homedir(),
+    defaultShell:       'auto', // 'auto' | 'powershell' | 'wsl' | 'ubuntu' | 'bash' | 'cmd'
     customProviders:    [],   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
 };
 
@@ -668,6 +669,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 activeSession:      activeMessages,
                 activeSessionId,
                 workspacePath:      s.workspacePath || os.homedir(),
+                defaultShell:       s.defaultShell || 'auto',
                 // full settings for settings panel
                 maxTurns:           s.maxTurns || 20,
                 showToolOutput:     s.showToolOutput !== false,
@@ -1084,7 +1086,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
 
         // ── Save a single setting ─────────────────────────────────────────────
         case 'saveSettings': {
-            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath'];
+            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath','defaultShell'];
             if (msg.key && allowed.includes(msg.key)) {
                 saveSetting(msg.key, msg.value);
                 applyEnvFromSettings();
@@ -1101,7 +1103,68 @@ ipcMain.on('renderer-message', async (event, msg) => {
                         path: msg.value,
                     });
                 }
+                if (msg.key === 'defaultShell') {
+                    _preferredShell = null;
+                    const sh = detectPreferredShell();
+                    send({ type: 'shellInfo', shell: sh.type });
+                }
             }
+            break;
+        }
+
+        case 'detectShells': {
+            const results = {};
+
+            try {
+                const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'echo ok'], {
+                    encoding: 'utf-8', timeout: 2000, windowsHide: true,
+                });
+                results.powershell = r.status === 0 && String(r.stdout || '').trim() === 'ok';
+            } catch {
+                results.powershell = false;
+            }
+
+            try {
+                const r = spawnSync('wsl.exe', ['--status'], {
+                    encoding: 'utf-8', timeout: 3000, windowsHide: true,
+                });
+                results.wsl = r.status === 0;
+            } catch {
+                results.wsl = false;
+            }
+
+            try {
+                const r = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
+                    encoding: 'utf-8', timeout: 3000, windowsHide: true,
+                });
+                results.ubuntu = r.status === 0 && String(r.stdout || '').trim() === 'ok';
+            } catch {
+                results.ubuntu = false;
+            }
+
+            if (process.platform !== 'win32') {
+                try {
+                    const r = spawnSync('bash', ['-c', 'echo ok'], {
+                        encoding: 'utf-8', timeout: 1000,
+                    });
+                    results.bash = r.status === 0;
+                } catch {
+                    results.bash = false;
+                }
+            } else {
+                results.bash = false;
+            }
+
+            try {
+                const r = spawnSync('cmd.exe', ['/c', 'echo ok'], {
+                    encoding: 'utf-8', timeout: 2000, windowsHide: true,
+                });
+                results.cmd = r.status === 0;
+            } catch {
+                results.cmd = false;
+            }
+
+            send({ type: 'shellsDetected', shells: results });
             break;
         }
 
@@ -1262,44 +1325,114 @@ ipcMain.on('renderer-message', async (event, msg) => {
 // ── Handle run-in-terminal ────────────────────────────────────────────────────
 
 /**
- * Detect the preferred shell on Windows.
- * Priority: Ubuntu WSL distro → generic WSL → PowerShell → bash (non-Windows).
+ * Detect the preferred shell.
+ * Uses explicit user preference when set; otherwise auto-detects
+ * with PowerShell-first behavior on Windows.
  * Result is cached after first call.
  */
 let _preferredShell = null;
+
+const POWERSHELL_SHIMS_MODULE = `# freecode-shims.psm1 — FreeCode PowerShell POSIX compatibility shims
+function which { param([string]$cmd) $r = Get-Command $cmd -EA SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd: not found"; exit 1 } }
+function grep  { param([string]$pat, [Parameter(ValueFromRemainingArguments)][string[]]$f) if ($f) { Select-String -Pattern $pat -Path $f | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pat | ForEach-Object { $_.Line } } }
+function cat   { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Get-Content $paths } else { $input } }
+function touch { param([string]$p) if (Test-Path $p) { (Get-Item $p).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $p -Force | Out-Null } }
+function wc    { param([string]$flag="-l") $lines = @($input); switch ($flag) { "-l" { $lines.Count } "-c" { ($lines -join "\`n").Length } "-w" { ($lines -join " ").Split() | Where-Object { $_ } | Measure-Object | Select-Object -Expand Count } default { $lines.Count } } }
+function head  { param([int]$n=10, [string]$file="") if ($file) { Get-Content $file -TotalCount $n } else { $input | Select-Object -First $n } }
+function tail  { param([int]$n=10, [string]$file="") if ($file) { Get-Content $file -Tail $n } else { $input | Select-Object -Last $n } }
+function find  { param([string]$path=".", [string]$name="*") Get-ChildItem -Path $path -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -Expand FullName }
+function pwd   { (Get-Location).Path }
+function ls    { param([Parameter(ValueFromRemainingArguments)][string[]]$a) Get-ChildItem @a }
+function mkdir { param([Parameter(ValueFromRemainingArguments)][string[]]$a) New-Item -ItemType Directory @a -Force }
+function rm    { param([switch]$r, [switch]$f, [Parameter(ValueFromRemainingArguments)][string[]]$paths) Remove-Item $paths -Recurse:$r -Force:$f -ErrorAction SilentlyContinue }
+function cp    { param([string]$src, [string]$dst) Copy-Item -Path $src -Destination $dst -Recurse -Force }
+function mv    { param([string]$src, [string]$dst) Move-Item -Path $src -Destination $dst -Force }
+function echo  { param([Parameter(ValueFromRemainingArguments)][string[]]$a) Write-Output ($a -join " ") }
+function sed   { param([string]$expr, [string]$file="") if ($expr -match "^s/(.+)/(.+)/") { $pat=$Matches[1]; $rep=$Matches[2]; if ($file) { (Get-Content $file) -replace $pat,$rep | Set-Content $file } else { $input | ForEach-Object { $_ -replace $pat,$rep } } } }
+function awk   { param([string]$prog, [Parameter(ValueFromRemainingArguments)][string[]]$files) Write-Warning "awk: limited PowerShell shim — consider installing gawk via winget" }
+Export-ModuleMember -Function *
+`;
+
+function resolveShellByName(name) {
+    const map = {
+        powershell: {
+            type: 'powershell',
+            exe: 'powershell.exe',
+            args: ['-NoProfile', '-NonInteractive', '-Command'],
+            syntax: 'powershell',
+        },
+        wsl: {
+            type: 'wsl',
+            exe: 'wsl.exe',
+            args: ['bash', '-c'],
+            syntax: 'bash',
+        },
+        ubuntu: {
+            type: 'ubuntu',
+            exe: 'wsl.exe',
+            args: ['-d', 'Ubuntu', '--', 'bash', '-c'],
+            syntax: 'bash',
+        },
+        bash: {
+            type: 'bash',
+            exe: 'bash',
+            args: ['-c'],
+            syntax: 'bash',
+        },
+        cmd: {
+            type: 'cmd',
+            exe: 'cmd.exe',
+            args: ['/c'],
+            syntax: 'cmd',
+        },
+    };
+    return map[name] || map.powershell;
+}
+
+function isPowerShellAvailable() {
+    try {
+        const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'exit 0'], {
+            encoding: 'utf-8', timeout: 2000, windowsHide: true,
+        });
+        return r.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+function ensurePowerShellShimsModule() {
+    const modPath = path.join(getUserData(), 'freecode-shims.psm1');
+    if (!fs.existsSync(modPath)) {
+        fs.writeFileSync(modPath, POWERSHELL_SHIMS_MODULE, 'utf8');
+    }
+    return modPath;
+}
+
+function quotePowerShellPath(p) {
+    return String(p || '').replace(/'/g, "''");
+}
+
 function detectPreferredShell() {
     if (_preferredShell) return _preferredShell;
-    if (process.platform !== 'win32') {
-        _preferredShell = { type: 'bash', exe: 'bash', args: [] };
+
+    const s = getSettings();
+    const pref = s.defaultShell || 'auto';
+    if (pref !== 'auto') {
+        _preferredShell = resolveShellByName(pref);
         return _preferredShell;
     }
 
-    const { spawnSync } = require('child_process');
+    if (process.platform !== 'win32') {
+        _preferredShell = resolveShellByName('bash');
+        return _preferredShell;
+    }
 
-    // Try Ubuntu WSL distro first
-    try {
-        const r = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
-            encoding: 'utf-8', timeout: 4000, windowsHide: true,
-        });
-        if (r.status === 0 && (r.stdout || '').trim() === 'ok') {
-            _preferredShell = { type: 'ubuntu', exe: 'wsl.exe', args: ['-d', 'Ubuntu', '--', 'bash', '-c'] };
-            return _preferredShell;
-        }
-    } catch { /* ignore */ }
+    if (isPowerShellAvailable()) {
+        _preferredShell = resolveShellByName('powershell');
+        return _preferredShell;
+    }
 
-    // Try generic WSL
-    try {
-        const r = spawnSync('wsl.exe', ['--status'], {
-            encoding: 'utf-8', timeout: 4000, windowsHide: true,
-        });
-        if (r.status === 0) {
-            _preferredShell = { type: 'wsl', exe: 'wsl.exe', args: ['bash', '-c'] };
-            return _preferredShell;
-        }
-    } catch { /* ignore */ }
-
-    // Fall back to PowerShell
-    _preferredShell = { type: 'powershell', exe: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command'] };
+    _preferredShell = resolveShellByName('cmd');
     return _preferredShell;
 }
 
@@ -1317,6 +1450,10 @@ function handleRunInTerminal(code) {
             });
         } else if (shell.type === 'wsl') {
             spawn('wsl.exe', [], {
+                cwd, detached: true, stdio: 'ignore', windowsHide: false,
+            });
+        } else if (shell.type === 'cmd') {
+            spawn('cmd.exe', ['/k', code], {
                 cwd, detached: true, stdio: 'ignore', windowsHide: false,
             });
         } else {
@@ -1342,30 +1479,15 @@ function handleTerminalRun(command, reqId, send) {
     const cwd = getSettings().workspacePath || os.homedir();
     const shell = detectPreferredShell();
 
-    let shellExe, shellArgs;
-    if (shell.type === 'ubuntu') {
-        shellExe = 'wsl.exe';
-        shellArgs = ['-d', 'Ubuntu', '--', 'bash', '-c', command];
-    } else if (shell.type === 'wsl') {
-        shellExe = 'wsl.exe';
-        shellArgs = ['bash', '-c', command];
-    } else if (shell.type === 'powershell') {
-        // Inject POSIX shims so common Unix tools work in PS
-        const TERMINAL_PS_SHIMS = [
-            'function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
-            'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Select-String -Pattern $pattern -Path $paths | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line } } }',
-            'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) Get-Content $paths }',
-            'function touch { param([string]$path) if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
-            'function head { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -First $n } else { $input | Select-Object -First $n } }',
-            'function tail { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -Last $n } else { $input | Select-Object -Last $n } }',
-            'function find { param([string]$basePath=".", [string]$nameFlag="", [string]$namePattern="*") if ($nameFlag -ne "-name") { $namePattern=$nameFlag }; Get-ChildItem -Path $basePath -Recurse -Filter $namePattern -Force | ForEach-Object { $_.FullName } }',
-            'function pwd { (Get-Location).Path }',
-        ].join('; ');
-        shellExe = 'powershell.exe';
-        shellArgs = ['-NoProfile', '-NonInteractive', '-Command', `${TERMINAL_PS_SHIMS}; ${command}`];
-    } else {
-        shellExe = 'bash';
-        shellArgs = ['-c', command];
+    let shellExe = shell.exe;
+    let shellArgs = [...shell.args, command];
+    if (shell.type === 'powershell') {
+        const modulePath = ensurePowerShellShimsModule();
+        const prelude = `Import-Module '${quotePowerShellPath(modulePath)}' -Force; `;
+        shellArgs = [...shell.args, `${prelude}${command}`];
+    } else if (shell.type === 'cmd') {
+        shellExe = 'cmd.exe';
+        shellArgs = ['/c', command];
     }
 
     const { spawn } = require('child_process');
@@ -1411,7 +1533,9 @@ function handleTerminalRun(command, reqId, send) {
 async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
     isCancelled = false;
 
-    let fullPrompt = message;
+    const shellHint = detectPreferredShell();
+    const basePrompt = `[Execution shell: ${shellHint.type} (${shellHint.syntax}). Generate shell commands that match this shell syntax.]\n\n${message}`;
+    let fullPrompt = basePrompt;
 
     // Inject context file contents
     const allPaths = new Set(contextFilePaths || []);
@@ -1434,7 +1558,7 @@ async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
             } catch { /* skip unreadable */ }
         }
         if (fileContents.length > 0) {
-            fullPrompt = message + '\n\n[Context files:]' + fileContents.join('');
+            fullPrompt = basePrompt + '\n\n[Context files:]' + fileContents.join('');
         }
     }
 
