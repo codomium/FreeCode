@@ -123,6 +123,15 @@
     /** Interval (approx chars) between loading-text speed updates during streaming */
     const STREAM_UPDATE_THROTTLE_CHARS = 80;
 
+    /** Debounce delay (ms) for file-watch events and file-op tree refreshes */
+    const FILE_WATCH_DEBOUNCE_MS = 500;
+
+    /** Max bash live-output characters before old content is trimmed */
+    const MAX_BASH_OUTPUT_LENGTH = 200_000;
+
+    /** How many characters of bash output to retain after trimming */
+    const RETAINED_BASH_OUTPUT_LENGTH = 100_000;
+
     /** Plain-English descriptions for each permission mode (shown in mode-desc-bar) */
     const MODE_DESCRIPTIONS = {
         default:           'Asks permission before making file edits or running commands — safest choice',
@@ -1153,6 +1162,13 @@
     let toolCardCounter = 0;
     const toolCardInputs = {}; // cardId → tool input (for diff/context in updateToolCard)
 
+    // Bash live-output buffers: toolName → { pre, pending, rafId }
+    // Chunks are buffered and flushed on the next animation frame to avoid
+    // hundreds of DOM mutations per second during heavy terminal output.
+    // Using a Map (not a plain object) to prevent prototype-pollution via
+    // toolName values such as '__proto__'.
+    const _toolStreamBuffers = new Map();
+
     /** Return just the filename from a path string (browser-safe, no Node path module) */
     function basename(filePath) {
         return (filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
@@ -1367,6 +1383,13 @@
 
         delete activeToolCards[toolName];
         delete toolCardInputs[id];
+        // Flush any remaining buffered output synchronously then clean up
+        const buf = _toolStreamBuffers.get(toolName);
+        if (buf) {
+            if (buf.rafId) cancelAnimationFrame(buf.rafId);
+            if (buf.pending && buf.pre) buf.pre.textContent += buf.pending;
+            _toolStreamBuffers.delete(toolName);
+        }
     }
 
     /** Append a live output chunk to a running Bash tool card */
@@ -1385,8 +1408,42 @@
             pre.className = 'bash-live-output';
             resultEl.appendChild(pre);
         }
-        pre.textContent += chunk;
-        if (autoScroll) scrollToBottom();
+        // Buffer chunks and flush on the next animation frame — this coalesces
+        // many rapid chunks into a single DOM write per frame (≤60/s) instead of
+        // one DOM mutation per chunk (potentially hundreds per second).
+        let buf = _toolStreamBuffers.get(toolName);
+        if (!buf) {
+            buf = { pre, pending: '' };
+            _toolStreamBuffers.set(toolName, buf);
+        }
+        buf.pending += chunk;
+        if (!buf.rafId) {
+            buf.rafId = requestAnimationFrame(() => {
+                const b = _toolStreamBuffers.get(toolName);
+                // Buffer may have been cleaned up by updateToolCard; exit quietly.
+                if (!b) return;
+                b.rafId = null;
+                if (b.pending) {
+                    b.pre.textContent += b.pending;
+                    b.pending = '';
+                    // Keep the output DOM node from growing without bound — trim
+                    // to the last RETAINED_BASH_OUTPUT_LENGTH chars so very
+                    // long-running commands don't cause excessive memory use.
+                    const text = b.pre.textContent;
+                    if (text.length > MAX_BASH_OUTPUT_LENGTH) {
+                        // Find the first newline at or after the retention boundary
+                        // so we cut on a whole-line boundary. Fall back to a raw
+                        // char-boundary cut if no newline exists in that region.
+                        const boundary = text.length - RETAINED_BASH_OUTPUT_LENGTH;
+                        const cutAt = text.indexOf('\n', boundary);
+                        b.pre.textContent = cutAt !== -1
+                            ? text.slice(cutAt + 1)
+                            : text.slice(boundary);
+                    }
+                }
+                if (autoScroll) scrollToBottom();
+            });
+        }
     }
 
     let thinkingCounter = 0;
@@ -2178,8 +2235,6 @@
             case 'fileRenamed':
             case 'fileDeleted':
             case 'fileWritten':
-                // Refresh explorer tree after any file operation
-                loadExplorerTree(currentWorkspacePath);
                 if (msg.type === 'fileDeleted') {
                     closeTab(msg.path);
                 }
@@ -2187,6 +2242,15 @@
                 if ((msg.purpose === 'editor_save' || msg.purpose === 'editor_autosave') && msg.path) {
                     markTabSaved(msg.path);
                 }
+                // Debounced tree refresh — prevents flooding when the agent writes many
+                // files in rapid succession (each write would otherwise trigger an
+                // immediate full directory scan that blocks the main process).
+                // Shares the same debounce timer as fileWatchEvent so that the
+                // workspace-watcher event that follows a write doesn't add a second scan.
+                if (fileWatchDebounce) clearTimeout(fileWatchDebounce);
+                fileWatchDebounce = setTimeout(() => {
+                    loadExplorerTree(currentWorkspacePath);
+                }, FILE_WATCH_DEBOUNCE_MS);
                 break;
 
             case 'fileOpError':
@@ -2206,7 +2270,7 @@
                 if (fileWatchDebounce) clearTimeout(fileWatchDebounce);
                 fileWatchDebounce = setTimeout(() => {
                     loadExplorerTree(currentWorkspacePath);
-                }, 500);
+                }, FILE_WATCH_DEBOUNCE_MS);
                 break;
 
             case 'terminalOutput': {

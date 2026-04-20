@@ -848,7 +848,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
 
         // ── File search (autocomplete) ────────────────────────────────────────
         case 'fileSearch': {
-            const results = searchFiles(msg.query || '');
+            const results = await searchFiles(msg.query || '');
             send({ type: 'fileSearchResults', files: results });
             break;
         }
@@ -1445,10 +1445,12 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'listDirectory': {
             const dirPath = msg.path || getSettings().workspacePath || os.homedir();
             const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
-            function buildTree(dir, depth) {
+            // Async recursive builder — uses fs.promises.readdir so each readdir
+            // yields to the event loop, keeping the main process responsive.
+            const buildTree = async (dir, depth) => {
                 if (depth > 5) return [];
                 let entries;
-                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+                try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
                 const items = [];
                 for (const e of entries) {
                     if (e.isDirectory()) {
@@ -1457,7 +1459,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                             name:     e.name,
                             path:     path.join(dir, e.name),
                             type:     'dir',
-                            children: buildTree(path.join(dir, e.name), depth + 1),
+                            children: await buildTree(path.join(dir, e.name), depth + 1),
                         });
                     } else {
                         items.push({ name: e.name, path: path.join(dir, e.name), type: 'file' });
@@ -1468,9 +1470,9 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
                 });
                 return items;
-            }
+            };
             try {
-                const tree = buildTree(dirPath, 0);
+                const tree = await buildTree(dirPath, 0);
                 send({ type: 'directoryListing', path: dirPath, tree });
             } catch (err) {
                 send({ type: 'directoryListing', path: dirPath, tree: [], error: err.message });
@@ -1897,14 +1899,14 @@ function searchFiles(query) {
     const SKIP    = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.cache']);
     const MAX     = 20;
 
-    function walk(dir, depth) {
+    async function walk(dir, depth) {
         if (results.length >= MAX || depth > 6) return;
         let entries;
-        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
         for (const e of entries) {
             if (results.length >= MAX) break;
             if (e.isDirectory()) {
-                if (!SKIP.has(e.name)) walk(path.join(dir, e.name), depth + 1);
+                if (!SKIP.has(e.name)) await walk(path.join(dir, e.name), depth + 1);
             } else if (e.isFile()) {
                 if (!q || e.name.toLowerCase().includes(q)) {
                     const fullPath = path.join(dir, e.name);
@@ -1918,8 +1920,7 @@ function searchFiles(query) {
         }
     }
 
-    try { walk(cwd, 0); } catch { /* ignore */ }
-    return results;
+    return walk(cwd, 0).then(() => results).catch(() => results);
 }
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
