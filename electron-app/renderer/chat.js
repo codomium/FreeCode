@@ -1939,7 +1939,11 @@
 
             case 'hookPermissionResult':
                 if (!msg.allowed) {
-                    addSystemMessage(`⛔ Tool blocked by hook: ${msg.tool}`);
+                    if (msg.message !== undefined) {
+                        addSystemMessage(`⛔ Tool blocked by hook: ${msg.tool}`);
+                    } else {
+                        addSystemMessage(`⛔ Tool blocked (permission denied): ${msg.tool}`);
+                    }
                 }
                 break;
 
