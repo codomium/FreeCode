@@ -1,5 +1,5 @@
 /* ============================================================
-   Claude Code — Cursor-style Chat Panel
+   freeCode — AI coding freedom for vibe coders
    ============================================================ */
 
 *, *::before, *::after {
@@ -1583,6 +1583,27 @@ select:focus { border-color: var(--accent); }
   color: var(--error-text);
 }
 
+/* Folder tree chip */
+.context-chip.chip-folder {
+  background: rgba(80,180,80,0.1);
+  border-color: rgba(80,180,80,0.3);
+  color: #5ab55a;
+}
+
+/* URL chip */
+.context-chip.chip-url {
+  background: rgba(0,140,220,0.1);
+  border-color: rgba(0,140,220,0.3);
+  color: #3ab0e8;
+}
+
+/* Symbols chip */
+.context-chip.chip-symbols {
+  background: rgba(160,80,220,0.1);
+  border-color: rgba(160,80,220,0.3);
+  color: #b56ee8;
+}
+
 /* Active state for context inject buttons (auto-attach on) */
 .input-btn.active {
   color: var(--accent);
@@ -2030,6 +2051,11 @@ select:focus { border-color: var(--accent); }
   font-size: 11px;
   color: var(--text-dim);
   padding: 0 12px 8px;
+}
+
+#setting-shell-availability {
+  flex: 1;
+  padding: 0;
 }
 
 .settings-link {
@@ -3205,6 +3231,11 @@ select:focus { border-color: var(--accent); }
   border-color: rgba(78,201,176,0.35);
   color: #4ec9b0;
 }
+.terminal-shell-badge[data-shell="cmd"] {
+  background: rgba(255,176,64,0.12);
+  border-color: rgba(255,176,64,0.35);
+  color: #ffb040;
+}
 
 .terminal-btn {
   background: none;
@@ -3400,3 +3431,169 @@ select:focus { border-color: var(--accent); }
   margin-top: 10px;
   background: var(--bg-elevated);
 }
+
+/* ── MCP Marketplace ──────────────────────────────────────────── */
+#mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mcp-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+.mcp-entry:hover { border-color: var(--accent); }
+.mcp-entry.mcp-entry-enabled {
+  border-color: rgba(80,200,120,0.5);
+  background: rgba(80,200,120,0.05);
+}
+
+.mcp-entry-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-entry-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.mcp-entry-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-entry-name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.mcp-entry-desc {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mcp-entry-hint {
+  font-size: 10px;
+  color: var(--accent);
+  margin-top: 3px;
+  font-family: var(--font-code);
+}
+
+/* ── Welcome screen tagline ───────────────────────────────────────── */
+.welcome-tagline {
+  font-size: 15px;
+  color: var(--text);
+  margin-bottom: 6px;
+  line-height: 1.5;
+  text-align: center;
+}
+.welcome-sub {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+}
+
+/* ── Voice button recording state ────────────────────────────────── */
+.input-btn.voice-recording {
+  color: var(--error-text);
+  border-color: rgba(244,135,113,0.5);
+  background: rgba(244,135,113,0.1);
+  animation: voicePulse 1s ease-in-out infinite;
+}
+@keyframes voicePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+/* ── Toast / notification banners ────────────────────────────────── */
+#file-watch-toast,
+#claudemd-banner {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.45);
+  max-width: 520px;
+  white-space: nowrap;
+}
+#file-watch-toast code,
+#claudemd-banner code {
+  font-family: var(--font-code);
+  color: var(--accent);
+  background: rgba(0,122,204,0.12);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.toast-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+.toast-btn:hover { background: var(--accent-hover); }
+.toast-dismiss {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.toast-dismiss:hover { background: var(--bg-input); color: var(--text); }
+
+/* ── Tool card error state ────────────────────────────────────────── */
+.tool-card.tool-error {
+  border-color: rgba(244,135,113,0.45);
+  background: rgba(58,26,26,0.55);
+}
+.tool-card-inject-btn {
+  margin-top: 6px;
+  background: rgba(244,135,113,0.1);
+  border: 1px solid rgba(244,135,113,0.4);
+  color: var(--error-text);
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tool-card-inject-btn:hover {
+  background: rgba(244,135,113,0.2);
+}
+

@@ -1,8 +1,52 @@
-# FreeCode — Standalone Windows App
+# freeCode — AI Coding Freedom for Vibe Coders 🚀
 
-A standalone Windows 11 desktop application that implements the **FreeCode** AI coding assistant without requiring Visual Studio Code.
+> **Freedom to code. Professional architecture. Agentic superpowers.**
+
+A standalone Windows 11 desktop application that implements the **freeCode** AI coding assistant without requiring Visual Studio Code.  Dedicated to vibe coders who want a professional-grade AI coding tool that surpasses Cursor, Windsurf, and Claude Code.
 
 Built with [Electron](https://www.electronjs.org/), it reuses the same agent loop (`v2/src`) from the VS Code extension and presents it in a full **VS Code-inspired 3-column IDE layout**.
+
+---
+
+## What's New in v2.4 — vibe-coder edition 🎉
+
+### 🎤 Voice Input
+
+Click the **🎤** mic button in the input bar to dictate your prompt using the Web Speech API.
+
+- Click once to **start recording**, click again to stop
+- **Interim transcription** streams live into the input field as you speak
+- Pulsing **red glow animation** while recording
+- Automatically hidden when the Speech API is unavailable
+
+### 📝 File-Change Watcher Toast
+
+When a file you have open or in context is modified externally — by `git pull`, another editor, or a background build tool — a **toast notification** appears:
+
+```
+📝 server.js was modified externally   [Re-read]  [✕]
+```
+
+- **Re-read** — re-adds the file to the context chips instantly
+- Auto-dismisses after 8 seconds
+- Requires no configuration — freeCode watches the workspace continuously and now includes the full file path in `fileWatchEvent` for accurate matching
+
+### ❌ Tool Error — Inject Error as Context
+
+When an agent tool call fails, the tool card now:
+
+- Renders a **red border + `✗ failed` badge** so errors stand out clearly
+- Shows a **"↩ Retry with error context"** button that pre-populates the input with the exact error message so the agent can self-correct with one click
+
+### 💾 CLAUDE.md Auto-Update Offer
+
+After sessions where the agent edited files, freeCode offers to create or update a `CLAUDE.md` memory file:
+
+```
+💾 Update CLAUDE.md with a summary of this session?   [Yes, update]  [Not now]
+```
+
+**Yes, update** instructs the agent to record the session's decisions, patterns, and changed files — making every future session smarter automatically.
 
 ---
 
@@ -384,8 +428,8 @@ This produces two outputs in `dist/`:
 
 | File | Description |
 |---|---|
-| `Open Claude Code Setup 1.0.0.exe` | NSIS installer with Start Menu / Desktop shortcuts |
-| `OpenClaudeCode-1.0.0-portable.exe` | Single-file portable executable (no install required) |
+| `freeCode Setup 1.0.0.exe` | NSIS installer with Start Menu / Desktop shortcuts |
+| `freeCode-1.0.0-portable.exe` | Single-file portable executable (no install required) |
 
 > **Note:** Building requires `electron-builder` and an internet connection on first run to download the Electron binary for Windows.
 
@@ -401,7 +445,7 @@ electron-app/
 │                    # — handles IPC: readFile, writeFile, createFile,
 │                    #     createDir, renameFile, deleteFile, watchWorkspace
 │                    # — permission-request/response IPC bridge (default mode)
-│                    # — stores settings & history in %APPDATA%\FreeCode\
+│                    # — stores settings & history in %APPDATA%\freeCode\
 ├── preload.js       # Electron preload — exposes electronBridge IPC to renderer
 └── renderer/
     ├── index.html   # 3-column IDE layout (chat | editor | explorer)
@@ -423,7 +467,7 @@ All persistent data is stored in the Electron `userData` directory:
 
 | Platform | Path |
 |---|---|
-| Windows | `%APPDATA%\Open Claude Code\` |
+| Windows | `%APPDATA%\freeCode\` |
 
 | File | Contents |
 |---|---|
@@ -698,8 +742,8 @@ This produces two outputs in `dist/`:
 
 | File | Description |
 |---|---|
-| `Open Claude Code Setup 1.0.0.exe` | NSIS installer with Start Menu / Desktop shortcuts |
-| `OpenClaudeCode-1.0.0-portable.exe` | Single-file portable executable (no install required) |
+| `freeCode Setup 1.0.0.exe` | NSIS installer with Start Menu / Desktop shortcuts |
+| `freeCode-1.0.0-portable.exe` | Single-file portable executable (no install required) |
 
 > **Note:** Building requires `electron-builder` and an internet connection on first run to download the Electron binary for Windows.
 
@@ -714,7 +758,7 @@ electron-app/
 │                    # — runs agent loop (v2/src) in-process
 │                    # — handles IPC: readFile, writeFile, createFile,
 │                    #     createDir, renameFile, deleteFile, watchWorkspace
-│                    # — stores settings & history in %APPDATA%\FreeCode\
+│                    # — stores settings & history in %APPDATA%\freeCode\
 ├── preload.js       # Electron preload — exposes electronBridge IPC to renderer
 └── renderer/
     ├── index.html   # 3-column IDE layout (chat | editor | explorer)
@@ -733,7 +777,7 @@ All persistent data is stored in the Electron `userData` directory:
 
 | Platform | Path |
 |---|---|
-| Windows | `%APPDATA%\Open Claude Code\` |
+| Windows | `%APPDATA%\freeCode\` |
 
 | File | Contents |
 |---|---|

@@ -1,4 +1,7 @@
-# FreeCode
+# freeCode
+
+> **Freedom to code. Built for vibe coders. 🚀**  
+> Professional architecture · Agentic superpowers · Better than Cursor
 
 An open-source, **VS Code-inspired AI coding assistant** with full tool access — read files, edit code, run commands, search the web, and more.  Runs everywhere: as a VS Code extension, a standalone Windows desktop app, or a Node.js CLI.
 
@@ -14,9 +17,65 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.4 — vibe-coder edition 🎉
+
+### 🎤 Voice Input
+
+Click the **🎤** mic button in the input bar to dictate your prompt using the browser's Web Speech API.
+
+- Click once to **start recording**, click again (or wait) to stop
+- **Interim transcription** streams live into the input field as you speak — you see the words appear in real time
+- Pulsing **red glow animation** while recording so you always know the mic is active
+- Button is automatically hidden on browsers/OSes that don't support the Speech API — no broken UI
+
+### 📝 File-Change Watcher Toast
+
+When any file you've opened in the editor (or added to context) is modified externally — by another process, `git pull`, or a background tool — a **toast notification** slides up from the bottom of the screen:
+
+```
+📝 server.js was modified externally   [Re-read]  [✕]
+```
+
+- **Re-read** — instantly re-adds the file to the context chips so the agent has the latest content
+- Auto-dismisses after 8 seconds if you ignore it
+- Zero configuration — freeCode watches the workspace continuously
+
+### ❌ Tool Error — Inject Error as Context
+
+When an agent tool call fails (file not found, `old_string` mismatch, shell error, etc.), the tool card now:
+
+- Shows a **red border + `✗ failed` badge** so errors are impossible to miss
+- Adds a **"↩ Retry with error context"** button that pre-fills the input:
+
+```
+Fix this error that just occurred:
+
+[Tool Error in Edit]
+old_string not found in file: src/server.ts
+```
+
+One click → the agent gets the exact error text and self-corrects automatically.
+
+### 💾 CLAUDE.md Auto-Update Offer
+
+After any session where the agent edited files, freeCode offers to write a project memory file:
+
+```
+💾 Update CLAUDE.md with a summary of this session?   [Yes, update]  [Not now]
+```
+
+Clicking **Yes, update** sends a structured prompt asking the agent to update (or create) `CLAUDE.md` with:
+- Decisions made and architectural patterns established
+- Files changed and conventions to follow in future sessions
+- A concise developer-focused summary — not a chat log
+
+This turns every coding session into **persistent project knowledge**, making future sessions smarter automatically — a feature no other AI coding tool offers out of the box.
+
+---
+
 ## Windows Terminal — PowerShell First
 
-On **Windows**, FreeCode always runs commands through **PowerShell** (`powershell.exe`).  
+On **Windows**, freeCode always runs commands through **PowerShell** (`powershell.exe`).  
 WSL (Windows Subsystem for Linux) is intentionally **not used**, even when it is installed.
 
 ### Why PowerShell instead of WSL?
@@ -29,7 +88,7 @@ WSL (Windows Subsystem for Linux) is intentionally **not used**, even when it is
 
 ### POSIX shims
 
-Because many AI-generated commands use Unix utilities (`grep`, `cat`, `touch`, `ls`, `find`, `sed`, …), FreeCode automatically injects **PowerShell POSIX shims** before every command.  These thin wrappers map the most common Unix commands to their PowerShell equivalents so commands like:
+Because many AI-generated commands use Unix utilities (`grep`, `cat`, `touch`, `ls`, `find`, `sed`, …), freeCode automatically injects **PowerShell POSIX shims** before every command.  These thin wrappers map the most common Unix commands to their PowerShell equivalents so commands like:
 
 ```powershell
 grep "error" log.txt
@@ -362,11 +421,11 @@ The Read tool card now shows `filename.js · lines 1–50` in the header so you 
 ```bash
 cd vscode-extension
 npm install
-npm run package          # builds open-claude-code-1.5.0.vsix
-code --install-extension open-claude-code-1.5.0.vsix
+npm run package          # builds freecode-1.5.0.vsix
+code --install-extension freecode-1.5.0.vsix
 ```
 
-Set your API key: **Open Claude Code: Set API Key** in the Command Palette.
+Set your API key: **freeCode: Set API Key** in the Command Palette.
 
 ### Standalone Windows app
 
@@ -546,11 +605,11 @@ The Read tool card now shows `filename.js · lines 1–50` in the header so you 
 ```bash
 cd vscode-extension
 npm install
-npm run package          # builds open-claude-code-1.5.0.vsix
-code --install-extension open-claude-code-1.5.0.vsix
+npm run package          # builds freecode-1.5.0.vsix
+code --install-extension freecode-1.5.0.vsix
 ```
 
-Set your API key: **Open Claude Code: Set API Key** in the Command Palette.
+Set your API key: **freeCode: Set API Key** in the Command Palette.
 
 ### Standalone Windows app
 
@@ -761,11 +820,11 @@ The Read tool card now shows `filename.js · lines 1–50` in the header so you 
 ```bash
 cd vscode-extension
 npm install
-npm run package          # builds open-claude-code-1.5.0.vsix
-code --install-extension open-claude-code-1.5.0.vsix
+npm run package          # builds freecode-1.5.0.vsix
+code --install-extension freecode-1.5.0.vsix
 ```
 
-Set your API key: **Open Claude Code: Set API Key** in the Command Palette.
+Set your API key: **freeCode: Set API Key** in the Command Palette.
 
 ### Standalone Windows app
 

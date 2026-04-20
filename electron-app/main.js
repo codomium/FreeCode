@@ -1,8 +1,10 @@
 'use strict';
 /**
- * main.js — Open Claude Code Electron Main Process
+ * main.js — freeCode Electron Main Process
  *
- * Standalone Windows 11 application that implements the Open Claude Code agent.
+ * Standalone application for freeCode — AI coding freedom for vibe coders.
+ * Implements the freeCode agent with professional architecture and agentic superpowers,
+ * surpassing tools like Cursor, Windsurf, and Claude Code.
  * Ports the VSCode extension's functionality (extension.js) to Electron, replacing
  * VSCode-specific APIs with Electron equivalents:
  *
@@ -14,7 +16,7 @@
  *   • vscode.window.activeTextEditor        → not available (standalone app)
  *   • vscode.languages.getDiagnostics()     → not available (standalone app)
  *
- * The Open Claude Code agent loop from v2/src runs **in-process** (imported
+ * The freeCode agent loop from v2/src runs **in-process** (imported
  * dynamically as ES modules) rather than as a subprocess. This avoids the
  * Node.js binary path issue on Windows and simplifies the architecture.
  */
@@ -24,7 +26,7 @@ const path   = require('path');
 const fs     = require('fs');
 const os     = require('os');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
+const { execFile, spawnSync } = require('child_process');
 const { pathToFileURL } = require('url');
 const { MultiAgentOrchestrator } = require('./multi-agent-orchestrator');
 
@@ -101,12 +103,14 @@ const DEFAULT_SETTINGS = {
     autoAttachActiveFile: false,
     pinnedFiles:        [],
     workspacePath:      os.homedir(),
+    defaultShell:       'auto', // 'auto' | 'powershell' | 'wsl' | 'ubuntu' | 'bash' | 'cmd'
     multiAgentEnabled:  false,
     multiAgentStrategy: 'parallel',
     multiAgentMaxProviders: 3,
     systemPromptPreset: 'expert-engineer',
     providers:          [],
     customProviders:    [],   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
+    mcpServers:         {},   // { serverId: { command, args } }
 };
 
 function getSettings() {
@@ -170,7 +174,7 @@ function hasApiKey() {
 
 // ── In-Process Agent Bridge ───────────────────────────────────────────────────
 /**
- * Runs the Open Claude Code agent loop in the Electron main process.
+ * Runs the freeCode agent loop in the Electron main process.
  * Mirrors the message protocol of agent-bridge.mjs but uses IPC instead of
  * stdin/stdout to communicate with the renderer.
  */
@@ -238,9 +242,33 @@ class InProcessAgentBridge {
 
             const model = this._model || appSettings.model || 'claude-sonnet-4-6';
 
+            // Connect MCP servers saved in app settings
+            const mcpClients = [];
+            const appMcpServers = appSettings.mcpServers || {};
+            // Merge with any in ~/.claude/settings.json (already loaded in `settings`)
+            const allMcpServers = Object.assign({}, settings.mcpServers || {}, appMcpServers);
+            if (Object.keys(allMcpServers).length > 0) {
+                const { McpClient } = await import(v2url('mcp/client.mjs'));
+                for (const [name, config] of Object.entries(allMcpServers)) {
+                    try {
+                        const client = new McpClient(config);
+                        await client.connect();
+                        const mcpTools = await client.listTools();
+                        tools.registerMcpTools(mcpTools, (toolName, toolArgs) => client.callTool(toolName, toolArgs));
+                        mcpClients.push(client);
+                    } catch (err) {
+                        console.warn(`MCP server "${name}" failed to connect: ${err.message}`);
+                    }
+                }
+            }
+
+            const mcpResourceTool = tools.get('ReadMcpResource');
+            if (mcpResourceTool) mcpResourceTool._mcpClients = mcpClients;
+
             this._loop = createAgentLoop({ model, tools, permissions, settings, hooks });
             this._loop.state._agentLoader   = agentLoader;
             this._loop.state._skillsLoader  = skillsLoader;
+            this._loop.state._mcpClients    = mcpClients;
             this._loop.state._hooks         = settings.hooks;
             this._loop.state._permissionMode = permMode;
 
@@ -476,7 +504,7 @@ function createWindow() {
         height: 800,
         minWidth:  600,
         minHeight: 500,
-        title: 'Open Claude Code',
+        title: 'freeCode',
         icon: path.join(__dirname, 'renderer', 'icon.ico'),
         webPreferences: {
             preload:           path.join(__dirname, 'preload.js'),
@@ -625,7 +653,7 @@ function showApiKeyDialog() {
             resizable:   false,
             minimizable: false,
             maximizable: false,
-            title:       'Set API Key — Open Claude Code',
+            title:       'Set API Key — freeCode',
             webPreferences: {
                 preload:          path.join(__dirname, 'dialog-preload.js'),
                 contextIsolation: true,
@@ -695,15 +723,17 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 activeSession:      activeMessages,
                 activeSessionId,
                 workspacePath:      s.workspacePath || os.homedir(),
+                defaultShell:       s.defaultShell || 'auto',
                 // full settings for settings panel
                 maxTurns:           s.maxTurns || 20,
                 showToolOutput:     s.showToolOutput !== false,
                 hasNvidiaKey:       !!(s.nvidiaApiKey || process.env.NVIDIA_API_KEY),
-                customProviders:    Array.isArray(s.providers) ? s.providers : [],
-                providers:          Array.isArray(s.providers) ? s.providers : [],
+                customProviders:    Array.isArray(s.providers) ? s.providers : (Array.isArray(s.customProviders) ? s.customProviders : []),
+                providers:          Array.isArray(s.providers) ? s.providers : (Array.isArray(s.customProviders) ? s.customProviders : []),
                 multiAgentEnabled:  !!s.multiAgentEnabled,
                 multiAgentStrategy: s.multiAgentStrategy || 'parallel',
                 systemPromptPreset: s.systemPromptPreset || 'expert-engineer',
+                mcpServers:         (s.mcpServers && typeof s.mcpServers === 'object') ? s.mcpServers : {},
             });
 
             // Report which shell the integrated terminal will use
@@ -896,6 +926,136 @@ ipcMain.on('renderer-message', async (event, msg) => {
             parts.push(status ? 'Changed files:\n' + status : 'Working tree clean');
             if (diffStat) parts.push('Diff summary:\n' + diffStat);
             send({ type: 'gitContext', content: parts.join('\n\n'), branch: branch || '' });
+            break;
+        }
+
+        // ── Folder tree for @folder context chip ─────────────────────────────
+        case 'getFolderTree': {
+            const rootDir = getSettings().workspacePath || os.homedir();
+            const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
+            function buildTextTree(dir, prefix, depth) {
+                if (depth > 4) return '';
+                let entries;
+                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return ''; }
+                entries.sort((a, b) => {
+                    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+                    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+                });
+                let out = '';
+                for (let i = 0; i < entries.length; i++) {
+                    const e = entries[i];
+                    if (e.isDirectory() && SKIP_DIRS.has(e.name)) continue;
+                    const isLast = i === entries.length - 1;
+                    const connector = isLast ? '└── ' : '├── ';
+                    const childPrefix = prefix + (isLast ? '    ' : '│   ');
+                    out += prefix + connector + e.name + (e.isDirectory() ? '/' : '') + '\n';
+                    if (e.isDirectory()) {
+                        out += buildTextTree(path.join(dir, e.name), childPrefix, depth + 1);
+                    }
+                }
+                return out;
+            }
+            const tree = path.basename(rootDir) + '/\n' + buildTextTree(rootDir, '', 0);
+            send({ type: 'folderTree', content: tree });
+            break;
+        }
+
+        // ── Fetch URL for @url context chip ───────────────────────────────────
+        case 'fetchUrl': {
+            const targetUrl = String(msg.url || '');
+            if (!targetUrl || !/^https?:\/\//.test(targetUrl)) {
+                send({ type: 'urlContent', url: targetUrl, content: '(invalid URL)', error: 'Invalid URL' });
+                break;
+            }
+            // SSRF guard: block requests to loopback, private, link-local and metadata addresses
+            const PRIVATE_IP_RE = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|fc00:|fd|fe80:|0x|0177)/i;
+            let reqOpts;
+            try { reqOpts = new URL(targetUrl); } catch {
+                send({ type: 'urlContent', url: targetUrl, content: '(malformed URL)', error: 'Malformed URL' });
+                break;
+            }
+            const hostname = reqOpts.hostname.toLowerCase();
+            if (PRIVATE_IP_RE.test(hostname) || hostname === '[::1]') {
+                send({ type: 'urlContent', url: targetUrl, content: '(blocked: private/loopback addresses are not allowed)', error: 'Blocked hostname' });
+                break;
+            }
+            const MAX_URL_CONTENT_BYTES = 20000;
+            try {
+                const content = await new Promise((resolve, reject) => {
+                    const httpMod = targetUrl.startsWith('https://') ? require('https') : require('http');
+                    const req = httpMod.get({ hostname: reqOpts.hostname, path: reqOpts.pathname + (reqOpts.search || ''),
+                        port: reqOpts.port, headers: { 'User-Agent': 'freeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
+                        (res) => {
+                            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                                resolve(`(redirect to ${res.headers.location} — please use the final URL directly)`);
+                                return;
+                            }
+                            const chunks = [];
+                            res.on('data', (c) => chunks.push(c));
+                            res.on('end', () => {
+                                let text = Buffer.concat(chunks).toString('utf8');
+                                // Remove embedded scripts and styles completely (content is used as
+                                // AI context text, not rendered as HTML — strip tags for readability).
+                                // Use character-class negation to avoid false tag reconstruction:
+                                text = text.replace(/<script[^>]*>[\s\S]*?<\/script[^>]*>/gi, ' ');
+                                text = text.replace(/<style[^>]*>[\s\S]*?<\/style[^>]*>/gi, ' ');
+                                // Remove remaining tags (non-greedy, no nesting needed for plain text)
+                                text = text.replace(/<[^>]*>/g, ' ');
+                                // Collapse whitespace
+                                text = text.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+                                // Limit content size
+                                if (text.length > MAX_URL_CONTENT_BYTES) text = text.slice(0, MAX_URL_CONTENT_BYTES) + '\n…(truncated)';
+                                resolve(text);
+                            });
+                        }
+                    );
+                    req.setTimeout(10000, () => { req.destroy(); reject(new Error('Timeout')); });
+                    req.on('error', reject);
+                });
+                send({ type: 'urlContent', url: targetUrl, content });
+            } catch (err) {
+                send({ type: 'urlContent', url: targetUrl, content: `(failed to fetch: ${err.message})`, error: err.message });
+            }
+            break;
+        }
+
+        // ── Grep workspace for function/class symbols ─────────────────────────
+        case 'getSymbols': {
+            const wsPath = getSettings().workspacePath || os.homedir();
+            const SYMBOL_EXTS = new Set(['.js','.ts','.jsx','.tsx','.mjs','.cjs','.py','.go','.rs','.java','.cpp','.c','.cs','.rb','.php','.swift','.kt']);
+            const SKIP_DIRS2 = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','build','out']);
+            const results = [];
+            function scanDir(dir, depth) {
+                if (depth > 6 || results.length > 500) return;
+                let entries;
+                try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+                for (const e of entries) {
+                    if (e.isDirectory()) {
+                        if (!SKIP_DIRS2.has(e.name)) scanDir(path.join(dir, e.name), depth + 1);
+                    } else {
+                        const ext = path.extname(e.name).toLowerCase();
+                        if (!SYMBOL_EXTS.has(ext)) continue;
+                        try {
+                            const relPath = path.relative(wsPath, path.join(dir, e.name));
+                            const content = fs.readFileSync(path.join(dir, e.name), 'utf8');
+                            const lines = content.split('\n');
+                            for (let i = 0; i < lines.length && results.length < 500; i++) {
+                                const line = lines[i];
+                                // Match common function/class/method declarations
+                                if (/^\s*(export\s+)?(default\s+)?(async\s+)?function\s+\w|^\s*(export\s+)?(abstract\s+)?class\s+\w|^\s*def\s+\w|^\s*func\s+\w|^\s*(pub\s+)?(async\s+)?fn\s+\w/
+                                    .test(line)) {
+                                    results.push(`${relPath}:${i + 1}: ${line.trim()}`);
+                                }
+                            }
+                        } catch { /* skip */ }
+                    }
+                }
+            }
+            scanDir(wsPath, 0);
+            const content = results.length > 0
+                ? results.join('\n')
+                : '(no function/class symbols found in workspace)';
+            send({ type: 'symbolsContext', content });
             break;
         }
 
@@ -1115,7 +1275,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
 
         // ── Save a single setting ─────────────────────────────────────────────
         case 'saveSettings': {
-            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath','multiAgentEnabled','multiAgentStrategy','providers','systemPromptPreset'];
+            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath','defaultShell','multiAgentEnabled','multiAgentStrategy','providers','systemPromptPreset'];
             if (msg.key && allowed.includes(msg.key)) {
                 saveSetting(msg.key, msg.value);
                 applyEnvFromSettings();
@@ -1132,7 +1292,68 @@ ipcMain.on('renderer-message', async (event, msg) => {
                         path: msg.value,
                     });
                 }
+                if (msg.key === 'defaultShell') {
+                    _preferredShell = null;
+                    const sh = detectPreferredShell();
+                    send({ type: 'shellInfo', shell: sh.type });
+                }
             }
+            break;
+        }
+
+        case 'detectShells': {
+            const results = {};
+
+            try {
+                const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'echo ok'], {
+                    encoding: 'utf-8', timeout: 2000, windowsHide: true,
+                });
+                results.powershell = r.status === 0 && String(r.stdout || '').trim() === 'ok';
+            } catch {
+                results.powershell = false;
+            }
+
+            try {
+                const r = spawnSync('wsl.exe', ['--status'], {
+                    encoding: 'utf-8', timeout: 3000, windowsHide: true,
+                });
+                results.wsl = r.status === 0;
+            } catch {
+                results.wsl = false;
+            }
+
+            try {
+                const r = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
+                    encoding: 'utf-8', timeout: 3000, windowsHide: true,
+                });
+                results.ubuntu = r.status === 0 && String(r.stdout || '').trim() === 'ok';
+            } catch {
+                results.ubuntu = false;
+            }
+
+            if (process.platform !== 'win32') {
+                try {
+                    const r = spawnSync('bash', ['-c', 'echo ok'], {
+                        encoding: 'utf-8', timeout: 1000,
+                    });
+                    results.bash = r.status === 0;
+                } catch {
+                    results.bash = false;
+                }
+            } else {
+                results.bash = false;
+            }
+
+            try {
+                const r = spawnSync('cmd.exe', ['/c', 'echo ok'], {
+                    encoding: 'utf-8', timeout: 2000, windowsHide: true,
+                });
+                results.cmd = r.status === 0;
+            } catch {
+                results.cmd = false;
+            }
+
+            send({ type: 'shellsDetected', shells: results });
             break;
         }
 
@@ -1158,6 +1379,29 @@ ipcMain.on('renderer-message', async (event, msg) => {
             // Reinit bridge so new providers are available on the next turn
             if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
             send({ type: 'customProvidersSaved', providers });
+            break;
+        }
+
+        // ── Save MCP servers config ────────────────────────────────────────────
+        case 'saveMcpServers': {
+            const mcpServers = (msg.mcpServers && typeof msg.mcpServers === 'object') ? msg.mcpServers : {};
+            // Write to ~/.claude/settings.json so the v2 agent-loop picks it up
+            try {
+                const claudeDir  = path.join(require('os').homedir(), '.claude');
+                const settingsFile = path.join(claudeDir, 'settings.json');
+                fs.mkdirSync(claudeDir, { recursive: true });
+                let claudeSettings = {};
+                try { claudeSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch { /* new file */ }
+                claudeSettings.mcpServers = mcpServers;
+                fs.writeFileSync(settingsFile, JSON.stringify(claudeSettings, null, 2), 'utf8');
+            } catch (err) {
+                console.warn('saveMcpServers: could not write ~/.claude/settings.json:', err.message);
+            }
+            // Also save in app settings for persistence across restarts
+            saveSetting('mcpServers', mcpServers);
+            // Reinit bridge so new servers are connected on the next turn
+            if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
+            send({ type: 'mcpServersSaved', mcpServers });
             break;
         }
 
@@ -1320,7 +1564,9 @@ ipcMain.on('renderer-message', async (event, msg) => {
             if (watchPath && fs.existsSync(watchPath)) {
                 try {
                     global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
-                        send({ type: 'fileWatchEvent', event, filename: filename || '' });
+                        // Include full path so the renderer can match it against open tabs
+                        const fullPath = filename ? path.join(watchPath, filename) : '';
+                        send({ type: 'fileWatchEvent', event, filename: filename || '', path: fullPath });
                     });
                 } catch (watchErr) {
                     console.warn('watchWorkspace: fs.watch failed for', watchPath, ':', watchErr.message);
@@ -1337,44 +1583,114 @@ ipcMain.on('renderer-message', async (event, msg) => {
 // ── Handle run-in-terminal ────────────────────────────────────────────────────
 
 /**
- * Detect the preferred shell on Windows.
- * Priority: Ubuntu WSL distro → generic WSL → PowerShell → bash (non-Windows).
+ * Detect the preferred shell.
+ * Uses explicit user preference when set; otherwise auto-detects
+ * with PowerShell-first behavior on Windows.
  * Result is cached after first call.
  */
 let _preferredShell = null;
+
+const POWERSHELL_SHIMS_MODULE = `# freeCode-shims.psm1 — freeCode PowerShell POSIX compatibility shims
+function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd: not found"; exit 1 } }
+function grep  { param([string]$pat, [Parameter(ValueFromRemainingArguments)][string[]]$f) if ($f) { Select-String -Pattern $pat -Path $f | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pat | ForEach-Object { $_.Line } } }
+function cat   { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Get-Content $paths } else { $input } }
+function touch { param([string]$p) if (Test-Path $p) { (Get-Item $p).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $p -Force | Out-Null } }
+function wc    { param([string]$flag="-l") $lines = @($input); switch ($flag) { "-l" { $lines.Count } "-c" { ($lines -join "\`n").Length } "-w" { ($lines -join " ").Split() | Where-Object { $_ } | Measure-Object | Select-Object -Expand Count } default { $lines.Count } } }
+function head  { param([int]$n=10, [string]$file="") if ($file) { Get-Content $file -TotalCount $n } else { $input | Select-Object -First $n } }
+function tail  { param([int]$n=10, [string]$file="") if ($file) { Get-Content $file -Tail $n } else { $input | Select-Object -Last $n } }
+function find  { param([string]$path=".", [string]$name="*") Get-ChildItem -Path $path -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -Expand FullName }
+function pwd   { (Get-Location).Path }
+function ls    { param([Parameter(ValueFromRemainingArguments)][string[]]$a) Get-ChildItem @a }
+function mkdir { param([Parameter(ValueFromRemainingArguments)][string[]]$a) New-Item -ItemType Directory @a -Force }
+function rm    { param([switch]$r, [switch]$f, [Parameter(ValueFromRemainingArguments)][string[]]$paths) Remove-Item $paths -Recurse:$r -Force:$f -ErrorAction SilentlyContinue }
+function cp    { param([string]$src, [string]$dst) Copy-Item -Path $src -Destination $dst -Recurse -Force }
+function mv    { param([string]$src, [string]$dst) Move-Item -Path $src -Destination $dst -Force }
+function echo  { param([Parameter(ValueFromRemainingArguments)][string[]]$a) Write-Output ($a -join " ") }
+function sed   { param([string]$expr, [string]$file="") if ($expr -match "^s/(.+)/(.+)/") { $pat=$Matches[1]; $rep=$Matches[2]; if ($file) { (Get-Content $file) -replace $pat,$rep | Set-Content $file } else { $input | ForEach-Object { $_ -replace $pat,$rep } } } }
+function awk   { param([string]$prog, [Parameter(ValueFromRemainingArguments)][string[]]$files) Write-Warning "awk: limited PowerShell shim — consider installing gawk via winget" }
+Export-ModuleMember -Function *
+`;
+
+function resolveShellByName(name) {
+    const map = {
+        powershell: {
+            type: 'powershell',
+            exe: 'powershell.exe',
+            args: ['-NoProfile', '-NonInteractive', '-Command'],
+            syntax: 'powershell',
+        },
+        wsl: {
+            type: 'wsl',
+            exe: 'wsl.exe',
+            args: ['bash', '-c'],
+            syntax: 'bash',
+        },
+        ubuntu: {
+            type: 'ubuntu',
+            exe: 'wsl.exe',
+            args: ['-d', 'Ubuntu', '--', 'bash', '-c'],
+            syntax: 'bash',
+        },
+        bash: {
+            type: 'bash',
+            exe: 'bash',
+            args: ['-c'],
+            syntax: 'bash',
+        },
+        cmd: {
+            type: 'cmd',
+            exe: 'cmd.exe',
+            args: ['/c'],
+            syntax: 'cmd',
+        },
+    };
+    return map[name] || map.powershell;
+}
+
+function isPowerShellAvailable() {
+    try {
+        const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'exit 0'], {
+            encoding: 'utf-8', timeout: 2000, windowsHide: true,
+        });
+        return r.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+function ensurePowerShellShimsModule() {
+    const modPath = path.join(getUserData(), 'freeCode-shims.psm1');
+    if (!fs.existsSync(modPath)) {
+        fs.writeFileSync(modPath, POWERSHELL_SHIMS_MODULE, 'utf8');
+    }
+    return modPath;
+}
+
+function quotePowerShellPath(p) {
+    return String(p || '').replace(/'/g, "''");
+}
+
 function detectPreferredShell() {
     if (_preferredShell) return _preferredShell;
-    if (process.platform !== 'win32') {
-        _preferredShell = { type: 'bash', exe: 'bash', args: [] };
+
+    const s = getSettings();
+    const pref = s.defaultShell || 'auto';
+    if (pref !== 'auto') {
+        _preferredShell = resolveShellByName(pref);
         return _preferredShell;
     }
 
-    const { spawnSync } = require('child_process');
+    if (process.platform !== 'win32') {
+        _preferredShell = resolveShellByName('bash');
+        return _preferredShell;
+    }
 
-    // Try Ubuntu WSL distro first
-    try {
-        const r = spawnSync('wsl.exe', ['-d', 'Ubuntu', '--', 'echo', 'ok'], {
-            encoding: 'utf-8', timeout: 4000, windowsHide: true,
-        });
-        if (r.status === 0 && (r.stdout || '').trim() === 'ok') {
-            _preferredShell = { type: 'ubuntu', exe: 'wsl.exe', args: ['-d', 'Ubuntu', '--', 'bash', '-c'] };
-            return _preferredShell;
-        }
-    } catch { /* ignore */ }
+    if (isPowerShellAvailable()) {
+        _preferredShell = resolveShellByName('powershell');
+        return _preferredShell;
+    }
 
-    // Try generic WSL
-    try {
-        const r = spawnSync('wsl.exe', ['--status'], {
-            encoding: 'utf-8', timeout: 4000, windowsHide: true,
-        });
-        if (r.status === 0) {
-            _preferredShell = { type: 'wsl', exe: 'wsl.exe', args: ['bash', '-c'] };
-            return _preferredShell;
-        }
-    } catch { /* ignore */ }
-
-    // Fall back to PowerShell
-    _preferredShell = { type: 'powershell', exe: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command'] };
+    _preferredShell = resolveShellByName('cmd');
     return _preferredShell;
 }
 
@@ -1392,6 +1708,10 @@ function handleRunInTerminal(code) {
             });
         } else if (shell.type === 'wsl') {
             spawn('wsl.exe', [], {
+                cwd, detached: true, stdio: 'ignore', windowsHide: false,
+            });
+        } else if (shell.type === 'cmd') {
+            spawn('cmd.exe', ['/k', code], {
                 cwd, detached: true, stdio: 'ignore', windowsHide: false,
             });
         } else {
@@ -1417,30 +1737,15 @@ function handleTerminalRun(command, reqId, send) {
     const cwd = getSettings().workspacePath || os.homedir();
     const shell = detectPreferredShell();
 
-    let shellExe, shellArgs;
-    if (shell.type === 'ubuntu') {
-        shellExe = 'wsl.exe';
-        shellArgs = ['-d', 'Ubuntu', '--', 'bash', '-c', command];
-    } else if (shell.type === 'wsl') {
-        shellExe = 'wsl.exe';
-        shellArgs = ['bash', '-c', command];
-    } else if (shell.type === 'powershell') {
-        // Inject POSIX shims so common Unix tools work in PS
-        const TERMINAL_PS_SHIMS = [
-            'function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
-            'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Select-String -Pattern $pattern -Path $paths | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line } } }',
-            'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) Get-Content $paths }',
-            'function touch { param([string]$path) if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
-            'function head { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -First $n } else { $input | Select-Object -First $n } }',
-            'function tail { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -Last $n } else { $input | Select-Object -Last $n } }',
-            'function find { param([string]$basePath=".", [string]$nameFlag="", [string]$namePattern="*") if ($nameFlag -ne "-name") { $namePattern=$nameFlag }; Get-ChildItem -Path $basePath -Recurse -Filter $namePattern -Force | ForEach-Object { $_.FullName } }',
-            'function pwd { (Get-Location).Path }',
-        ].join('; ');
-        shellExe = 'powershell.exe';
-        shellArgs = ['-NoProfile', '-NonInteractive', '-Command', `${TERMINAL_PS_SHIMS}; ${command}`];
-    } else {
-        shellExe = 'bash';
-        shellArgs = ['-c', command];
+    let shellExe = shell.exe;
+    let shellArgs = [...shell.args, command];
+    if (shell.type === 'powershell') {
+        const modulePath = ensurePowerShellShimsModule();
+        const prelude = `Import-Module '${quotePowerShellPath(modulePath)}' -Force; `;
+        shellArgs = [...shell.args, `${prelude}${command}`];
+    } else if (shell.type === 'cmd') {
+        shellExe = 'cmd.exe';
+        shellArgs = ['/c', command];
     }
 
     const { spawn } = require('child_process');
@@ -1486,7 +1791,9 @@ function handleTerminalRun(command, reqId, send) {
 async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
     isCancelled = false;
 
-    let fullPrompt = message;
+    const shellHint = detectPreferredShell();
+    const basePrompt = `[Execution shell: ${shellHint.type} (${shellHint.syntax}). Generate shell commands that match this shell syntax.]\n\n${message}`;
+    let fullPrompt = basePrompt;
 
     // Inject context file contents
     const allPaths = new Set(contextFilePaths || []);
@@ -1509,7 +1816,7 @@ async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
             } catch { /* skip unreadable */ }
         }
         if (fileContents.length > 0) {
-            fullPrompt = message + '\n\n[Context files:]' + fileContents.join('');
+            fullPrompt = basePrompt + '\n\n[Context files:]' + fileContents.join('');
         }
     }
 

@@ -775,7 +775,9 @@ class ClaudeCodeViewProvider {
     async _runPrompt(message, contextFilePaths, fileRefs) {
         this._isCancelled = false;
 
-        let fullPrompt = message;
+        const shellHint = detectPreferredTerminalShell();
+        const basePrompt = `[Execution shell: ${shellHint.type} (${shellHint.syntax}). Generate shell commands that match this shell syntax.]\n\n${message}`;
+        let fullPrompt = basePrompt;
 
         // Inject context file contents
         const allPaths = new Set(contextFilePaths || []);
@@ -809,7 +811,7 @@ class ClaudeCodeViewProvider {
                 }
             }
             if (fileContents.length > 0) {
-                fullPrompt = message + '\n\n[Context files:]' + fileContents.join('');
+                fullPrompt = basePrompt + '\n\n[Context files:]' + fileContents.join('');
             }
         }
 
@@ -1385,32 +1387,69 @@ function deactivate() {
 
 const MAX_TERMINAL_BYTES = 512 * 1024; // 512 KB
 
-/**
- * Minimal PowerShell POSIX shims — same as bash.mjs but used here for the
- * integrated terminal panel in the extension webview.
- */
-const TERMINAL_PS_SHIMS = [
-    'function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd not found" } }',
-    'function grep { param([string]$pattern, [Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Select-String -Pattern $pattern -Path $paths | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pattern | ForEach-Object { $_.Line } } }',
-    'function cat { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) Get-Content $paths }',
-    'function touch { param([string]$path) if (Test-Path $path) { (Get-Item $path).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $path -Force | Out-Null } }',
-    'function wc { param([string]$flag) $lines = @($input); if ($flag -eq "-l") { $lines.Count } elseif ($flag -eq "-c") { ($lines -join "`n").Length } else { $lines.Count } }',
-    'function head { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -First $n } else { $input | Select-Object -First $n } }',
-    'function tail { param([string]$flag="", [string]$file="") $n=10; if ($flag -match "^-(\\d+)$") { $n=[int]$Matches[1]; $file="" } elseif ($flag -eq "-n") { $n=[int]$file; $file="" } elseif ($flag -ne "") { $file=$flag }; if ($file) { Get-Content $file | Select-Object -Last $n } else { $input | Select-Object -Last $n } }',
-    'function find { param([string]$basePath=".", [string]$nameFlag="", [string]$namePattern="*") if ($nameFlag -ne "-name") { $namePattern=$nameFlag }; Get-ChildItem -Path $basePath -Recurse -Filter $namePattern -Force | ForEach-Object { $_.FullName } }',
-    'function pwd { (Get-Location).Path }',
-].join('; ');
+let _preferredTerminalShell = null;
+let _preferredTerminalShellName = null;
+
+function isPowerShellAvailable() {
+    const { spawnSync } = require('child_process');
+    try {
+        const r = spawnSync('powershell.exe', ['-NoProfile', '-Command', 'exit 0'], {
+            encoding: 'utf-8', timeout: 2000, windowsHide: true,
+        });
+        return r.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+function resolveShellByName(name) {
+    const map = {
+        powershell: { type: 'powershell', exe: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command'], syntax: 'powershell' },
+        wsl:        { type: 'wsl', exe: 'wsl.exe', args: ['bash', '-c'], syntax: 'bash' },
+        ubuntu:     { type: 'ubuntu', exe: 'wsl.exe', args: ['-d', 'Ubuntu', '--', 'bash', '-c'], syntax: 'bash' },
+        bash:       { type: 'bash', exe: 'bash', args: ['-c'], syntax: 'bash' },
+        cmd:        { type: 'cmd', exe: 'cmd.exe', args: ['/c'], syntax: 'cmd' },
+    };
+    return map[name] || map.powershell;
+}
+
+function detectPreferredTerminalShell() {
+    const config = vscode.workspace.getConfiguration('openClaudeCode');
+    const pref = config.get('defaultShell', 'auto');
+
+    if (_preferredTerminalShell && _preferredTerminalShellName === pref) {
+        return _preferredTerminalShell;
+    }
+
+    if (pref !== 'auto') {
+        _preferredTerminalShellName = pref;
+        _preferredTerminalShell = resolveShellByName(pref);
+        return _preferredTerminalShell;
+    }
+
+    if (process.platform !== 'win32') {
+        _preferredTerminalShellName = 'bash';
+        _preferredTerminalShell = resolveShellByName('bash');
+        return _preferredTerminalShell;
+    }
+
+    _preferredTerminalShellName = 'auto';
+    _preferredTerminalShell = isPowerShellAvailable()
+        ? resolveShellByName('powershell')
+        : resolveShellByName('cmd');
+    return _preferredTerminalShell;
+}
 
 /**
  * Execute `command` in the workspace shell and stream output to the webview.
- * On Windows: tries WSL first, then falls back to PowerShell with POSIX shims.
- * On Unix: uses bash.
+ * Uses openClaudeCode.defaultShell when explicitly set.
+ * In auto mode: PowerShell is preferred on Windows; bash on Unix.
  * @param {string} command
  * @param {string|null} reqId
  * @param {Function} send  — webview.postMessage wrapper
  */
 function runTerminalCommand(command, reqId, send) {
-    const { spawn, spawnSync } = require('child_process');
+    const { spawn } = require('child_process');
     const os = require('os');
 
     const cwd = (() => {
@@ -1421,27 +1460,13 @@ function runTerminalCommand(command, reqId, send) {
         }
     })();
 
-    let shellExe, shellArgs;
+    const shell = detectPreferredTerminalShell();
+    let shellExe = shell.exe;
+    let shellArgs = [...shell.args, command];
 
-    if (process.platform === 'win32') {
-        // Try WSL first for a proper POSIX bash environment
-        let wslOk = false;
-        try {
-            const r = spawnSync('wsl.exe', ['--status'], { encoding: 'utf-8', timeout: 3000, windowsHide: true });
-            wslOk = r.status === 0;
-        } catch { /* ignore */ }
-
-        if (wslOk) {
-            shellExe = 'wsl.exe';
-            shellArgs = ['bash', '-c', command];
-        } else {
-            // PowerShell with POSIX shims prepended
-            shellExe = 'powershell.exe';
-            shellArgs = ['-NoProfile', '-NonInteractive', '-Command', `${TERMINAL_PS_SHIMS}; ${command}`];
-        }
-    } else {
-        shellExe = 'bash';
-        shellArgs = ['-c', command];
+    if (shell.type === 'cmd') {
+        shellExe = 'cmd.exe';
+        shellArgs = ['/c', command];
     }
 
     const proc = spawn(shellExe, shellArgs, {

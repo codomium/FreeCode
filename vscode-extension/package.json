@@ -182,6 +182,27 @@
           ],
           "description": "Permission mode for file and shell operations"
         },
+        "openClaudeCode.defaultShell": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "powershell",
+            "wsl",
+            "ubuntu",
+            "bash",
+            "cmd"
+          ],
+          "enumDescriptions": [
+            "Auto-detect best available shell (PowerShell preferred on Windows)",
+            "Windows PowerShell (default on Windows)",
+            "WSL — Windows Subsystem for Linux (generic)",
+            "WSL Ubuntu distro specifically",
+            "Bash (macOS/Linux default)",
+            "Windows Command Prompt (cmd.exe)"
+          ],
+          "default": "auto",
+          "description": "Default shell used by the AI agent for running commands. PowerShell is the default on Windows."
+        },
         "openClaudeCode.maxTurns": {
           "type": "number",
           "default": 20,

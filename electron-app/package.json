@@ -1,8 +1,8 @@
 {
-  "name": "open-claude-code",
-  "productName": "FreeCode AI IDE",
+  "name": "freecode",
+  "productName": "freeCode",
   "version": "2.0.0",
-  "description": "Open Claude Code — standalone AI coding assistant for Windows 11",
+  "description": "freeCode — AI coding freedom for vibe coders. Professional architecture, agentic superpowers.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -11,7 +11,8 @@
     "build:portable": "electron-builder --win portable"
   },
   "keywords": [
-    "claude",
+    "freecode",
+    "vibe-coding",
     "ai",
     "coding-assistant",
     "electron",
@@ -23,9 +24,9 @@
     "electron-builder": "^26.8.1"
   },
   "build": {
-    "appId": "com.openclaudecode.app",
-    "productName": "FreeCode AI IDE",
-    "copyright": "Copyright © 2026 FreeCode AI IDE",
+    "appId": "com.freecode.app",
+    "productName": "freeCode",
+    "copyright": "Copyright © 2026 freeCode — AI coding freedom for vibe coders",
     "directories": {
       "output": "dist"
     },
@@ -72,10 +73,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Open Claude Code"
+      "shortcutName": "freeCode"
     },
     "portable": {
-      "artifactName": "OpenClaudeCode-${version}-portable.exe"
+      "artifactName": "freeCode-${version}-portable.exe"
     },
     "publish": null
   }
