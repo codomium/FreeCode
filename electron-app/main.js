@@ -396,7 +396,7 @@ class InProcessAgentBridge {
         }
     }
 
-    resume(messages) {
+    resume(messages, sessionGoal, sessionId) {
         if (!this._loop) return;
         this._loop.state.messages = messages
             .filter(m => (m.type === 'user' || m.type === 'assistant') && m.text)
@@ -406,6 +406,16 @@ class InProcessAgentBridge {
             });
         this._loop.state.turnCount = messages.filter(m => m.type === 'user').length;
         this._loop.state.tokenUsage = { input: 0, output: 0 };
+        if (sessionGoal) this._loop.state.sessionGoal = sessionGoal;
+        if (sessionId) this._loop.state.sessionId = sessionId;
+    }
+
+    setGoal(goal, sessionId) {
+        this._model = this._model; // no-op touch
+        if (this._loop) {
+            this._loop.state.sessionGoal = goal || null;
+            if (sessionId) this._loop.state.sessionId = sessionId;
+        }
     }
 
     /**
@@ -712,6 +722,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
             const activeMessages = (activeSession && Array.isArray(activeSession.messages) && activeSession.messages.length > 0)
                 ? activeSession.messages : null;
             const activeSessionId = (activeSession && activeSession.sessionId) || null;
+            const activeSessionGoal = (activeSession && activeSession.sessionGoal) || null;
 
             send({
                 type:               'initialized',
@@ -722,6 +733,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 hasApiKey:          hasApiKey(),
                 activeSession:      activeMessages,
                 activeSessionId,
+                activeSessionGoal,
                 workspacePath:      s.workspacePath || os.homedir(),
                 defaultShell:       s.defaultShell || 'auto',
                 // full settings for settings panel
@@ -746,7 +758,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
             // Auto-restore session into agent bridge
             if (activeMessages && activeMessages.length > 0) {
                 await getBridge()._init().catch(() => {});
-                getBridge().resume(activeMessages);
+                getBridge().resume(activeMessages, activeSessionGoal, activeSessionId);
             }
             break;
         }
@@ -1115,10 +1127,11 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     ? firstUser.text.slice(0, 80).replace(/\n/g, ' ')
                     : 'Untitled conversation';
                 sessions.unshift({
-                    id:        Date.now().toString(),
+                    id:          Date.now().toString(),
                     title,
-                    createdAt: Date.now(),
-                    messages:  msg.messages,
+                    createdAt:   Date.now(),
+                    messages:    msg.messages,
+                    sessionGoal: msg.sessionGoal || null,
                 });
                 if (sessions.length > 30) sessions.length = 30;
                 writeJson('history', sessions);
@@ -1135,6 +1148,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     title:        s.title,
                     createdAt:    s.createdAt,
                     messageCount: s.messages ? s.messages.length : 0,
+                    sessionGoal:  s.sessionGoal || null,
                 })),
             });
             break;
@@ -1144,7 +1158,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
             const sessions = readJson('history', []);
             const session  = sessions.find(s => s.id === msg.id);
             if (session) {
-                send({ type: 'sessionData', id: session.id, messages: session.messages || [] });
+                send({ type: 'sessionData', id: session.id, messages: session.messages || [], sessionGoal: session.sessionGoal || null });
             }
             break;
         }
@@ -1153,7 +1167,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
             const sessions = readJson('history', []);
             const session  = sessions.find(s => s.id === msg.id);
             if (session) {
-                send({ type: 'resumeFromHistoryData', id: session.id, messages: session.messages || [] });
+                send({ type: 'resumeFromHistoryData', id: session.id, messages: session.messages || [], sessionGoal: session.sessionGoal || null });
             }
             break;
         }
@@ -1166,6 +1180,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 sess.messageCount = sess.messages.length;
                 const firstUser   = sess.messages.find(m => m.type === 'user');
                 if (firstUser) sess.title = firstUser.text.slice(0, 80).replace(/\n/g, ' ');
+                if (msg.sessionGoal) sess.sessionGoal = msg.sessionGoal;
                 writeJson('history', sessions);
             }
             break;
@@ -1206,9 +1221,10 @@ ipcMain.on('renderer-message', async (event, msg) => {
             if (msg.messages && msg.messages.length > 0) {
                 const capped = msg.messages.slice(-MAX_SESSION_MESSAGES);
                 writeJson('activeSession', {
-                    messages:  capped,
-                    sessionId: msg.sessionId || null,
-                    savedAt:   Date.now(),
+                    messages:     capped,
+                    sessionId:    msg.sessionId || null,
+                    sessionGoal:  msg.sessionGoal || null,
+                    savedAt:      Date.now(),
                 });
             } else {
                 writeJson('activeSession', null);
@@ -1221,11 +1237,20 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 try {
                     const bridge = getBridge();
                     await bridge._init();
-                    bridge.resume(msg.messages);
+                    bridge.resume(msg.messages, msg.sessionGoal || null, msg.sessionId || null);
                 } catch (err) {
                     send({ type: 'error', message: 'Failed to resume session: ' + err.message });
                 }
             }
+            break;
+        }
+
+        case 'setGoal': {
+            try {
+                const bridge = getBridge();
+                await bridge._init();
+                bridge.setGoal(msg.goal || null, msg.sessionId || null);
+            } catch { /* ignore */ }
             break;
         }
 

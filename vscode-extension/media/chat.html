@@ -104,6 +104,16 @@
     <span id="mode-desc-text"></span>
   </div>
 
+  <!-- Session Goal Banner (Cursor-style sticky task reminder) -->
+  <div id="session-goal-banner" style="display:none">
+    <span class="session-goal-icon">🎯</span>
+    <span class="session-goal-label">Goal:</span>
+    <span id="session-goal-text" title="Click to edit session goal"></span>
+    <input id="session-goal-edit" type="text" maxlength="200" placeholder="Describe your session goal…" style="display:none">
+    <button id="session-goal-save" style="display:none">✓</button>
+    <button id="session-goal-dismiss" title="Clear session goal">✕</button>
+  </div>
+
   <!-- Quick Actions panel (collapsible) -->
   <div id="quick-actions" style="display:none">
     <div class="qa-section-label">✨ Code Tasks</div>

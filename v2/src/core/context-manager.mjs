@@ -23,8 +23,9 @@ const SESSIONS_DIR = path.join(os.homedir(), '.freecode', 'sessions');
  * Persist a session summary to disk for cross-session context retention.
  * @param {string} sessionId - unique session identifier
  * @param {string} summary - text summary to save
+ * @param {string} [goal] - optional session goal to persist alongside the summary
  */
-export function saveSessionSummary(sessionId, summary) {
+export function saveSessionSummary(sessionId, summary, goal = '') {
     try {
         fs.mkdirSync(SESSIONS_DIR, { recursive: true });
         const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
@@ -32,6 +33,7 @@ export function saveSessionSummary(sessionId, summary) {
             id: sessionId,
             savedAt: new Date().toISOString(),
             summary,
+            goal: goal || '',
         };
         fs.writeFileSync(file, JSON.stringify(data, null, 2));
     } catch { /* best effort */ }
@@ -40,13 +42,13 @@ export function saveSessionSummary(sessionId, summary) {
 /**
  * Load a previously saved session summary from disk.
  * @param {string} sessionId
- * @returns {string|null} summary text or null if not found
+ * @returns {{ summary: string, goal: string }|null} session data or null if not found
  */
 export function loadSessionSummary(sessionId) {
     try {
         const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
         const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-        return data.summary || null;
+        return { summary: data.summary || '', goal: data.goal || '' };
     } catch { return null; }
 }
 
@@ -176,9 +178,10 @@ export class ContextManager {
      *
      * @param {Array} messages - current conversation messages
      * @param {number} keepRecent - number of recent messages to preserve (default 6 = ~3 turns)
+     * @param {string} [sessionGoal] - session goal to re-inject in the compaction summary
      * @returns {Array} compacted message array
      */
-    compact(messages, keepRecent = 6) {
+    compact(messages, keepRecent = 6, sessionGoal = null) {
         if (messages.length <= keepRecent) return messages;
 
         this.lastPreCompactTokens = this.getTokenCount(messages);
@@ -218,9 +221,10 @@ export class ContextManager {
 
         const summaryText = summaryParts.join('\n').slice(0, 2000);
 
+        const goalPrefix = sessionGoal ? `[Session Goal]: ${sessionGoal}\n\n` : '';
         const summary = {
             role: 'user',
-            content: `[Context compacted — summary of ${oldMessages.length} earlier messages]\n` + summaryText,
+            content: `${goalPrefix}[Context compacted — summary of ${oldMessages.length} earlier messages]\n` + summaryText,
         };
 
         const compacted = [summary, ...recentMessages];
@@ -232,12 +236,13 @@ export class ContextManager {
      * Add a message and auto-compact if needed.
      * @param {Array} messages - mutable message array
      * @param {object} msg - new message to add
+     * @param {string} [sessionGoal] - session goal to preserve through compaction
      * @returns {Array} possibly compacted array with new message
      */
-    addMessage(messages, msg) {
+    addMessage(messages, msg, sessionGoal = null) {
         messages.push(msg);
         if (this.shouldCompact(messages)) {
-            return this.compact(messages);
+            return this.compact(messages, 6, sessionGoal);
         }
         return messages;
     }
@@ -249,11 +254,13 @@ export class ContextManager {
      *
      * @param {Array} messages
      * @param {string} [title] - optional session title
+     * @param {string} [goal] - optional session goal to include
      * @returns {string}
      */
-    buildSessionSummary(messages, title = '') {
+    buildSessionSummary(messages, title = '', goal = '') {
         const parts = [];
         if (title) parts.push(`# Session: ${title}`);
+        if (goal) parts.push(`## Goal\n${goal}`);
         parts.push(`Total messages: ${messages.length}`);
 
         const filesEdited = new Set();
@@ -305,27 +312,29 @@ export class ContextManager {
      * @param {Array} messages
      * @param {string} sessionId
      * @param {string} [title]
+     * @param {string} [goal]
      */
-    persistSession(messages, sessionId, title = '') {
-        const summary = this.buildSessionSummary(messages, title);
-        saveSessionSummary(sessionId, summary);
+    persistSession(messages, sessionId, title = '', goal = '') {
+        const summary = this.buildSessionSummary(messages, title, goal);
+        saveSessionSummary(sessionId, summary, goal);
     }
 
     /**
      * Inject a previously saved session summary as the first user message,
      * so the agent can recall prior context on resume.
+     * Also returns the saved goal so the caller can restore it.
      * @param {Array} messages - current message array (may be empty)
      * @param {string} sessionId
-     * @returns {Array} messages with summary prepended (if found)
+     * @returns {{ messages: Array, goal: string }} messages with summary prepended (if found), and the prior goal
      */
     injectSavedContext(messages, sessionId) {
-        const summary = loadSessionSummary(sessionId);
-        if (!summary) return messages;
+        const saved = loadSessionSummary(sessionId);
+        if (!saved || !saved.summary) return { messages, goal: '' };
         const recall = {
             role: 'user',
-            content: `[Resuming session — prior context summary]\n${summary}`,
+            content: `[Resuming session — prior context summary]\n${saved.summary}`,
         };
-        return [recall, ...messages];
+        return { messages: [recall, ...messages], goal: saved.goal || '' };
     }
 
     /**

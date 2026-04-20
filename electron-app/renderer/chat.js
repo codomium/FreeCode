@@ -86,6 +86,7 @@
     let pinnedFiles = [];        // files pinned across sessions
     let currentSessionId = null; // null for new sessions; history entry ID when continuing a saved session
     let currentSessionTitle = ''; // first-message snippet shown in header
+    let currentSessionGoal = null; // sticky goal for this session (survives compaction)
     let allHistorySessions = []; // full session list for filtering + welcome screen
     let historyFilterQuery = ''; // active search filter in history panel
     let streamStartTime = 0;     // timestamp when first stream token arrived
@@ -232,6 +233,11 @@
     const contextWarningEl  = document.getElementById('context-warning');
     const contextWarningTextEl = document.getElementById('context-warning-text');
     const contextWarningNewBtn = document.getElementById('context-warning-new');
+    const sessionGoalBanner    = document.getElementById('session-goal-banner');
+    const sessionGoalText      = document.getElementById('session-goal-text');
+    const sessionGoalEdit      = document.getElementById('session-goal-edit');
+    const sessionGoalSaveBtn   = document.getElementById('session-goal-save');
+    const sessionGoalDismissBtn = document.getElementById('session-goal-dismiss');
 
     // ── Settings panel refs ──────────────────────────────────────────────────
     const settingsPanel        = document.getElementById('settings-panel');
@@ -345,6 +351,73 @@
         } else {
             sessionIndicator.textContent = '';
             sessionIndicator.title = '';
+        }
+    }
+
+    // ── Session Goal Banner ───────────────────────────────────────────────────
+    /**
+     * Show or hide the session goal banner.
+     * The banner displays the current session goal so both the user and the
+     * agent always have the session objective in view (Cursor-style).
+     */
+    function updateGoalBanner() {
+        if (!sessionGoalBanner) return;
+        if (currentSessionGoal && currentSessionGoal.trim()) {
+            sessionGoalBanner.style.display = 'flex';
+            if (sessionGoalText) {
+                sessionGoalText.textContent = currentSessionGoal;
+                sessionGoalText.title = currentSessionGoal;
+            }
+            if (sessionGoalEdit) sessionGoalEdit.value = currentSessionGoal;
+        } else {
+            sessionGoalBanner.style.display = 'none';
+        }
+    }
+
+    function setSessionGoal(goal) {
+        currentSessionGoal = goal ? goal.trim().slice(0, 200) : null;
+        updateGoalBanner();
+    }
+
+    if (sessionGoalBanner) {
+        // Click on the goal text to enter edit mode
+        if (sessionGoalText) {
+            sessionGoalText.addEventListener('click', () => {
+                if (!sessionGoalEdit) return;
+                sessionGoalText.style.display = 'none';
+                sessionGoalEdit.style.display = 'block';
+                sessionGoalEdit.focus();
+                sessionGoalEdit.select();
+            });
+        }
+
+        // Save edit on Enter or blur
+        if (sessionGoalEdit) {
+            const saveGoalEdit = () => {
+                const newGoal = sessionGoalEdit.value.trim();
+                setSessionGoal(newGoal);
+                sessionGoalEdit.style.display = 'none';
+                if (sessionGoalText) sessionGoalText.style.display = '';
+                // Broadcast updated goal to the agent bridge
+                vscode.postMessage({ type: 'setGoal', goal: currentSessionGoal });
+            };
+            sessionGoalEdit.addEventListener('blur', saveGoalEdit);
+            sessionGoalEdit.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); saveGoalEdit(); }
+                if (e.key === 'Escape') {
+                    sessionGoalEdit.value = currentSessionGoal || '';
+                    sessionGoalEdit.style.display = 'none';
+                    if (sessionGoalText) sessionGoalText.style.display = '';
+                }
+            });
+        }
+
+        // Dismiss button clears the goal for this session
+        if (sessionGoalDismissBtn) {
+            sessionGoalDismissBtn.addEventListener('click', () => {
+                setSessionGoal(null);
+                vscode.postMessage({ type: 'setGoal', goal: null });
+            });
         }
     }
 
@@ -968,10 +1041,17 @@
         hideWelcome();
         currentStreamMsg = null;
         lastUserMessage = text;
-        // Derive session title from the first user message
+        // Derive session title and auto-set session goal from the first user message
         if (sessionMessages.length === 0 && text.trim()) {
             currentSessionTitle = text.trim().slice(0, SESSION_TITLE_DISPLAY_LENGTH).replace(/\n/g, ' ');
             updateSessionIndicator();
+            // Auto-extract session goal from the first line of the first message
+            if (!currentSessionGoal) {
+                const firstLine = text.trim().split('\n')[0].slice(0, 120);
+                if (firstLine) {
+                    setSessionGoal(firstLine);
+                }
+            }
         }
         sessionMessages.push({ type: 'user', text });
 
@@ -1955,6 +2035,13 @@
                 setLoading(true, `⏳ Rate limited — retrying in ${msg.delaySeconds}s (attempt ${msg.attempt}/${msg.maxAttempts})…`);
                 break;
 
+            case 'sessionGoal':
+                // Agent loop auto-extracted (or set) a session goal — update our UI
+                if (msg.goal && !currentSessionGoal) {
+                    setSessionGoal(msg.goal);
+                }
+                break;
+
             case 'stop':
                 finalizeAssistantMessage(null);
                 setLoading(false);
@@ -1969,11 +2056,11 @@
                 // Auto-save current session after every response so VS Code restarts
                 // don't lose the conversation (Cursor/Claude-style session memory).
                 if (sessionMessages.length > 0) {
-                    vscode.postMessage({ type: 'autoSaveSession', messages: [...sessionMessages], sessionId: currentSessionId });
+                    vscode.postMessage({ type: 'autoSaveSession', messages: [...sessionMessages], sessionId: currentSessionId, sessionGoal: currentSessionGoal });
                     if (currentSessionId) {
                         // Also update the history entry so it stays current when the
                         // user opens the history panel without clicking "New" first.
-                        vscode.postMessage({ type: 'updateSession', id: currentSessionId, messages: [...sessionMessages] });
+                        vscode.postMessage({ type: 'updateSession', id: currentSessionId, messages: [...sessionMessages], sessionGoal: currentSessionGoal });
                     }
                 }
                 // Offer to update CLAUDE.md after sessions where the agent touched files
@@ -2011,6 +2098,7 @@
                 sessionMessages = [];
                 currentSessionId = null;
                 currentSessionTitle = '';
+                setSessionGoal(null);
                 updateSessionIndicator();
                 tokenStats = { input: 0, output: 0 };
                 costTotal = 0;
@@ -2046,7 +2134,7 @@
 
             case 'resumeFromHistoryData':
                 // Direct-resume (Cursor-style): triggered when user clicks a history item
-                restoreSessionMessages(msg.messages || [], msg.id || null);
+                restoreSessionMessages(msg.messages || [], msg.id || null, msg.sessionGoal || null);
                 break;
 
             case 'fileContent':
@@ -2103,7 +2191,7 @@
                 updateContextBar();
                 // Restore active session if one was persisted (survives VS Code restarts)
                 if (msg.activeSession && msg.activeSession.length > 0) {
-                    restoreSessionMessages(msg.activeSession, msg.activeSessionId || null);
+                    restoreSessionMessages(msg.activeSession, msg.activeSessionId || null, msg.activeSessionGoal || null);
                 } else {
                     showWelcome(!!msg.hasApiKey);
                 }
@@ -3152,9 +3240,9 @@
     function saveCurrentSessionIfNeeded() {
         if (sessionMessages.length === 0) return;
         if (currentSessionId) {
-            vscode.postMessage({ type: 'updateSession', id: currentSessionId, messages: [...sessionMessages] });
+            vscode.postMessage({ type: 'updateSession', id: currentSessionId, messages: [...sessionMessages], sessionGoal: currentSessionGoal });
         } else {
-            vscode.postMessage({ type: 'saveSession', messages: [...sessionMessages] });
+            vscode.postMessage({ type: 'saveSession', messages: [...sessionMessages], sessionGoal: currentSessionGoal });
         }
     }
 
@@ -3163,12 +3251,16 @@
      * into the agent bridge, so the model remembers the full conversation context
      * (Cursor/Claude-style session memory).
      *
-     * @param {Array}       messages  - saved user/assistant message objects
-     * @param {string|null} sessionId - history entry ID being continued; null for a new session
+     * @param {Array}       messages    - saved user/assistant message objects
+     * @param {string|null} sessionId   - history entry ID being continued; null for a new session
+     * @param {string|null} sessionGoal - session goal to restore alongside messages
      */
-    function restoreSessionMessages(messages, sessionId) {
+    function restoreSessionMessages(messages, sessionId, sessionGoal) {
         // Track which history session we are editing so we update it (not duplicate it)
         currentSessionId = sessionId !== undefined ? sessionId : null;
+
+        // Restore session goal
+        setSessionGoal(sessionGoal || null);
 
         // Derive header title from the first user message in this session
         const firstUser = messages.find(m => m.type === 'user');
@@ -3202,7 +3294,7 @@
 
         // Re-inject the conversation history into the agent bridge so the next
         // user message is answered with full knowledge of the entire session.
-        vscode.postMessage({ type: 'resumeSession', messages });
+        vscode.postMessage({ type: 'resumeSession', messages, sessionGoal: currentSessionGoal, sessionId: currentSessionId });
     }
 
     function openHistoryPanel() {
