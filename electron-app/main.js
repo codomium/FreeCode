@@ -1,8 +1,10 @@
 'use strict';
 /**
- * main.js — Open Claude Code Electron Main Process
+ * main.js — freeCode Electron Main Process
  *
- * Standalone Windows 11 application that implements the Open Claude Code agent.
+ * Standalone application for freeCode — AI coding freedom for vibe coders.
+ * Implements the freeCode agent with professional architecture and agentic superpowers,
+ * surpassing tools like Cursor, Windsurf, and Claude Code.
  * Ports the VSCode extension's functionality (extension.js) to Electron, replacing
  * VSCode-specific APIs with Electron equivalents:
  *
@@ -14,7 +16,7 @@
  *   • vscode.window.activeTextEditor        → not available (standalone app)
  *   • vscode.languages.getDiagnostics()     → not available (standalone app)
  *
- * The Open Claude Code agent loop from v2/src runs **in-process** (imported
+ * The freeCode agent loop from v2/src runs **in-process** (imported
  * dynamically as ES modules) rather than as a subprocess. This avoids the
  * Node.js binary path issue on Windows and simplifies the architecture.
  */
@@ -157,7 +159,7 @@ function hasApiKey() {
 
 // ── In-Process Agent Bridge ───────────────────────────────────────────────────
 /**
- * Runs the Open Claude Code agent loop in the Electron main process.
+ * Runs the freeCode agent loop in the Electron main process.
  * Mirrors the message protocol of agent-bridge.mjs but uses IPC instead of
  * stdin/stdout to communicate with the renderer.
  */
@@ -475,7 +477,7 @@ function createWindow() {
         height: 800,
         minWidth:  600,
         minHeight: 500,
-        title: 'Open Claude Code',
+        title: 'freeCode',
         icon: path.join(__dirname, 'renderer', 'icon.ico'),
         webPreferences: {
             preload:           path.join(__dirname, 'preload.js'),
@@ -624,7 +626,7 @@ function showApiKeyDialog() {
             resizable:   false,
             minimizable: false,
             maximizable: false,
-            title:       'Set API Key — Open Claude Code',
+            title:       'Set API Key — freeCode',
             webPreferences: {
                 preload:          path.join(__dirname, 'dialog-preload.js'),
                 contextIsolation: true,
@@ -1487,7 +1489,9 @@ ipcMain.on('renderer-message', async (event, msg) => {
             if (watchPath && fs.existsSync(watchPath)) {
                 try {
                     global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
-                        send({ type: 'fileWatchEvent', event, filename: filename || '' });
+                        // Include full path so the renderer can match it against open tabs
+                        const fullPath = filename ? path.join(watchPath, filename) : '';
+                        send({ type: 'fileWatchEvent', event, filename: filename || '', path: fullPath });
                     });
                 } catch (watchErr) {
                     console.warn('watchWorkspace: fs.watch failed for', watchPath, ':', watchErr.message);

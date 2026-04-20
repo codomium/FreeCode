@@ -236,6 +236,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 yield { type: 'tool_progress', tool: block.name, status: 'running', input: block.input };
 
                 let result;
+                let isToolError = false;
                 try {
                     const callResult = await tools.call(block.name, block.input);
                     // Detect async-generator tools (e.g. Bash with live streaming)
@@ -256,6 +257,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     }
                 } catch (err) {
                     result = `Tool error: ${err.message}`;
+                    isToolError = true;
                 }
 
                 // Run post-tool hooks
@@ -263,7 +265,14 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     result = await hooks.runPostToolUse(block.name, result);
                 }
 
-                yield { type: 'result', tool: block.name, result, input: block.input };
+                // Also treat result strings that are tool-error messages as errors
+                if (!isToolError && typeof result === 'string' &&
+                    (result.startsWith('Tool error:') || result.startsWith('Error:') ||
+                     result.includes('not found in file') || result.includes('does not exist'))) {
+                    isToolError = true;
+                }
+
+                yield { type: 'result', tool: block.name, result, input: block.input, isError: !!isToolError };
 
                 toolResults.push({
                     type: 'tool_result',

@@ -212,6 +212,14 @@
     const gitBtn            = document.getElementById('git-btn');
     const errorsBtn         = document.getElementById('errors-btn');
     const autoAttachBtn     = document.getElementById('auto-attach-btn');
+    const voiceBtn          = document.getElementById('voice-btn');
+    const fileWatchToast    = document.getElementById('file-watch-toast');
+    const fileWatchMsg      = document.getElementById('file-watch-toast-msg');
+    const fileWatchRereadBtn = document.getElementById('file-watch-reread-btn');
+    const fileWatchDismiss  = document.getElementById('file-watch-dismiss-btn');
+    const claudemdBanner    = document.getElementById('claudemd-banner');
+    const claudemdYesBtn    = document.getElementById('claudemd-yes-btn');
+    const claudemdNoBtn     = document.getElementById('claudemd-no-btn');
     const contextWarningEl  = document.getElementById('context-warning');
     const contextWarningTextEl = document.getElementById('context-warning-text');
     const contextWarningNewBtn = document.getElementById('context-warning-new');
@@ -1275,7 +1283,7 @@
         return id;
     }
 
-    function updateToolCard(toolName, result, input) {
+    function updateToolCard(toolName, result, input, isError) {
         const id = activeToolCards[toolName];
         if (!id) return;
         const card = document.getElementById(id);
@@ -1284,14 +1292,20 @@
         if (statusEl) {
             statusEl.textContent = '';
             const doneSpan = document.createElement('span');
-            doneSpan.style.color = 'var(--success)';
-            doneSpan.textContent = '✓ done';
+            if (isError) {
+                doneSpan.style.color = 'var(--error-text)';
+                doneSpan.textContent = '✗ failed';
+                card.classList.add('tool-error');
+            } else {
+                doneSpan.style.color = 'var(--success)';
+                doneSpan.textContent = '✓ done';
+            }
             statusEl.appendChild(doneSpan);
         }
         const resultEl = document.getElementById(`${id}-result`);
         const storedInput = toolCardInputs[id] || input || {};
         if (resultEl) {
-            if (toolName === 'Edit' &&
+            if (!isError && toolName === 'Edit' &&
                 storedInput.old_string !== undefined &&
                 storedInput.new_string !== undefined) {
                 // Show inline diff: red for removed lines, green for added lines
@@ -1302,7 +1316,7 @@
                 resultEl.innerHTML = '';
                 resultEl.className = 'tool-result tool-result-diff';
                 resultEl.appendChild(buildDiffView(diff));
-            } else if (toolName === 'Bash') {
+            } else if (!isError && toolName === 'Bash') {
                 // Bash: live output is already rendered via appendToolStream;
                 // on completion just remove the waiting placeholder if still there
                 const em = resultEl.querySelector('em');
@@ -1315,11 +1329,32 @@
                     resultEl.appendChild(pre);
                 }
             } else {
-                // Default: plain text preview
+                // Default: plain text preview (also used for errors)
                 const preview = result && result.length > 800
                     ? result.slice(0, 800) + '\n…'
                     : (result || '');
                 resultEl.textContent = preview;      // safe — textContent only
+            }
+            // For tool errors, add an "Inject error context" button so the user
+            // can ask the agent to fix the problem automatically
+            if (isError && result) {
+                const injectBtn = document.createElement('button');
+                injectBtn.className = 'tool-card-inject-btn';
+                injectBtn.textContent = '↩ Retry with error context';
+                injectBtn.title = 'Inject this error into the next message so the agent can fix it automatically';
+                injectBtn.addEventListener('click', () => {
+                    if (inputEl && !isLoading) {
+                        const errorCtx = `[Tool Error in ${toolName}]\n${result}`;
+                        const existing = inputEl.value.trim();
+                        inputEl.value = existing
+                            ? `${existing}\n\n${errorCtx}`
+                            : `Fix this error that just occurred:\n\n${errorCtx}`;
+                        inputEl.style.height = 'auto';
+                        inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                        inputEl.focus();
+                    }
+                });
+                resultEl.appendChild(injectBtn);
             }
         }
         // Remove stdin bar (command has finished)
@@ -1815,8 +1850,11 @@
                 appendToolStream(msg.tool, msg.chunk || '');
                 break;
 
-            case 'result':
-                updateToolCard(msg.tool, typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2), msg.input);
+            case 'result': {
+                const resultStr = typeof msg.result === 'string' ? msg.result : JSON.stringify(msg.result, null, 2);
+                // isError: true when the tool call returned an error (not a normal result)
+                const isToolError = !!msg.isError;
+                updateToolCard(msg.tool, resultStr, msg.input, isToolError);
                 if (pendingDiffEdit && pendingDiffEdit.tool === msg.tool) {
                     if (pendingDiffEdit.beforeContent !== null) {
                         // Before content is already available — trigger after read
@@ -1832,6 +1870,7 @@
                     syncPlanFromTodos(msg.input.todos);
                 }
                 break;
+            }
 
             case 'compaction':
                 addSystemMessage(`⟳ Context compacted (pass ${msg.count})`);
@@ -1874,6 +1913,16 @@
                         // Also update the history entry so it stays current when the
                         // user opens the history panel without clicking "New" first.
                         vscode.postMessage({ type: 'updateSession', id: currentSessionId, messages: [...sessionMessages] });
+                    }
+                }
+                // Offer to update CLAUDE.md after sessions where the agent touched files
+                // (non-trivial sessions: ≥3 messages where a Write/Edit tool was used)
+                if (sessionMessages.length >= 3 && claudemdBanner && claudemdBanner.style.display === 'none') {
+                    const assistantMsgs = sessionMessages.filter(m => m.type === 'assistant');
+                    const editedFiles = openTabs.some(t => t.isDiff);
+                    if (editedFiles && assistantMsgs.length >= 1) {
+                        // Delay slightly so it appears after the final assistant message renders
+                        setTimeout(() => showClaudemdBanner([...sessionMessages]), 800);
                     }
                 }
                 break;
@@ -2141,6 +2190,14 @@
                 break;
 
             case 'fileWatchEvent':
+                // Show "modified externally" toast for files the agent knows about
+                if (msg.path) {
+                    const isAgentFile = openTabs.some(t => t.path === msg.path) ||
+                        contextFiles.some(f => f.path === msg.path);
+                    if (isAgentFile) {
+                        showFileWatchToast(msg.path);
+                    }
+                }
                 // Debounced tree refresh on workspace changes
                 if (fileWatchDebounce) clearTimeout(fileWatchDebounce);
                 fileWatchDebounce = setTimeout(() => {
@@ -3368,6 +3425,127 @@
             newChatBtn && newChatBtn.click();
         });
     }
+
+    // ── Voice Input (Web Speech API) ──────────────────────────────────────────
+    let voiceRecognition = null;
+    let voiceActive = false;
+
+    if (voiceBtn) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            voiceRecognition = new SpeechRecognition();
+            voiceRecognition.continuous   = false;
+            voiceRecognition.interimResults = true;
+            voiceRecognition.lang         = navigator.language || 'en-US';
+
+            let voiceInterim = '';
+            let voiceBase = '';  // text that was in the input before recording started
+
+            voiceRecognition.onstart = () => {
+                voiceActive = true;
+                voiceBase = inputEl ? inputEl.value : '';
+                voiceBtn.classList.add('voice-recording');
+                voiceBtn.title = 'Recording… click to stop';
+            };
+            voiceRecognition.onresult = (e) => {
+                let interim = '';
+                let final = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    if (e.results[i].isFinal) final += e.results[i][0].transcript;
+                    else interim += e.results[i][0].transcript;
+                }
+                voiceInterim = interim;
+                if (inputEl) {
+                    inputEl.value = voiceBase + final + interim;
+                    inputEl.style.height = 'auto';
+                    inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                }
+                if (final) voiceBase = voiceBase + final;
+            };
+            voiceRecognition.onerror = (e) => {
+                if (e.error !== 'aborted') addSystemMessage(`🎤 Voice error: ${e.error}`);
+            };
+            voiceRecognition.onend = () => {
+                voiceActive = false;
+                voiceBtn.classList.remove('voice-recording');
+                voiceBtn.title = 'Voice input — click to record';
+                voiceInterim = '';
+            };
+
+            voiceBtn.addEventListener('click', () => {
+                if (voiceActive) {
+                    voiceRecognition.stop();
+                } else {
+                    try { voiceRecognition.start(); } catch { /* already running */ }
+                }
+            });
+        } else {
+            // Hide the button if Speech API is not available
+            voiceBtn.style.display = 'none';
+        }
+    }
+
+    // ── File-Change Watcher Toast ─────────────────────────────────────────────
+    let watchedChangedFiles = [];  // { path } queue of external changes
+    let watchToastVisible = false;
+    let watchToastDismissTimer = null;
+
+    function showFileWatchToast(filePath) {
+        watchedChangedFiles.push(filePath);
+        if (!fileWatchToast || !fileWatchMsg) return;
+        const name = filePath.split(/[\\/]/).pop();
+        fileWatchMsg.innerHTML = `📝 <code>${escapeHtml(name)}</code> was modified externally`;
+        fileWatchToast.style.display = 'flex';
+        watchToastVisible = true;
+        clearTimeout(watchToastDismissTimer);
+        watchToastDismissTimer = setTimeout(dismissFileWatchToast, 8000);
+    }
+
+    function dismissFileWatchToast() {
+        if (fileWatchToast) fileWatchToast.style.display = 'none';
+        watchToastVisible = false;
+        watchedChangedFiles = [];
+        clearTimeout(watchToastDismissTimer);
+    }
+
+    if (fileWatchRereadBtn) {
+        fileWatchRereadBtn.addEventListener('click', () => {
+            for (const fp of watchedChangedFiles) {
+                vscode.postMessage({ type: 'readFile', path: fp, purpose: 'context' });
+                addContextFile(fp.split(/[\\/]/).pop(), fp);
+            }
+            dismissFileWatchToast();
+        });
+    }
+    if (fileWatchDismiss) fileWatchDismiss.addEventListener('click', dismissFileWatchToast);
+
+    // ── CLAUDE.md Session Summary Offer ──────────────────────────────────────
+    let claudemdPendingMessages = [];
+
+    function showClaudemdBanner(msgs) {
+        claudemdPendingMessages = msgs;
+        if (!claudemdBanner) return;
+        claudemdBanner.style.display = 'flex';
+    }
+    function dismissClaudemdBanner() {
+        if (claudemdBanner) claudemdBanner.style.display = 'none';
+        claudemdPendingMessages = [];
+    }
+
+    if (claudemdYesBtn) {
+        claudemdYesBtn.addEventListener('click', () => {
+            dismissClaudemdBanner();
+            // Ask the agent to write a CLAUDE.md summary
+            const summaryPrompt =
+                'Please update (or create) the `CLAUDE.md` file in the current workspace root with a concise summary of what we accomplished in this session: decisions made, architectural patterns established, files changed, and any conventions to remember for future sessions. Keep it brief and developer-focused.';
+            if (!isLoading) {
+                setSending(true);
+                setLoading(true, 'Updating CLAUDE.md…');
+                vscode.postMessage({ type: 'send', message: summaryPrompt, contextFiles: [], fileRefs: [] });
+            }
+        });
+    }
+    if (claudemdNoBtn) claudemdNoBtn.addEventListener('click', dismissClaudemdBanner);
 
     // ── Settings Panel ────────────────────────────────────────────────────────
 

@@ -176,8 +176,8 @@
           <div id="setup-guide" style="display:none">
             <div class="setup-header">
               <div class="setup-logo">✦</div>
-              <h2>Welcome to FreeCode</h2>
-              <p>Your AI coding assistant. Complete the steps below to get started.</p>
+              <h2>Welcome to freeCode</h2>
+              <p>Your AI coding companion — built for vibe coders. Complete the steps below to get started.</p>
             </div>
             <div class="setup-step" id="step-1">
               <div class="step-badge">1</div>
@@ -246,8 +246,8 @@
           <!-- ── NORMAL WELCOME ─────────────────────────────── -->
           <div id="welcome-normal" style="display:none">
             <div class="setup-logo">✦</div>
-            <h2>FreeCode</h2>
-            <p>Your AI coding assistant. Ask questions, edit files, run commands, and more.</p>
+            <h2>freeCode</h2>
+            <p class="welcome-tagline">Freedom to code. Built for vibe coders. 🚀<br><span class="welcome-sub">Professional architecture · Agentic superpowers · Better than Cursor</span></p>
             <div class="welcome-tips-grid">
               <div class="welcome-tip"><span class="tip-key">Enter</span> send message</div>
               <div class="welcome-tip"><span class="tip-key">Shift+Enter</span> newline</div>
@@ -330,6 +330,14 @@
             <button class="input-btn ctx-inject-btn" id="auto-attach-btn" title="Auto-attach active file to every message (toggle)">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M9.5 2.5l4 4-6.5 6.5-4-4 6.5-6.5z"/><line x1="2" y1="14" x2="5" y2="11"/>
+              </svg>
+            </button>
+            <button class="input-btn" id="voice-btn" title="Voice input — hold to record (Web Speech API)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="5" y="1" width="6" height="9" rx="3"/>
+                <path d="M2 8a6 6 0 0012 0"/>
+                <line x1="8" y1="14" x2="8" y2="16"/>
+                <line x1="5" y1="16" x2="11" y2="16"/>
               </svg>
             </button>
             <button id="stop-btn" title="Stop generation">■ Stop</button>
@@ -461,6 +469,20 @@
 <!-- ═══════════════════════════════════════════════════════════
      OVERLAYS (outside workbench, cover full screen)
      ═══════════════════════════════════════════════════════════ -->
+
+<!-- File-change watcher toast -->
+<div id="file-watch-toast" style="display:none">
+  <span id="file-watch-toast-msg">📝 File modified externally</span>
+  <button id="file-watch-reread-btn" class="toast-btn">Re-read</button>
+  <button id="file-watch-dismiss-btn" class="toast-dismiss">✕</button>
+</div>
+
+<!-- CLAUDE.md session summary offer -->
+<div id="claudemd-banner" style="display:none">
+  <span id="claudemd-banner-msg">💾 Update <code>CLAUDE.md</code> with a summary of this session?</span>
+  <button id="claudemd-yes-btn" class="toast-btn">Yes, update</button>
+  <button id="claudemd-no-btn" class="toast-dismiss">Not now</button>
+</div>
 
 <!-- History Panel -->
 <div id="history-panel">
