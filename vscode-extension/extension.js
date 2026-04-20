@@ -1191,27 +1191,6 @@ function deactivate() {
 
 const MAX_TERMINAL_BYTES = 512 * 1024; // 512 KB
 
-const TERMINAL_POWERSHELL_SHIMS_MODULE = `# freecode-shims.psm1 — FreeCode PowerShell POSIX compatibility shims
-function which { param([string]$cmd) $r = Get-Command $cmd -EA SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd: not found"; exit 1 } }
-function grep  { param([string]$pat, [Parameter(ValueFromRemainingArguments)][string[]]$f) if ($f) { Select-String -Pattern $pat -Path $f | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pat | ForEach-Object { $_.Line } } }
-function cat   { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Get-Content $paths } else { $input } }
-function touch { param([string]$p) if (Test-Path $p) { (Get-Item $p).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $p -Force | Out-Null } }
-function wc    { param([string]$flag="-l") $lines = @($input); switch ($flag) { "-l" { $lines.Count } "-c" { ($lines -join "\`n").Length } "-w" { ($lines -join " ").Split() | Where-Object { $_ } | Measure-Object | Select-Object -Expand Count } default { $lines.Count } } }
-function head  { param([int]$n=10, [string]$file="") if ($file) { Get-Content $file -TotalCount $n } else { $input | Select-Object -First $n } }
-function tail  { param([int]$n=10, [string]$file="") if ($file) { Get-Content $file -Tail $n } else { $input | Select-Object -Last $n } }
-function find  { param([string]$path=".", [string]$name="*") Get-ChildItem -Path $path -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -Expand FullName }
-function pwd   { (Get-Location).Path }
-function ls    { param([Parameter(ValueFromRemainingArguments)][string[]]$a) Get-ChildItem @a }
-function mkdir { param([Parameter(ValueFromRemainingArguments)][string[]]$a) New-Item -ItemType Directory @a -Force }
-function rm    { param([switch]$r, [switch]$f, [Parameter(ValueFromRemainingArguments)][string[]]$paths) Remove-Item $paths -Recurse:$r -Force:$f -ErrorAction SilentlyContinue }
-function cp    { param([string]$src, [string]$dst) Copy-Item -Path $src -Destination $dst -Recurse -Force }
-function mv    { param([string]$src, [string]$dst) Move-Item -Path $src -Destination $dst -Force }
-function echo  { param([Parameter(ValueFromRemainingArguments)][string[]]$a) Write-Output ($a -join " ") }
-function sed   { param([string]$expr, [string]$file="") if ($expr -match "^s/(.+)/(.+)/") { $pat=$Matches[1]; $rep=$Matches[2]; if ($file) { (Get-Content $file) -replace $pat,$rep | Set-Content $file } else { $input | ForEach-Object { $_ -replace $pat,$rep } } } }
-function awk   { param([string]$prog, [Parameter(ValueFromRemainingArguments)][string[]]$files) Write-Warning "awk: limited PowerShell shim — consider installing gawk via winget" }
-Export-ModuleMember -Function *
-`;
-
 let _preferredTerminalShell = null;
 let _preferredTerminalShellName = null;
 
@@ -1265,21 +1244,6 @@ function detectPreferredTerminalShell() {
     return _preferredTerminalShell;
 }
 
-function ensurePowerShellShimsModule() {
-    const fs = require('fs');
-    const baseDir = extensionContext?.globalStorageUri?.fsPath || __dirname;
-    try { fs.mkdirSync(baseDir, { recursive: true }); } catch { /* ignore */ }
-    const shimPath = path.join(baseDir, 'freecode-shims.psm1');
-    if (!fs.existsSync(shimPath)) {
-        fs.writeFileSync(shimPath, TERMINAL_POWERSHELL_SHIMS_MODULE, 'utf8');
-    }
-    return shimPath;
-}
-
-function quotePowerShellPath(p) {
-    return String(p || '').replace(/'/g, "''");
-}
-
 /**
  * Execute `command` in the workspace shell and stream output to the webview.
  * Uses openClaudeCode.defaultShell when explicitly set.
@@ -1304,10 +1268,7 @@ function runTerminalCommand(command, reqId, send) {
     let shellExe = shell.exe;
     let shellArgs = [...shell.args, command];
 
-    if (shell.type === 'powershell') {
-        const modulePath = ensurePowerShellShimsModule();
-        shellArgs = [...shell.args, `Import-Module '${quotePowerShellPath(modulePath)}' -Force; ${command}`];
-    } else if (shell.type === 'cmd') {
+    if (shell.type === 'cmd') {
         shellExe = 'cmd.exe';
         shellArgs = ['/c', command];
     }

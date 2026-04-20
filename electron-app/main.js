@@ -1333,7 +1333,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
 let _preferredShell = null;
 
 const POWERSHELL_SHIMS_MODULE = `# freecode-shims.psm1 — FreeCode PowerShell POSIX compatibility shims
-function which { param([string]$cmd) $r = Get-Command $cmd -EA SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd: not found"; exit 1 } }
+function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd: not found"; exit 1 } }
 function grep  { param([string]$pat, [Parameter(ValueFromRemainingArguments)][string[]]$f) if ($f) { Select-String -Pattern $pat -Path $f | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pat | ForEach-Object { $_.Line } } }
 function cat   { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Get-Content $paths } else { $input } }
 function touch { param([string]$p) if (Test-Path $p) { (Get-Item $p).LastWriteTime = Get-Date } else { New-Item -ItemType File -Path $p -Force | Out-Null } }

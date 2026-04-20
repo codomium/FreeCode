@@ -3368,8 +3368,8 @@
     }
 
     function formatShellAvailability(shells) {
-        const icon = (ok) => (ok ? '✅' : '❌');
-        return `PowerShell ${icon(!!shells.powershell)}  WSL ${icon(!!shells.wsl)}  Ubuntu ${icon(!!shells.ubuntu)}  Bash ${icon(!!shells.bash)}  cmd ${icon(!!shells.cmd)}`;
+        const status = (ok) => (ok ? 'available' : 'unavailable');
+        return `PowerShell: ${status(!!shells.powershell)} · WSL: ${status(!!shells.wsl)} · Ubuntu: ${status(!!shells.ubuntu)} · Bash: ${status(!!shells.bash)} · cmd: ${status(!!shells.cmd)}`;
     }
 
     function openSettingsPanel() {
