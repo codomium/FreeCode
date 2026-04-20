@@ -953,7 +953,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 const content = await new Promise((resolve, reject) => {
                     const httpMod = targetUrl.startsWith('https://') ? require('https') : require('http');
                     const req = httpMod.get({ hostname: reqOpts.hostname, path: reqOpts.pathname + (reqOpts.search || ''),
-                        port: reqOpts.port, headers: { 'User-Agent': 'OpenClaudeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
+                        port: reqOpts.port, headers: { 'User-Agent': 'freeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
                         (res) => {
                             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                                 resolve(`(redirect to ${res.headers.location} — please use the final URL directly)`);
@@ -1515,7 +1515,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
  */
 let _preferredShell = null;
 
-const POWERSHELL_SHIMS_MODULE = `# freecode-shims.psm1 — FreeCode PowerShell POSIX compatibility shims
+const POWERSHELL_SHIMS_MODULE = `# freeCode-shims.psm1 — freeCode PowerShell POSIX compatibility shims
 function which { param([string]$cmd) $r = Get-Command $cmd -ErrorAction SilentlyContinue; if ($r) { $r.Source } else { Write-Error "which: $cmd: not found"; exit 1 } }
 function grep  { param([string]$pat, [Parameter(ValueFromRemainingArguments)][string[]]$f) if ($f) { Select-String -Pattern $pat -Path $f | ForEach-Object { "$($_.Path):$($_.LineNumber):$($_.Line)" } } else { $input | Select-String -Pattern $pat | ForEach-Object { $_.Line } } }
 function cat   { param([Parameter(ValueFromRemainingArguments)][string[]]$paths) if ($paths) { Get-Content $paths } else { $input } }
@@ -1584,7 +1584,7 @@ function isPowerShellAvailable() {
 }
 
 function ensurePowerShellShimsModule() {
-    const modPath = path.join(getUserData(), 'freecode-shims.psm1');
+    const modPath = path.join(getUserData(), 'freeCode-shims.psm1');
     if (!fs.existsSync(modPath)) {
         fs.writeFileSync(modPath, POWERSHELL_SHIMS_MODULE, 'utf8');
     }
