@@ -934,10 +934,22 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 send({ type: 'urlContent', url: targetUrl, content: '(invalid URL)', error: 'Invalid URL' });
                 break;
             }
+            // SSRF guard: block requests to loopback, private, link-local and metadata addresses
+            const PRIVATE_IP_RE = /^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|fc00:|fd|fe80:|0x|0177)/i;
+            let reqOpts;
+            try { reqOpts = new URL(targetUrl); } catch {
+                send({ type: 'urlContent', url: targetUrl, content: '(malformed URL)', error: 'Malformed URL' });
+                break;
+            }
+            const hostname = reqOpts.hostname.toLowerCase();
+            if (PRIVATE_IP_RE.test(hostname) || hostname === '[::1]') {
+                send({ type: 'urlContent', url: targetUrl, content: '(blocked: private/loopback addresses are not allowed)', error: 'Blocked hostname' });
+                break;
+            }
+            const MAX_URL_CONTENT_BYTES = 20000;
             try {
                 const content = await new Promise((resolve, reject) => {
                     const httpMod = targetUrl.startsWith('https://') ? require('https') : require('http');
-                    const reqOpts = new URL(targetUrl);
                     const req = httpMod.get({ hostname: reqOpts.hostname, path: reqOpts.pathname + (reqOpts.search || ''),
                         port: reqOpts.port, headers: { 'User-Agent': 'OpenClaudeCode/1.0 (context-fetch)', 'Accept': 'text/html,text/plain' } },
                         (res) => {
@@ -958,8 +970,8 @@ ipcMain.on('renderer-message', async (event, msg) => {
                                 text = text.replace(/<[^>]*>/g, ' ');
                                 // Collapse whitespace
                                 text = text.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-                                // Limit to ~20KB
-                                if (text.length > 20000) text = text.slice(0, 20000) + '\n…(truncated)';
+                                // Limit content size
+                                if (text.length > MAX_URL_CONTENT_BYTES) text = text.slice(0, MAX_URL_CONTENT_BYTES) + '\n…(truncated)';
                                 resolve(text);
                             });
                         }

@@ -2454,9 +2454,9 @@
             }
 
             // @url:<address> or @url <address> — fetch URL and inject as context
-            const urlMention = val.match(/@url[:\s]+(https?:\/\/\S+)/);
+            const urlMention = val.match(/@url[:\s]+(https?:\/\/[^\s<>"{}|\\^`\[\]]+)/);
             if (urlMention) {
-                inputEl.value = val.replace(/@url[:\s]+https?:\/\/\S+/g, '').trim();
+                inputEl.value = val.replace(/@url[:\s]+https?:\/\/[^\s<>"{}|\\^`\[\]]+/g, '').trim();
                 inputEl.style.height = 'auto';
                 inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
                 requestUrlContext(urlMention[1]);
@@ -3722,6 +3722,10 @@
                 if (toggleInput.checked) {
                     // Substitute {workspace} placeholder with actual workspace path
                     const ws = currentWorkspacePath || '';
+                    if (!ws && srv.args.some(a => a.includes('{workspace}'))) {
+                        // Warn but still enable — user can set workspace path later
+                        addSystemMessage(`⚠ MCP server "${srv.name}" uses {workspace} but no workspace folder is set. Set a workspace path in Settings > Workspace first.`);
+                    }
                     const args = srv.args.map(a => a.replace('{workspace}', ws));
                     mcpEnabledServers[srv.id] = { command: srv.command, args };
                 } else {
