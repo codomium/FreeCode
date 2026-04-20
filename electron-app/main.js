@@ -848,7 +848,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
 
         // ── File search (autocomplete) ────────────────────────────────────────
         case 'fileSearch': {
-            const results = searchFiles(msg.query || '');
+            const results = await searchFiles(msg.query || '');
             send({ type: 'fileSearchResults', files: results });
             break;
         }
@@ -1899,14 +1899,14 @@ function searchFiles(query) {
     const SKIP    = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__', '.cache']);
     const MAX     = 20;
 
-    function walk(dir, depth) {
+    async function walk(dir, depth) {
         if (results.length >= MAX || depth > 6) return;
         let entries;
-        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
         for (const e of entries) {
             if (results.length >= MAX) break;
             if (e.isDirectory()) {
-                if (!SKIP.has(e.name)) walk(path.join(dir, e.name), depth + 1);
+                if (!SKIP.has(e.name)) await walk(path.join(dir, e.name), depth + 1);
             } else if (e.isFile()) {
                 if (!q || e.name.toLowerCase().includes(q)) {
                     const fullPath = path.join(dir, e.name);
@@ -1920,8 +1920,7 @@ function searchFiles(query) {
         }
     }
 
-    try { walk(cwd, 0); } catch { /* ignore */ }
-    return results;
+    return walk(cwd, 0).then(() => results).catch(() => results);
 }
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
