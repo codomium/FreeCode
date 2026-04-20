@@ -1,7 +1,7 @@
 {
   "name": "freecode",
   "productName": "freeCode",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "freeCode — AI coding freedom for vibe coders. Professional architecture, agentic superpowers.",
   "main": "main.js",
   "scripts": {
@@ -26,7 +26,7 @@
   "build": {
     "appId": "com.freecode.app",
     "productName": "freeCode",
-    "copyright": "Copyright © 2025 freeCode — AI coding freedom for vibe coders",
+    "copyright": "Copyright © 2026 freeCode — AI coding freedom for vibe coders",
     "directories": {
       "output": "dist"
     },
@@ -36,7 +36,8 @@
       "dialog-preload.js",
       "api-key-dialog.html",
       "renderer/**/*",
-      "!renderer/node_modules/**/*"
+      "!renderer/node_modules/**/*",
+      "multi-agent-orchestrator.js"
     ],
     "extraResources": [
       {

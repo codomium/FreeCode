@@ -28,11 +28,13 @@ const os     = require('os');
 const crypto = require('crypto');
 const { execFile, spawnSync } = require('child_process');
 const { pathToFileURL } = require('url');
+const { MultiAgentOrchestrator } = require('./multi-agent-orchestrator');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_SESSION_MESSAGES = 200;
 const RETRY_DELAYS_MS = [3000, 8000, 20000];
+const MIN_MULTI_AGENT_PROVIDERS = 3;
 
 /** Returns true for rate-limit / server-overload errors worth retrying. */
 function isRateLimitError(msg) {
@@ -102,17 +104,30 @@ const DEFAULT_SETTINGS = {
     pinnedFiles:        [],
     workspacePath:      os.homedir(),
     defaultShell:       'auto', // 'auto' | 'powershell' | 'wsl' | 'ubuntu' | 'bash' | 'cmd'
+    multiAgentEnabled:  false,
+    multiAgentStrategy: 'parallel',
+    multiAgentMaxProviders: 3,
+    systemPromptPreset: 'expert-engineer',
+    providers:          [],
     customProviders:    [],   // [{ id, name, baseUrl, apiKey, models:[{id,name}], headers:[{name,value}] }]
     mcpServers:         {},   // { serverId: { command, args } }
 };
 
 function getSettings() {
-    return Object.assign({}, DEFAULT_SETTINGS, readJson('settings', {}));
+    const merged = Object.assign({}, DEFAULT_SETTINGS, readJson('settings', {}));
+    const providers = Array.isArray(merged.providers)
+        ? merged.providers
+        : (Array.isArray(merged.customProviders) ? merged.customProviders : []);
+    merged.providers = providers;
+    merged.customProviders = providers;
+    return merged;
 }
 
 function saveSetting(key, value) {
     const s = getSettings();
     s[key] = value;
+    if (key === 'providers') s.customProviders = value;
+    if (key === 'customProviders') s.providers = value;
     writeJson('settings', s);
 }
 
@@ -441,7 +456,16 @@ function captureAgentMessages() {
 
 function getBridge() {
     if (!agentBridge) {
-        agentBridge = new InProcessAgentBridge();
+        const s = getSettings();
+        if (s.multiAgentEnabled) {
+            agentBridge = new MultiAgentOrchestrator({
+                providers: Array.isArray(s.providers) ? s.providers : [],
+                strategy: s.multiAgentStrategy || 'parallel',
+                createBridge: () => new InProcessAgentBridge(),
+            });
+        } else {
+            agentBridge = new InProcessAgentBridge();
+        }
         // Restore conversation context that was saved before the last reinit
         if (savedAgentMessages && savedAgentMessages.length > 0) {
             agentBridge._pendingMessages = savedAgentMessages;
@@ -460,9 +484,12 @@ function applyEnvFromSettings() {
     process.env.CLAUDE_CODE_PERMISSION_MODE = s.permissionMode || 'default';
     process.env.CLAUDE_CODE_MAX_TURNS       = String(s.maxTurns || 20);
     process.env.NVIDIA_THINKING_MODE        = String(s.nvidiaThinkingMode || false);
+    process.env.MULTI_AGENT_ENABLED         = String(!!s.multiAgentEnabled);
+    process.env.MULTI_AGENT_STRATEGY        = String(s.multiAgentStrategy || 'parallel');
+    process.env.SYSTEM_PROMPT_PRESET        = String(s.systemPromptPreset || 'expert-engineer');
 
     // Serialize custom providers so the agent-loop can call them
-    const cp = Array.isArray(s.customProviders) ? s.customProviders : [];
+    const cp = Array.isArray(s.providers) ? s.providers : [];
     process.env.CUSTOM_PROVIDERS_JSON = cp.length > 0 ? JSON.stringify(cp) : '';
 
     // Set cwd to workspace
@@ -701,7 +728,11 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 maxTurns:           s.maxTurns || 20,
                 showToolOutput:     s.showToolOutput !== false,
                 hasNvidiaKey:       !!(s.nvidiaApiKey || process.env.NVIDIA_API_KEY),
-                customProviders:    Array.isArray(s.customProviders) ? s.customProviders : [],
+                customProviders:    Array.isArray(s.providers) ? s.providers : (Array.isArray(s.customProviders) ? s.customProviders : []),
+                providers:          Array.isArray(s.providers) ? s.providers : (Array.isArray(s.customProviders) ? s.customProviders : []),
+                multiAgentEnabled:  !!s.multiAgentEnabled,
+                multiAgentStrategy: s.multiAgentStrategy || 'parallel',
+                systemPromptPreset: s.systemPromptPreset || 'expert-engineer',
                 mcpServers:         (s.mcpServers && typeof s.mcpServers === 'object') ? s.mcpServers : {},
             });
 
@@ -1244,11 +1275,11 @@ ipcMain.on('renderer-message', async (event, msg) => {
 
         // ── Save a single setting ─────────────────────────────────────────────
         case 'saveSettings': {
-            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath','defaultShell'];
+            const allowed = ['model','permissionMode','maxTurns','showToolOutput','nvidiaApiKey','workspacePath','defaultShell','multiAgentEnabled','multiAgentStrategy','providers','systemPromptPreset'];
             if (msg.key && allowed.includes(msg.key)) {
                 saveSetting(msg.key, msg.value);
                 applyEnvFromSettings();
-                const reinitKeys = ['permissionMode','maxTurns','nvidiaApiKey'];
+                const reinitKeys = ['permissionMode','maxTurns','nvidiaApiKey','multiAgentEnabled','multiAgentStrategy','providers','systemPromptPreset'];
                 if (reinitKeys.includes(msg.key)) {
                     if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
                 }
@@ -1329,7 +1360,21 @@ ipcMain.on('renderer-message', async (event, msg) => {
         // ── Save custom providers list ─────────────────────────────────────────
         case 'saveCustomProviders': {
             const providers = Array.isArray(msg.providers) ? msg.providers : [];
-            saveSetting('customProviders', providers);
+            const curr = getSettings();
+            const multiAgentEnabled = (typeof msg.multiAgentEnabled === 'boolean')
+                ? msg.multiAgentEnabled
+                : !!curr.multiAgentEnabled;
+            const multiAgentStrategy = msg.multiAgentStrategy || curr.multiAgentStrategy || 'parallel';
+            if (multiAgentEnabled && providers.length < MIN_MULTI_AGENT_PROVIDERS) {
+                send({
+                    type: 'customProvidersError',
+                    message: 'Multi-Agent Mode requires at least 3 configured providers.',
+                });
+                break;
+            }
+            saveSetting('providers', providers);
+            saveSetting('multiAgentEnabled', multiAgentEnabled);
+            saveSetting('multiAgentStrategy', multiAgentStrategy);
             applyEnvFromSettings();
             // Reinit bridge so new providers are available on the next turn
             if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
@@ -1357,6 +1402,36 @@ ipcMain.on('renderer-message', async (event, msg) => {
             // Reinit bridge so new servers are connected on the next turn
             if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
             send({ type: 'mcpServersSaved', mcpServers });
+            break;
+        }
+
+        case 'validateProvider': {
+            const p = msg.provider && typeof msg.provider === 'object' ? msg.provider : null;
+            const id = p?.id || '';
+            if (!p || !p.baseUrl || !p.apiKey) {
+                send({ type: 'providerValidated', id, ok: false, error: 'Missing base URL or API key.' });
+                break;
+            }
+            try {
+                const headers = {
+                    'Authorization': `Bearer ${p.apiKey}`,
+                    'Content-Type': 'application/json',
+                };
+                if (Array.isArray(p.headers)) {
+                    for (const h of p.headers) {
+                        if (h?.name) headers[h.name] = h.value || '';
+                    }
+                }
+                const url = String(p.baseUrl).replace(/\/+$/, '') + '/models';
+                const res = await fetch(url, { method: 'GET', headers });
+                if (!res.ok) {
+                    send({ type: 'providerValidated', id, ok: false, error: `HTTP ${res.status}` });
+                    break;
+                }
+                send({ type: 'providerValidated', id, ok: true, error: '' });
+            } catch (err) {
+                send({ type: 'providerValidated', id, ok: false, error: err.message || 'Connection failed' });
+            }
             break;
         }
 
@@ -1747,6 +1822,15 @@ async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
 
     // Apply current settings to process env before running
     applyEnvFromSettings();
+    const shouldUseMulti = String(process.env.MULTI_AGENT_ENABLED || 'false') === 'true';
+    if (agentBridge) {
+        const isMulti = agentBridge instanceof MultiAgentOrchestrator;
+        if (isMulti !== shouldUseMulti) {
+            captureAgentMessages();
+            agentBridge.reinit();
+            agentBridge = null;
+        }
+    }
 
     const bridge = getBridge();
 
