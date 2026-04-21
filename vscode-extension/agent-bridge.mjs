@@ -146,7 +146,11 @@ async function init() {
         } else if (msg.type === 'model') {
             queue = queue.then(() => handleModelSwitch(loop, msg.model));
         } else if (msg.type === 'resume') {
-            queue = queue.then(() => handleResume(loop, msg.messages || []));
+            queue = queue.then(() => handleResume(loop, msg.messages || [], msg.sessionGoal || null, msg.sessionId || null));
+        } else if (msg.type === 'setGoal') {
+            loop.state.sessionGoal = msg.goal || null;
+            if (msg.sessionId) loop.state.sessionId = msg.sessionId;
+            emit({ type: 'ready' });
         } else if (msg.type === 'bashStdin') {
             // Interactive stdin for a running Bash job — not serialized in the queue
             sendBashStdin(msg.jobId, msg.text || '');
@@ -193,7 +197,7 @@ async function handleModelSwitch(loop, model) {
  * UI messages (type:'user'/'assistant', text:'...') are converted to the
  * API message format used by the agent loop.
  */
-async function handleResume(loop, messages) {
+async function handleResume(loop, messages, sessionGoal, sessionId) {
     loop.state.messages = messages
         .filter(m => (m.type === 'user' || m.type === 'assistant') && m.text)
         .map(m => {
@@ -208,6 +212,8 @@ async function handleResume(loop, messages) {
     // text (not the original API token counts). The stats bar will show usage for
     // new turns going forward; this is correct and expected behaviour on resume.
     loop.state.tokenUsage = { input: 0, output: 0 };
+    if (sessionGoal) loop.state.sessionGoal = sessionGoal;
+    if (sessionId) loop.state.sessionId = sessionId;
     emit({ type: 'ready' });
 }
 

@@ -47,15 +47,26 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         model,
         tools,
         _contextManager: contextManager,
+        sessionGoal: settings.sessionGoal || null,  // sticky goal that survives compaction
+        sessionId: settings.sessionId || null,       // opaque ID for cross-session summary persistence
     };
 
     async function* run(userMessage, options = {}) {
         // Add user message (skip for continuation turns)
         if (userMessage && !options.continuation) {
+            // Auto-extract session goal from the very first user message when none is set
+            if (!state.sessionGoal && state.turnCount === 0 && state.messages.length === 0) {
+                const firstLine = userMessage.split('\n')[0].trim();
+                state.sessionGoal = firstLine.slice(0, 120) || null;
+                if (state.sessionGoal) {
+                    yield { type: 'sessionGoal', goal: state.sessionGoal };
+                }
+            }
+
             state.messages = contextManager.addMessage(state.messages, {
                 role: 'user',
                 content: userMessage,
-            });
+            }, state.sessionGoal);
             state.turnCount++;
             state.continuationDepth = 0; // reset per new user message
         } else if (options.continuation) {
@@ -79,10 +90,10 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
             return;
         }
 
-        // Auto-compact if needed
+        // Auto-compact if needed (pass session goal so it's re-injected in compaction summary)
         if (contextManager.shouldCompact(state.messages)) {
             yield { type: 'compaction', count: contextManager.compactionCount + 1 };
-            state.messages = contextManager.compact(state.messages);
+            state.messages = contextManager.compact(state.messages, 6, state.sessionGoal);
         }
 
         yield { type: 'stream_request_start', turn: state.turnCount };
@@ -303,13 +314,25 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 state.messages = contextManager.addMessage(state.messages, {
                     role: 'user',
                     content: '[System: A hook prevented stopping. Please continue with the task.]',
-                });
+                }, state.sessionGoal);
                 yield* run(null, { continuation: true });
                 return;
             }
         }
 
         yield { type: 'stop', reason: response.stop_reason || 'end_turn' };
+
+        // Persist session summary for cross-session context recall.
+        // Only runs at the outermost stop (continuationDepth === 0) to avoid
+        // redundant writes on every tool-call round-trip.
+        if (!options.continuation && state.sessionId) {
+            contextManager.persistSession(
+                state.messages,
+                state.sessionId,
+                '',
+                state.sessionGoal || '',
+            );
+        }
     }
 
     return { run, state };
