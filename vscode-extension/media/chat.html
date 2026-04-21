@@ -131,6 +131,18 @@
       <button class="qa-btn qa-btn-team" data-team="fullstack" data-icon="🌐">Full-Stack</button>
       <button class="qa-btn qa-btn-team" data-team="debug" data-icon="🐛">Debug Team</button>
     </div>
+    <div class="qa-section-label" style="margin-top:6px">⭐ My Prompts
+      <button class="qa-add-btn" id="custom-qa-add-btn" title="Save a custom prompt button">+ Save prompt</button>
+    </div>
+    <div id="custom-qa-grid" class="qa-grid"></div>
+    <div id="custom-qa-form" style="display:none">
+      <input type="text" id="custom-qa-name" class="custom-qa-input" placeholder="Button label (e.g. Add logging)…" maxlength="28" autocomplete="off" spellcheck="false">
+      <input type="text" id="custom-qa-template" class="custom-qa-input" placeholder="Prompt… ({selection} inserts selected text)" autocomplete="off" spellcheck="false">
+      <div class="custom-qa-form-row">
+        <button id="custom-qa-save" class="custom-qa-save-btn">💾 Save</button>
+        <button id="custom-qa-cancel" class="custom-qa-cancel-btn">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <!-- Search bar (hidden until Ctrl+F) -->
@@ -233,6 +245,7 @@
           <div class="welcome-tip"><span class="tip-key">Enter</span> send message</div>
           <div class="welcome-tip"><span class="tip-key">Shift+Enter</span> newline</div>
           <div class="welcome-tip"><span class="tip-key">@file</span> add file to context</div>
+          <div class="welcome-tip"><span class="tip-key">Ctrl+K</span> quick-edit active file</div>
           <div class="welcome-tip"><span class="tip-key">📄</span> pick file from workspace</div>
         </div>
         <div class="welcome-examples">
@@ -248,6 +261,14 @@
       </div><!-- /#welcome-normal -->
 
     </div><!-- /#welcome -->
+  </div>
+
+  <!-- Inline Quick-Edit Bar (Ctrl+K anywhere in panel) -->
+  <div id="inline-edit-bar" style="display:none">
+    <span class="inline-edit-label">✏ Quick Edit:</span>
+    <input type="text" id="inline-edit-input" placeholder="Describe the change to make in the active file… (Enter to send)" autocomplete="off" spellcheck="false">
+    <button id="inline-edit-submit" title="Send edit instruction (Enter)">↵ Apply</button>
+    <button id="inline-edit-cancel" title="Cancel (Esc)">✕</button>
   </div>
 
   <!-- Loading indicator -->

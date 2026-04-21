@@ -4997,6 +4997,18 @@
                         tab.content = content;
                         markTabSaved(tab.path);
                     }
+                    // Cmd+K / Ctrl+K — open Inline Edit Bar for selected text (Cursor-style)
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                        e.preventDefault();
+                        let sel = textarea.value.substring(textarea.selectionStart, textarea.selectionEnd);
+                        if (!sel.trim()) {
+                            // Fall back to the current line when nothing is explicitly selected
+                            const lineStart = textarea.value.lastIndexOf('\n', textarea.selectionStart - 1) + 1;
+                            const lineEnd   = textarea.value.indexOf('\n', textarea.selectionStart);
+                            sel = textarea.value.substring(lineStart, lineEnd === -1 ? textarea.value.length : lineEnd);
+                        }
+                        if (sel.trim()) showInlineEditBar(tab.path, sel);
+                    }
                     // Tab key inserts spaces instead of focusing next element
                     if (e.key === 'Tab') {
                         e.preventDefault();
@@ -5121,6 +5133,22 @@
                 const activeTab = openTabs.find(t => t.path === activeTabPath);
                 if (activeTab) renderEditorContent(activeTab);
             }
+            if (diffToolbar) diffToolbar.style.display = 'none';
+        });
+    }
+
+    // Reject All Changes: restore every open diff tab to its before-content
+    const diffRejectAllBtn = document.getElementById('diff-reject-all-btn');
+    if (diffRejectAllBtn) {
+        diffRejectAllBtn.addEventListener('click', () => {
+            const diffTabs = openTabs.filter(t => t.isDiff);
+            for (const tab of diffTabs) {
+                const beforeContent = tab.beforeContent || '';
+                vscode.postMessage({ type: 'writeFile', path: tab.path, content: beforeContent, purpose: 'diff_reject' });
+            }
+            // Close all diff tabs (they're back to their original content on disk)
+            const diffPaths = diffTabs.map(t => t.path);
+            for (const p of diffPaths) closeTab(p);
             if (diffToolbar) diffToolbar.style.display = 'none';
         });
     }
@@ -5388,6 +5416,159 @@
     // Handle terminalOutput messages from main process
     // (injected into the normal message switch-case via a dedicated handler)
     // This is wired in the main window.addEventListener('message'...) handler below.
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // INLINE EDIT BAR — Cmd+K in the built-in editor (Cursor-style)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const inlineEditBarEl     = document.getElementById('inline-edit-bar');
+    const inlineEditInputEl   = document.getElementById('inline-edit-input');
+    const inlineEditSubmitBtn = document.getElementById('inline-edit-submit');
+    const inlineEditCancelBtn = document.getElementById('inline-edit-cancel');
+
+    let inlineEditCtx = null; // { path, selectedText }
+
+    function showInlineEditBar(path, selectedText) {
+        inlineEditCtx = { path, selectedText };
+        if (inlineEditBarEl)  inlineEditBarEl.style.display  = '';
+        if (inlineEditInputEl) { inlineEditInputEl.value = ''; inlineEditInputEl.focus(); }
+        // Ensure the editor panel is visible
+        if (panelEditorEl && panelEditorEl.classList.contains('panel-collapsed')) {
+            panelEditorEl.classList.remove('panel-collapsed');
+        }
+    }
+
+    function hideInlineEditBar() {
+        if (inlineEditBarEl) inlineEditBarEl.style.display = 'none';
+        inlineEditCtx = null;
+    }
+
+    function submitInlineEdit() {
+        const instruction = inlineEditInputEl ? inlineEditInputEl.value.trim() : '';
+        if (!instruction || !inlineEditCtx) return;
+        const { path, selectedText } = inlineEditCtx;
+        const basename = path ? path.replace(/\\/g, '/').split('/').pop() : 'the file';
+        const msg = `Edit the following code in \`${basename}\`:\n\`\`\`\n${selectedText}\n\`\`\`\n\nInstruction: ${instruction}`;
+        hideInlineEditBar();
+        // Inject as user message and send to agent
+        addUserMessage(msg);
+        setSending(true);
+        setLoading(true, 'Thinking…');
+        vscode.postMessage({ type: 'send', message: msg, contextFiles: path ? [path] : [], fileRefs: [] });
+        lastUserMessage = msg;
+    }
+
+    if (inlineEditSubmitBtn) inlineEditSubmitBtn.addEventListener('click', submitInlineEdit);
+    if (inlineEditCancelBtn) inlineEditCancelBtn.addEventListener('click', hideInlineEditBar);
+    if (inlineEditInputEl) {
+        inlineEditInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submitInlineEdit(); }
+            if (e.key === 'Escape') hideInlineEditBar();
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CUSTOM QUICK ACTIONS — User-saved prompt buttons (persisted in localStorage)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const CUSTOM_QA_KEY = 'freecode_custom_qa';
+    let customQuickActions = [];
+
+    (function loadCustomQA() {
+        try {
+            const raw = localStorage.getItem(CUSTOM_QA_KEY);
+            if (raw) customQuickActions = JSON.parse(raw);
+        } catch { /* ignore */ }
+    }());
+
+    function saveCustomQA() {
+        try { localStorage.setItem(CUSTOM_QA_KEY, JSON.stringify(customQuickActions)); } catch { /* ignore */ }
+    }
+
+    function renderCustomQA() {
+        const grid = document.getElementById('custom-qa-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        for (let i = 0; i < customQuickActions.length; i++) {
+            const qa = customQuickActions[i];
+            const wrap = document.createElement('div');
+            wrap.className = 'qa-btn-wrap';
+
+            const btn = document.createElement('button');
+            btn.className = 'qa-btn';
+            btn.textContent = qa.name;
+            btn.title = qa.template;
+            btn.addEventListener('click', () => {
+                if (!inputEl) return;
+                inputEl.value = qa.template + '\n';
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.focus();
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+                if (quickActionsPanel) quickActionsPanel.style.display = 'none';
+                if (actionsBtn) actionsBtn.classList.remove('active');
+            });
+
+            const del = document.createElement('button');
+            del.className = 'qa-btn-delete';
+            del.textContent = '×';
+            del.title = 'Remove this prompt';
+            del.addEventListener('click', (e) => {
+                e.stopPropagation();
+                customQuickActions.splice(i, 1);
+                saveCustomQA();
+                renderCustomQA();
+            });
+
+            wrap.appendChild(btn);
+            wrap.appendChild(del);
+            grid.appendChild(wrap);
+        }
+    }
+
+    const customQaAddBtn    = document.getElementById('custom-qa-add-btn');
+    const customQaForm      = document.getElementById('custom-qa-form');
+    const customQaNameEl    = document.getElementById('custom-qa-name');
+    const customQaTemplEl   = document.getElementById('custom-qa-template');
+    const customQaSaveBtn   = document.getElementById('custom-qa-save');
+    const customQaCancelBtn = document.getElementById('custom-qa-cancel');
+
+    if (customQaAddBtn) {
+        customQaAddBtn.addEventListener('click', () => {
+            if (customQaForm) customQaForm.style.display = '';
+            if (customQaNameEl) { customQaNameEl.value = ''; customQaNameEl.focus(); }
+            if (customQaTemplEl) customQaTemplEl.value = '';
+        });
+    }
+
+    if (customQaSaveBtn) {
+        customQaSaveBtn.addEventListener('click', () => {
+            const name     = customQaNameEl ? customQaNameEl.value.trim() : '';
+            const template = customQaTemplEl ? customQaTemplEl.value.trim() : '';
+            if (!name || !template) return;
+            customQuickActions.push({ name, template });
+            saveCustomQA();
+            renderCustomQA();
+            if (customQaForm) customQaForm.style.display = 'none';
+        });
+    }
+
+    if (customQaCancelBtn) {
+        customQaCancelBtn.addEventListener('click', () => {
+            if (customQaForm) customQaForm.style.display = 'none';
+        });
+    }
+
+    // Keyboard support inside the "Save prompt" form
+    if (customQaTemplEl) {
+        customQaTemplEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); customQaSaveBtn && customQaSaveBtn.click(); }
+            if (e.key === 'Escape') { customQaCancelBtn && customQaCancelBtn.click(); }
+        });
+    }
+
+    // Initial render (shows any saved prompts on load)
+    renderCustomQA();
 
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });

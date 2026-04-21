@@ -2882,6 +2882,163 @@
         }
     });
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // INLINE QUICK-EDIT BAR — Ctrl+K anywhere in the chat panel (Cursor-style)
+    // Opens a bar above the input where user types an edit instruction.
+    // On submit, the active file is auto-added to context and the instruction sent.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const inlineEditBarEl     = document.getElementById('inline-edit-bar');
+    const inlineEditInputEl   = document.getElementById('inline-edit-input');
+    const inlineEditSubmitBtn = document.getElementById('inline-edit-submit');
+    const inlineEditCancelBtn = document.getElementById('inline-edit-cancel');
+
+    function showInlineEditBar() {
+        if (inlineEditBarEl)  inlineEditBarEl.style.display  = '';
+        if (inlineEditInputEl) { inlineEditInputEl.value = ''; inlineEditInputEl.focus(); }
+    }
+
+    function hideInlineEditBar() {
+        if (inlineEditBarEl) inlineEditBarEl.style.display = 'none';
+        if (inputEl) inputEl.focus();
+    }
+
+    function submitInlineEdit() {
+        const instruction = inlineEditInputEl ? inlineEditInputEl.value.trim() : '';
+        if (!instruction) return;
+        hideInlineEditBar();
+        // Request the active file so it lands in context, then fill the input
+        vscode.postMessage({ type: 'getActiveFile' });
+        if (inputEl) {
+            inputEl.value = `Edit the active file: ${instruction}\n`;
+            inputEl.style.height = 'auto';
+            inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+            inputEl.focus();
+            inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+        }
+    }
+
+    if (inlineEditSubmitBtn) inlineEditSubmitBtn.addEventListener('click', submitInlineEdit);
+    if (inlineEditCancelBtn) inlineEditCancelBtn.addEventListener('click', hideInlineEditBar);
+    if (inlineEditInputEl) {
+        inlineEditInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submitInlineEdit(); }
+            if (e.key === 'Escape') hideInlineEditBar();
+        });
+    }
+
+    // Ctrl+K (not Ctrl+`) — open quick-edit bar (avoids clashing with terminal shortcut)
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k' && !e.shiftKey && !e.altKey) {
+            // Only activate when input is not already focused (to avoid overriding cursor movement)
+            if (document.activeElement === inputEl) return;
+            e.preventDefault();
+            showInlineEditBar();
+        }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CUSTOM QUICK ACTIONS — User-saved prompt buttons (persisted in localStorage)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const CUSTOM_QA_KEY = 'freecode_custom_qa';
+    let customQuickActions = [];
+
+    (function loadCustomQA() {
+        try {
+            const raw = localStorage.getItem(CUSTOM_QA_KEY);
+            if (raw) customQuickActions = JSON.parse(raw);
+        } catch { /* ignore */ }
+    }());
+
+    function saveCustomQA() {
+        try { localStorage.setItem(CUSTOM_QA_KEY, JSON.stringify(customQuickActions)); } catch { /* ignore */ }
+    }
+
+    function renderCustomQA() {
+        const grid = document.getElementById('custom-qa-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        for (let i = 0; i < customQuickActions.length; i++) {
+            const qa = customQuickActions[i];
+            const wrap = document.createElement('div');
+            wrap.className = 'qa-btn-wrap';
+
+            const btn = document.createElement('button');
+            btn.className = 'qa-btn';
+            btn.textContent = qa.name;
+            btn.title = qa.template;
+            btn.addEventListener('click', () => {
+                if (!inputEl) return;
+                inputEl.value = qa.template + '\n';
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.focus();
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+                if (quickActionsPanel) quickActionsPanel.style.display = 'none';
+                if (actionsBtn) actionsBtn.classList.remove('active');
+            });
+
+            const del = document.createElement('button');
+            del.className = 'qa-btn-delete';
+            del.textContent = '×';
+            del.title = 'Remove this prompt';
+            del.addEventListener('click', (e) => {
+                e.stopPropagation();
+                customQuickActions.splice(i, 1);
+                saveCustomQA();
+                renderCustomQA();
+            });
+
+            wrap.appendChild(btn);
+            wrap.appendChild(del);
+            grid.appendChild(wrap);
+        }
+    }
+
+    const customQaAddBtn    = document.getElementById('custom-qa-add-btn');
+    const customQaForm      = document.getElementById('custom-qa-form');
+    const customQaNameEl    = document.getElementById('custom-qa-name');
+    const customQaTemplEl   = document.getElementById('custom-qa-template');
+    const customQaSaveBtn   = document.getElementById('custom-qa-save');
+    const customQaCancelBtn = document.getElementById('custom-qa-cancel');
+
+    if (customQaAddBtn) {
+        customQaAddBtn.addEventListener('click', () => {
+            if (customQaForm) customQaForm.style.display = '';
+            if (customQaNameEl) { customQaNameEl.value = ''; customQaNameEl.focus(); }
+            if (customQaTemplEl) customQaTemplEl.value = '';
+        });
+    }
+
+    if (customQaSaveBtn) {
+        customQaSaveBtn.addEventListener('click', () => {
+            const name     = customQaNameEl ? customQaNameEl.value.trim() : '';
+            const template = customQaTemplEl ? customQaTemplEl.value.trim() : '';
+            if (!name || !template) return;
+            customQuickActions.push({ name, template });
+            saveCustomQA();
+            renderCustomQA();
+            if (customQaForm) customQaForm.style.display = 'none';
+        });
+    }
+
+    if (customQaCancelBtn) {
+        customQaCancelBtn.addEventListener('click', () => {
+            if (customQaForm) customQaForm.style.display = 'none';
+        });
+    }
+
+    if (customQaTemplEl) {
+        customQaTemplEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); customQaSaveBtn && customQaSaveBtn.click(); }
+            if (e.key === 'Escape') { customQaCancelBtn && customQaCancelBtn.click(); }
+        });
+    }
+
+    // Initial render (shows any saved prompts on load)
+    renderCustomQA();
+
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });
 

@@ -129,6 +129,18 @@
       <button class="qa-btn qa-btn-team" data-team="fullstack" data-icon="🌐">Full-Stack</button>
       <button class="qa-btn qa-btn-team" data-team="debug" data-icon="🐛">Debug Team</button>
     </div>
+    <div class="qa-section-label" style="margin-top:6px">⭐ My Prompts
+      <button class="qa-add-btn" id="custom-qa-add-btn" title="Save a custom prompt button">+ Save prompt</button>
+    </div>
+    <div id="custom-qa-grid" class="qa-grid"></div>
+    <div id="custom-qa-form" style="display:none">
+      <input type="text" id="custom-qa-name" class="custom-qa-input" placeholder="Button label (e.g. Add logging)…" maxlength="28" autocomplete="off" spellcheck="false">
+      <input type="text" id="custom-qa-template" class="custom-qa-input" placeholder="Prompt… ({selection} inserts selected text)" autocomplete="off" spellcheck="false">
+      <div class="custom-qa-form-row">
+        <button id="custom-qa-save" class="custom-qa-save-btn">💾 Save</button>
+        <button id="custom-qa-cancel" class="custom-qa-cancel-btn">Cancel</button>
+      </div>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════
@@ -256,6 +268,7 @@
               <div class="welcome-tip"><span class="tip-key">@url:https://…</span> fetch page</div>
               <div class="welcome-tip"><span class="tip-key">@symbols</span> workspace symbols</div>
               <div class="welcome-tip"><span class="tip-key">Ctrl+↑/↓</span> history cycling</div>
+              <div class="welcome-tip"><span class="tip-key">Cmd+K</span> inline edit in editor</div>
               <div class="welcome-tip"><span class="tip-key">📄</span> pick file from workspace</div>
             </div>
             <div class="welcome-examples">
@@ -393,8 +406,15 @@
         <div id="editor-empty-state">
           <div class="editor-empty-icon">📝</div>
           <div class="editor-empty-title">No file open</div>
-          <div class="editor-empty-hint">Click a file in the Explorer to open it here</div>
+          <div class="editor-empty-hint">Click a file in the Explorer to open it here<br><span style="font-size:10px;opacity:0.6">Select code then press <kbd>Cmd+K</kbd> to edit with AI</span></div>
         </div>
+      </div>
+      <!-- Inline Edit Bar (Cmd+K while text is selected in editor) -->
+      <div id="inline-edit-bar" style="display:none">
+        <span class="inline-edit-label">✏ Edit selection with AI:</span>
+        <input type="text" id="inline-edit-input" placeholder="Describe the change… (Enter to send, Esc to cancel)" autocomplete="off" spellcheck="false">
+        <button id="inline-edit-submit" title="Send edit instruction (Enter)">↵ Apply</button>
+        <button id="inline-edit-cancel" title="Cancel (Esc)">✕</button>
       </div>
       <!-- Diff accept/reject toolbar (shown only for diff tabs) -->
       <div id="diff-toolbar" style="display:none">
@@ -403,6 +423,7 @@
           <button id="diff-accept-btn" class="diff-btn diff-accept">✓ Accept</button>
           <button id="diff-accept-all-btn" class="diff-btn diff-accept-all" title="Accept all open changes">✓ Accept All</button>
           <button id="diff-reject-btn" class="diff-btn diff-reject">✗ Reject</button>
+          <button id="diff-reject-all-btn" class="diff-btn diff-reject-all" title="Reject all open changes and restore originals">✗ Reject All</button>
         </div>
       </div>
     </div><!-- /#panel-editor -->

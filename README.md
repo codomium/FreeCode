@@ -17,6 +17,32 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.7 — Cursor & Windsurf killers 🎯
+
+These three enhancements are present in **both** the VS Code extension and the Electron desktop app.
+
+### ✏️ Inline Edit Bar (Cmd+K / Ctrl+K)
+
+The #1 feature that makes Cursor famous is now in freeCode — and it works without any third-party subscription.
+
+- **Electron app**: open a file in the built-in editor, select any code (or place the cursor on a line), then press **Cmd+K / Ctrl+K**. A sleek edit bar slides in at the top of the editor panel.  Type your instruction and press Enter — the selected code and your instruction are sent to the AI, which edits the file directly.
+- **VS Code extension**: press **Ctrl+K** anywhere in the chat panel (when the input is not focused) to open a Quick-Edit bar. Type your instruction and press Enter — the active file is automatically added to context and the instruction is prefilled in the message box ready to send.
+
+Esc or the ✕ button cancels without sending.
+
+### ⭐ Custom Quick Actions (User-Saved Prompts)
+
+Both Cursor and Windsurf ship a fixed list of slash commands. freeCode lets you **save your own prompt buttons**.
+
+Click **⚡ Actions** to open the Quick Actions panel. Scroll to the new **⭐ My Prompts** section and click **+ Save prompt**. Enter a short label (e.g. *"Add logging"*) and a template (use `{selection}` to insert selected text). The button is saved in browser localStorage and persists across sessions. Each saved button has a **×** to delete it.
+
+### ✗ Reject All (Electron)
+
+The diff toolbar in the Electron app now has a **✗ Reject All** button next to **✓ Accept All**.  
+Clicking it restores the original content of every open diff tab to disk and closes them in one shot — the symmetric counterpart to Accept All.
+
+---
+
 ## What's New in v2.6 — agent reliability & tool improvements 🛡️
 
 ### 🛡️ Mandatory Agent Reliability Rules
