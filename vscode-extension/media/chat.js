@@ -2983,9 +2983,10 @@
             del.className = 'qa-btn-delete';
             del.textContent = '×';
             del.title = 'Remove this prompt';
+            const capturedIdx = i;
             del.addEventListener('click', (e) => {
                 e.stopPropagation();
-                customQuickActions.splice(i, 1);
+                customQuickActions = customQuickActions.filter((_, j) => j !== capturedIdx);
                 saveCustomQA();
                 renderCustomQA();
             });
