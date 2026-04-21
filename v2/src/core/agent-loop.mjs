@@ -364,6 +364,18 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 });
             }
 
+            // If every tool call in this batch failed with a validation error, append a
+            // text nudge so the model retries rather than giving up with a summary message.
+            // (A text block is valid inside a user content array for all supported providers.)
+            const validationErrorCount = toolResults.filter(r =>
+                typeof r.content === 'string' && r.content.startsWith('Validation error:')).length;
+            if (validationErrorCount > 0 && validationErrorCount === toolResults.length) {
+                toolResults.push({
+                    type: 'text',
+                    text: '[System: All tool call(s) above failed input validation. Review the required parameter names for each tool and retry the tool call(s) immediately. Do not stop or summarise — keep going.]',
+                });
+            }
+
             // Add tool results as a single user message
             state.messages.push({ role: 'user', content: toolResults });
 

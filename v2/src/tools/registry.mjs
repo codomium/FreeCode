@@ -77,7 +77,7 @@ export function createToolRegistry() {
             const tool = tools.get(name);
             if (!tool) throw new Error(`Unknown tool: ${name}`);
             const errors = tool.validateInput?.(input) || [];
-            if (errors.length > 0) return `Validation error: ${errors.join(', ')}`;
+            if (errors.length > 0) return `Validation error: ${errors.join(', ')}. Please correct the parameters and retry the tool call.`;
             return tool.call(input);
         },
 

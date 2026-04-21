@@ -8,6 +8,38 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New in v3.1 — Edit & Bash validation recovery 🛡️
+
+### 🔧 Edit Tool — Parameter Name Normalization
+
+The `Edit` tool now accepts the alternative parameter names that models sometimes use instead of the canonical ones, mirroring the behaviour already present in `Bash` and `MultiEdit`:
+
+| Canonical | Accepted alternatives |
+|---|---|
+| `file_path` | `filename`, `path`, `file` |
+| `old_string` | `old_content`, `original_string`, `original`, `search` |
+| `new_string` | `new_content`, `replacement_string`, `replacement`, `replace` |
+
+Previously, using any of these alternates produced `Validation error: file_path required, old_string required` and the edit was silently dropped.
+
+### 🔧 Bash Tool — Additional Parameter Name Aliases
+
+Three more aliases recognised for the `command` parameter: `bash`, `shell`, `code`. These join the existing set (`cmd`, `bash_command`, `shell_command`, `script`, `run`, `execute`).
+
+### ♻️ Clearer Validation Error Messages
+
+All tool validation errors now end with **"Please correct the parameters and retry the tool call."** This makes it unambiguous to the model that it should fix and resubmit the call rather than responding with an explanation and stopping.
+
+### 🔄 Agent Loop — Auto-Nudge on All-Validation-Error Batches
+
+When every tool call in a single response batch fails with a validation error, the agent loop now appends a system text block to the tool-result message:
+
+> *"All tool call(s) above failed input validation. Review the required parameter names for each tool and retry the tool call(s) immediately. Do not stop or summarise — keep going."*
+
+This prevents the model from giving up with a summary message when it should be retrying the failed calls.
+
+---
+
 ## What's New in v3.0 — MultiEdit & Edit reliability on Windows 🪟🔧
 
 ### 🔁 `MultiEdit` "old_string not found" Fixed in All Modes
