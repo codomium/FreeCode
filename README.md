@@ -17,6 +17,38 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.8 — AI power & UX supremacy 🚀
+
+These three enhancements are present in **both** the VS Code extension and the Electron desktop app (Focus Mode is Electron-only).
+
+### ⚡📖 Response Style Pill (both apps)
+
+No competitor has this built-in. A compact three-state pill selector sits just above the message input in both apps:
+
+| Pill | Effect |
+|------|--------|
+| **Auto** (default) | No modifier — let the model decide |
+| **⚡ Brief** | Appends *"Respond concisely. Use bullet points where suitable."* |
+| **📖 Thorough** | Appends *"Provide a thorough, detailed explanation with examples and reasoning."* |
+
+Selection persists in `localStorage` across sessions. Zero friction — one click, every future message adapts.
+
+### ⭐ Message Bookmarks / Starred Replies (both apps)
+
+Every AI reply now has a ☆ star button in its header (visible on hover). Clicking it:
+
+1. Marks the message with a gold ★
+2. Saves the full text to `localStorage` under the current session title + timestamp
+3. If the **⭐ Stars** panel (new header button) is open, it refreshes immediately
+
+The **Stars panel** shows all saved messages with copy and remove buttons. A **🗑 Clear all** button with a confirmation dialog removes everything at once. Neither Cursor nor Windsurf offers any form of reply bookmarking.
+
+### 🎯 Focus / Zen Mode (Electron app)
+
+Click the **⊞ Focus** button in the header (or press **Ctrl+Shift+Z**) to hide the Explorer and Editor panels, giving the chat column the full window width. A centred max-width layout (860 px) makes long AI conversations comfortable to read. Click again or press the shortcut again to exit.
+
+---
+
 ## What's New in v2.7 — Cursor & Windsurf killers 🎯
 
 These three enhancements are present in **both** the VS Code extension and the Electron desktop app.

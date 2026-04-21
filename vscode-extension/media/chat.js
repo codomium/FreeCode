@@ -673,6 +673,25 @@
     function addCopyButtonToMessage(msgDiv, rawText, userPrompt) {
         const header = msgDiv.querySelector('.msg-header');
         if (!header || header.querySelector('.msg-copy-btn')) return;
+
+        // ⭐ Star/bookmark button
+        const msgId = 'bm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        msgDiv._bookmarkId = msgId;
+        const isStarred = bookmarks.some(b => b.id === msgId);
+        const starBtn = document.createElement('button');
+        starBtn.className = 'msg-star-btn' + (isStarred ? ' starred' : '');
+        starBtn.title = isStarred ? 'Remove star' : 'Star this reply';
+        starBtn.textContent = isStarred ? '★' : '☆';
+        starBtn.addEventListener('click', () => {
+            const added = toggleBookmark(msgId, rawText);
+            starBtn.classList.toggle('starred', added);
+            starBtn.textContent = added ? '★' : '☆';
+            starBtn.title = added ? 'Remove star' : 'Star this reply';
+            if (bookmarksPanelEl && bookmarksPanelEl.classList.contains('open')) {
+                renderBookmarksPanel();
+            }
+        });
+        header.appendChild(starBtn);
         const btn = document.createElement('button');
         btn.className = 'msg-copy-btn';
         btn.title = 'Copy answer';
@@ -2220,7 +2239,7 @@
             if (f.isGit && f.content)    specialParts.push('\n\n[Git Context]\n' + f.content);
             if (f.isErrors && f.content) specialParts.push('\n\n[Workspace Problems]\n' + f.content);
         }
-        const finalMessage = specialParts.length > 0 ? rawText + specialParts.join('') : rawText;
+        const finalMessage = applyStyleSuffix(specialParts.length > 0 ? rawText + specialParts.join('') : rawText);
 
         // Separate file paths from image/codebase/special context entries
         const sendContextFiles = contextFiles
@@ -3039,6 +3058,164 @@
 
     // Initial render (shows any saved prompts on load)
     renderCustomQA();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RESPONSE STYLE PILL — controls AI verbosity per-message
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const STYLE_KEY = 'freecode_response_style';
+    let responseStyle = 'auto';
+
+    (function loadResponseStyle() {
+        try { responseStyle = localStorage.getItem(STYLE_KEY) || 'auto'; } catch { /* ignore */ }
+    }());
+
+    function saveResponseStyle(s) {
+        responseStyle = s;
+        try { localStorage.setItem(STYLE_KEY, s); } catch { /* ignore */ }
+    }
+
+    function applyStyleSuffix(message) {
+        if (responseStyle === 'brief') {
+            return message + '\n\n[Respond concisely. Use bullet points where suitable. Avoid unnecessary prose.]';
+        }
+        if (responseStyle === 'thorough') {
+            return message + '\n\n[Provide a thorough, detailed explanation. Cover edge cases, include examples where helpful, and explain your reasoning step by step.]';
+        }
+        return message;
+    }
+
+    const styleBarEl = document.getElementById('response-style-pills');
+    if (styleBarEl) {
+        styleBarEl.querySelectorAll('.style-pill').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.style === responseStyle);
+        });
+        styleBarEl.addEventListener('click', (e) => {
+            const pill = e.target.closest('.style-pill');
+            if (!pill) return;
+            const style = pill.dataset.style;
+            saveResponseStyle(style);
+            styleBarEl.querySelectorAll('.style-pill').forEach(b => b.classList.toggle('active', b.dataset.style === style));
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MESSAGE BOOKMARKS — star / save important AI replies
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const BOOKMARKS_KEY = 'freecode_bookmarks';
+    let bookmarks = [];
+
+    (function loadBookmarks() {
+        try {
+            const raw = localStorage.getItem(BOOKMARKS_KEY);
+            if (raw) bookmarks = JSON.parse(raw);
+        } catch { /* ignore */ }
+    }());
+
+    function saveBookmarks() {
+        try { localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks)); } catch { /* ignore */ }
+    }
+
+    function toggleBookmark(msgId, rawText) {
+        const idx = bookmarks.findIndex(b => b.id === msgId);
+        if (idx >= 0) {
+            bookmarks.splice(idx, 1);
+            saveBookmarks();
+            return false;
+        }
+        bookmarks.unshift({ id: msgId, text: rawText, date: new Date().toISOString(), sessionTitle: currentSessionTitle || 'Conversation' });
+        saveBookmarks();
+        return true;
+    }
+
+    function renderBookmarksPanel() {
+        const listEl = document.getElementById('bookmarks-list');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        if (bookmarks.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'bookmarks-empty';
+            emptyDiv.innerHTML = '<div class="bookmarks-empty-icon">⭐</div>Star important AI replies to save them here.<br>Click ⭐ on any response to bookmark it.';
+            listEl.appendChild(emptyDiv);
+            return;
+        }
+        for (let i = 0; i < bookmarks.length; i++) {
+            const bm = bookmarks[i];
+            const item = document.createElement('div');
+            item.className = 'bookmark-item';
+
+            const meta = document.createElement('div');
+            meta.className = 'bookmark-meta';
+            meta.textContent = `${bm.sessionTitle} · ${new Date(bm.date).toLocaleDateString()}`;
+            item.appendChild(meta);
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'bookmark-text';
+            textDiv.textContent = bm.text.slice(0, 300) + (bm.text.length > 300 ? '…' : '');
+            item.appendChild(textDiv);
+
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'bookmark-actions';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'bookmark-copy-btn';
+            copyBtn.textContent = '⎘ Copy';
+            copyBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'copyToClipboard', text: bm.text });
+                copyBtn.textContent = '✓ Copied';
+                setTimeout(() => { copyBtn.textContent = '⎘ Copy'; }, 1500);
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'bookmark-delete-btn';
+            delBtn.textContent = '× Remove';
+            const capturedIdx = i;
+            delBtn.addEventListener('click', () => {
+                bookmarks = bookmarks.filter((_, j) => j !== capturedIdx);
+                saveBookmarks();
+                renderBookmarksPanel();
+            });
+
+            actionsDiv.appendChild(copyBtn);
+            actionsDiv.appendChild(delBtn);
+            item.appendChild(actionsDiv);
+            listEl.appendChild(item);
+        }
+    }
+
+    const bookmarksBtnEl    = document.getElementById('bookmarks-btn');
+    const bookmarksPanelEl  = document.getElementById('bookmarks-panel');
+    const bookmarksCloseBtn = document.getElementById('bookmarks-close-btn');
+    const bookmarksClearBtn = document.getElementById('bookmarks-clear-btn');
+
+    if (bookmarksBtnEl && bookmarksPanelEl) {
+        bookmarksBtnEl.addEventListener('click', () => {
+            const isOpen = bookmarksPanelEl.classList.contains('open');
+            if (!isOpen) renderBookmarksPanel();
+            bookmarksPanelEl.classList.toggle('open', !isOpen);
+            bookmarksBtnEl.classList.toggle('active', !isOpen);
+        });
+    }
+    if (bookmarksCloseBtn) {
+        bookmarksCloseBtn.addEventListener('click', () => {
+            if (bookmarksPanelEl) bookmarksPanelEl.classList.remove('open');
+            if (bookmarksBtnEl)   bookmarksBtnEl.classList.remove('active');
+        });
+    }
+    if (bookmarksClearBtn) {
+        bookmarksClearBtn.addEventListener('click', () => {
+            if (!confirm('Remove all starred messages?')) return;
+            bookmarks = [];
+            saveBookmarks();
+            renderBookmarksPanel();
+            document.querySelectorAll('.msg-star-btn.starred').forEach(btn => {
+                btn.classList.remove('starred');
+                btn.title = 'Star this reply';
+                btn.textContent = '☆';
+            });
+        });
+    }
 
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });
