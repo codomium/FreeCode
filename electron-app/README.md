@@ -8,7 +8,7 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
-## What's New in v2.5 — session memory edition 🧠
+## What's New in v2.5 — session memory & permissions 🧠🔧
 
 ### 🎯 Session Goal Memory
 
@@ -41,6 +41,28 @@ The agent now follows a mandatory discipline loop for every task:
 5. **REPORT** — states the final result with actual output (e.g. `eslint: 0 errors ✓`)
 
 Extra guardrails cap retries at 3 attempts per fix, detect and break infinite loops, and forbid silent success claims without evidence.
+
+### 🔐 Permission Modes — All Modes Now Work Correctly
+
+`Edit` and `MultiEdit` were silently blocked across all modes due to four distinct bugs:
+
+- **`default` mode hung indefinitely** — the Allow/Deny card appeared but the agent never received the answer because `resolvePermission` was missing from the bridge. It now correctly waits for and receives your approval or denial.
+- **`plan` mode blocked `TodoWrite`** — `TodoWrite` is read-only task tracking and is now correctly allowed in plan mode.
+- **Informative denial messages** — instead of `"Permission denied"` the agent receives a mode-aware explanation, e.g.:  
+  *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+
+### 🗂️ Session Context Leak — Fixed
+
+After switching permission modes and then creating a new chat (or deleting a history session), the agent silently inherited the previous session's conversation context and continued it without any user input.
+
+**Fix:** The `clear` command now discards any saved bridge context, so every new chat starts completely fresh.
+
+### 🏷️ Clearer "Blocked" UI Messages
+
+Tool blocks now distinguish their cause:
+
+- Hook rule → `⛔ Tool blocked by hook: Edit`
+- Permission mode → `⛔ Tool blocked (permission denied): Edit`
 
 ---
 
@@ -490,316 +512,6 @@ electron-app/
     │                #   mode badge, resize handles, context menu
     ├── chat.css     # UI styles: workbench layout, panels, tabs, diff colours,
     │                #   mode badge pills, plan board, permission modal
-    └── icon.svg     # App icon
-```
-
-The agent loop (`v2/src/core/agent-loop.mjs`) runs **in-process** inside the Electron main process and is loaded via dynamic `import()`. This eliminates the need to spawn a Node.js subprocess and works cleanly on Windows.
-
----
-
-## Data Storage
-
-All persistent data is stored in the Electron `userData` directory:
-
-| Platform | Path |
-|---|---|
-| Windows | `%APPDATA%\freeCode\` |
-
-| File | Contents |
-|---|---|
-| `settings.json` | Model, permission mode, workspace path, max turns, etc. |
-| `apikey.enc` | Encrypted API key (Windows Credential Store) |
-| `history.json` | Chat session history (last 30 sessions) |
-| `activeSession.json` | Current in-progress session (auto-restored on restart) |
-
----
-
-## Supported Models
-
-| Provider | Models |
-|---|---|
-| Anthropic | Claude Sonnet 4.6, Opus 4.6, Haiku 4.5 |
-| OpenAI | GPT-4o, GPT-4o Mini |
-| Google | Gemini 2.0 Flash |
-| NVIDIA NIM | Kimi K2.5, Llama 3.1 405B/Nemotron 70B, Llama 3.3 70B, Mistral Large 2, Mixtral 8x22B, DeepSeek R1 |
-
----
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|---|---|
-| `Ctrl+B` | Toggle chat panel (left column) |
-| `Ctrl+Shift+E` | Toggle file explorer (right column) |
-| `Ctrl+W` | Close the active editor tab |
-| `Ctrl+Shift+K` | Set API Key |
-| `Ctrl+Shift+O` | Open Workspace Folder |
-| `Ctrl+Shift+C` | Clear Session |
-| `Ctrl+F` | Search messages |
-| `Enter` | Send message |
-| `Shift+Enter` | New line in input |
-| `Esc` | Stop generation |
-
----
-
-## Windows 11 Compatibility Notes
-
-- The app uses **Electron's `safeStorage`** API which integrates with the Windows Data Protection API (DPAPI) for secure API key storage.
-- Shell commands run by the agent (`Bash` tool) use **`cmd.exe`** on Windows. Complex Unix-specific commands may need adjustment.
-- The **Run in Terminal** feature opens a new `cmd.exe` window.
-
----
-
-## License
-
-MIT
-
-
-### 🗂️ 3-Column IDE Layout
-
-The entire UI has been restructured into three resizable columns:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  ✦ FreeCode  [session]  [Model ▾] [Mode ▾]  [History] [⚙]  │  ← Titlebar
-├─────────────────┬──────────────────────┬─────────────────────┤
-│   CHAT (left)   │  EDITOR (middle)     │  EXPLORER (right)   │
-│                 │                      │                      │
-│  messages       │  [tab][tab][tab ✕]   │  WORKSPACE/          │
-│  ...            │  ──────────────────  │  ▶ src/              │
-│  tool cards     │  syntax-highlighted  │    ├ main.js         │
-│                 │  file content        │    └ preload.js      │
-│  ─────────────  │  OR diff view        │  ▶ renderer/         │
-│  [input area]   │                      │    ├ index.html      │
-│  [stats bar]    │  [✓ Accept][✗ Reject]│    └ chat.js         │
-│                 │  (on diff tabs)      │                      │
-│                 │                      │  [+File][+Folder][↺] │
-└─────────────────┴──────────────────────┴─────────────────────┘
-   ↑ drag to resize ↑                  ↑ drag to resize ↑
-```
-
-- Drag either **resize handle** between columns to set custom widths — remembered across restarts
-- **`Ctrl+B`** — collapse/expand the chat panel
-- **`Ctrl+Shift+E`** — collapse/expand the file explorer
-
-### 📑 Editor Tabs (middle column)
-
-Clicking a file in the Explorer opens it in the editor panel as a tab:
-
-- Multiple tabs open simultaneously — each shows file content in a monospace view
-- **`×`** button or **`Ctrl+W`** closes the active tab
-- Diff tabs are highlighted with ⚡ and show a before/after view
-
-### ⚡ Automatic Diff View
-
-When the AI agent edits a file a diff tab opens automatically:
-
-- 🔴 Removed lines highlighted in red
-- 🟢 Added lines highlighted in green
-- **✓ Accept** — keeps the agent's changes and switches to a normal view
-- **✗ Reject** — restores the original file and closes the diff tab
-
-### 🔗 Clickable File Links in Chat
-
-File names and paths mentioned by the agent in chat are rendered as **clickable links**:
-
-- Click an inline path like `` `renderer/chat.js` `` → opens the file in the editor tab
-- If the agent just edited that file, clicking it activates the **diff tab** so you see exactly what changed
-- Supports relative paths (resolved against the workspace), absolute paths, and plain filenames
-
-### 🖱️ File Explorer Context Menu
-
-Right-click any file or folder in the Explorer column for quick actions:
-
-| Action | Description |
-|--------|-------------|
-| Open in Editor | Opens the file in a new tab |
-| New File | Creates an empty file in the same directory |
-| New Folder | Creates a new directory |
-| Rename | Renames the entry |
-| Delete | Permanently deletes after confirmation |
-| Copy Path | Copies the absolute path to clipboard |
-| Add to Chat Context | Injects the file into the active prompt |
-
-Explorer toolbar buttons also let you create files/folders at the workspace root and refresh the tree.
-
----
-
-## What's New in v1.6
-
-### ⚙️ In-app Settings Panel
-
-Click the **⚙** button in the chat header to open a full settings panel — no more digging around in the userData folder:
-
-- **Workspace** — browse and change the active project folder
-- **Model & Agent** — model selector, permission mode, max turns, show/hide tool output toggle
-- **API Keys** — set Anthropic/OpenAI/Google and NVIDIA NIM keys directly in the app
-- **About** — quick link to GitHub and your data storage location
-
-### 📁 File Explorer
-
-A new **Files** button in the header opens a collapsible file-tree panel for your workspace:
-
-- Expand/collapse folders with a click
-- Hover a file to reveal a **+** button that adds it to the agent's context instantly
-- Click a file to open it in the built-in file viewer
-
-### 👁️ File Viewer
-
-Click any file in the explorer to open it in a modal viewer:
-
-- Full file content in a syntax-aware monospace view
-- **Add to Context** button injects the file into the active chat prompt
-- 500 KB size limit so the UI stays responsive on large files
-
----
-
-## What's New in v1.5
-
-### ✏️ Edit diff view
-When the agent edits a file the tool card auto-expands and shows a red/green diff — removed lines in red, added lines in green — so you always see exactly what changed.
-
-### 📄 Read line-range preview
-The Read tool card header shows the filename and line range the agent inspected (e.g. `app.js · lines 1–50`).
-
-### ⚡ Bash live streaming + interactive stdin
-Bash output streams to the tool card in real-time as the process runs. While a command is running an input bar appears at the bottom of the card so you can type stdin input and interact with the process directly.
-
----
-
-## Quick Start (Development)
-
-### Prerequisites
-
-- **Node.js** 18 or newer (https://nodejs.org)
-- **npm** (comes with Node.js)
-- An API key from Anthropic, OpenAI, Google AI Studio, or NVIDIA NIM
-
-### Install dependencies
-
-```powershell
-cd electron-app
-npm install
-```
-
-### Run in development mode
-
-```powershell
-npm start
-```
-
-The app opens a window with the familiar chat UI. On first launch, the setup guide walks you through adding an API key.
-
----
-
-## Setting Your API Key
-
-**Option A — In-app Settings Panel (recommended)**
-
-1. Click the **⚙** button in the chat header (or press `Ctrl+Shift+K`).
-2. In the **API Keys** section, click **🔑 Set API Key…**.
-3. Paste your key and press Enter.
-   - Anthropic: `sk-ant-api03-…`
-   - OpenAI: `sk-…`
-   - NVIDIA NIM: `nvapi-…`
-   - Google: your Gemini API key
-4. The key is encrypted with **Windows Credential Store** via Electron's `safeStorage` API.
-
-You can also set your NVIDIA key directly in the **Settings Panel → API Keys → NVIDIA NIM API Key** field.
-
-**Option B — Environment variable**
-
-Set the appropriate variable before launching:
-
-```powershell
-# PowerShell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
-npm start
-
-# cmd.exe
-set ANTHROPIC_API_KEY=sk-ant-...
-npm start
-```
-
----
-
-## Opening a Workspace Folder
-
-The agent works inside a **workspace folder** (like VS Code's open folder). By default it starts in your home directory.
-
-**From the Settings Panel**: click **⚙** → **Workspace → Browse…**
-
-**From the menu**: **File → Open Workspace Folder…** (`Ctrl+Shift+O`)
-
-The file explorer automatically refreshes when you change the workspace.
-
----
-
-## Using the File Explorer
-
-The file explorer is now a **permanent right column** — always visible, no button needed.
-
-| Action | Result |
-|--------|--------|
-| Click a folder | Expand/collapse |
-| Click a file | Open in editor tab |
-| Right-click any item | Context menu (New File, Rename, Delete, Copy Path, …) |
-| `+File` button | New file at workspace root |
-| `+Folder` button | New folder at workspace root |
-| `↺` (refresh) button | Reload the file tree |
-
-Folders like `node_modules`, `.git`, `dist`, and `build` are hidden automatically.
-
----
-
-## Using the Settings Panel
-
-Click the **⚙** button (gear icon) in the chat header:
-
-| Section | What you can configure |
-|---------|----------------------|
-| Workspace | Browse & change active folder |
-| Model | Switch between all supported AI models |
-| Permission Mode | How the agent handles file/shell permissions |
-| Max Turns | Maximum tool-use turns per request (default: 20) |
-| Show Tool Output | Toggle tool cards in the chat |
-| API Keys | Set / update Anthropic + NVIDIA keys |
-| About | Open data folder · GitHub link |
-
----
-
-## Building a Windows Installer
-
-```powershell
-npm run build
-```
-
-This produces two outputs in `dist/`:
-
-| File | Description |
-|---|---|
-| `freeCode Setup 1.0.0.exe` | NSIS installer with Start Menu / Desktop shortcuts |
-| `freeCode-1.0.0-portable.exe` | Single-file portable executable (no install required) |
-
-> **Note:** Building requires `electron-builder` and an internet connection on first run to download the Electron binary for Windows.
-
----
-
-## Architecture
-
-```
-electron-app/
-├── main.js          # Electron main process
-│                    # — creates BrowserWindow
-│                    # — runs agent loop (v2/src) in-process
-│                    # — handles IPC: readFile, writeFile, createFile,
-│                    #     createDir, renameFile, deleteFile, watchWorkspace
-│                    # — stores settings & history in %APPDATA%\freeCode\
-├── preload.js       # Electron preload — exposes electronBridge IPC to renderer
-└── renderer/
-    ├── index.html   # 3-column IDE layout (chat | editor | explorer)
-    ├── chat.js      # UI logic: tabs, diff view, resize handles, context menu
-    ├── chat.css     # UI styles: workbench layout, panels, tabs, diff colours
     └── icon.svg     # App icon
 ```
 

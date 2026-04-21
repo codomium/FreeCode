@@ -344,6 +344,16 @@ class InProcessAgentBridge {
         });
     }
 
+    /** Called by IPC when renderer sends back permissionResponse */
+    resolvePermission(reqId, allowed) {
+        if (!this._permPending) return;
+        const resolve = this._permPending.get(reqId);
+        if (resolve) {
+            this._permPending.delete(reqId);
+            resolve(!!allowed);
+        }
+    }
+
     /** Called by IPC when renderer sends back questionResponse */
     resolveQuestion(reqId, answer) {
         if (!this._questionPending) return;
@@ -786,6 +796,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
         // ── Clear session ─────────────────────────────────────────────────────
         case 'clear': {
             if (agentBridge) agentBridge.reset();
+            savedAgentMessages = null; // discard any stale context from a previous reinit
             isCancelled = false;
             send({ type: 'sessionCleared' });
             break;
