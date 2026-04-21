@@ -301,10 +301,10 @@ export const COMMANDS = {
     },
 
     '/plan': {
-        description: 'Enter plan mode (read-only)',
+        description: 'Enter plan mode',
         handler(args, state) {
             state._planMode = !state._planMode;
-            return `Plan mode: ${state._planMode ? 'ON (read-only)' : 'OFF'}`;
+            return `Plan mode: ${state._planMode ? 'ON' : 'OFF'}`;
         },
     },
 

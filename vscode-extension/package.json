@@ -176,7 +176,7 @@
           "enumDescriptions": [
             "Ask for permission before each tool use",
             "Automatically approve safe operations",
-            "Plan mode — read only, no file edits",
+            "Plan mode — all tools allowed",
             "Automatically accept file edits without asking",
             "Bypass all permission checks"
           ],

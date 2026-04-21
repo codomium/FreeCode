@@ -86,7 +86,10 @@ export const ReadTool = {
         }
 
         try {
-            const content = fs.readFileSync(filePath, 'utf-8');
+            // Normalize CRLF → LF so Windows files are presented to the model
+            // with consistent line endings, preventing \r from leaking into
+            // old_string context that the model uses for Edit/MultiEdit calls.
+            const content = fs.readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             const lines = content.split('\n');
             const start = input.offset || 0;
             const limit = input.limit || DEFAULT_LIMIT;
