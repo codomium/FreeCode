@@ -17,6 +17,63 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.6 — agent reliability & tool improvements 🛡️
+
+### 🛡️ Mandatory Agent Reliability Rules
+
+The system prompt now enforces five hard rules that prevent the agent from silently doing the wrong thing:
+
+- **Always act via tools** — describing an action without calling a tool is a critical failure; text like *"I would create …"* is never acceptable when the task requires a real change
+- **Plan → Act → Verify** — every `Write`/`Edit` must be followed by a `Read`-back to confirm the result; linter/test commands are run if available
+- **3-attempt loop budget** — after 3 failed attempts on the same step the agent emits a structured `BLOCKED: … | root cause: … | need: …` message and stops rather than looping forever
+- **Root cause before fix** — the agent must read the file and capture the exact error before attempting a fix, preventing guess-and-retry spirals
+- **Forbidden behaviours explicitly listed** — claiming success without verification, retrying an identical failing call, or outputting code in chat instead of calling `Write`/`Edit` are all prohibited
+
+### 🔁 Infinite-Loop Guard
+
+The agent loop now tracks the last three tool calls. If the same tool is called with identical arguments and produces an identical result three times in a row, the loop is stopped automatically and a `{ type: 'stuck' }` event is emitted — preventing silent CPU-burning loops when an edit can never succeed.
+
+### ✅ Edit & MultiEdit Verification
+
+After every `Edit` or `MultiEdit` call the agent now reads the file back and checks:
+
+1. `new_string` is present in the file (replacement was actually applied)
+2. `old_string` is no longer present (the old text is gone)
+
+If either check fails a `{ type: 'warning' }` event is emitted so the agent can self-correct. This extends the existing `Write` verification that was already in place.
+
+### 🌐 HTML → Plain Text in WebFetch
+
+When the `WebFetch` tool receives an `text/html` or `application/xhtml` response it now automatically strips tags and returns clean plain text instead of raw HTML markup. This dramatically reduces the token cost of reading documentation pages.
+
+- `<script>` and `<style>` blocks (including their content) are removed first
+- Block-level elements (`<p>`, `<div>`, `<h1>`–`<h6>`, `<li>`, etc.) become newlines
+- All remaining tags are stripped
+- HTML entities are decoded (`&amp;`, `&lt;`, `&gt;`, `&#8230;`, `&#x2019;`, etc.)
+- A new `raw_html: true` parameter is available for callers that need the original markup
+
+### 🗂️ Smarter Glob — Fewer Noise Files
+
+The `Glob` tool's directory walk now skips a much broader list of generated/vendor directories that are never useful to search:
+
+| Added exclusions |
+|---|
+| `.git` · `dist` · `build` · `out` |
+| `.next` · `.nuxt` · `__pycache__` |
+| `.cache` · `coverage` · `.nyc_output` |
+| `.turbo` · `.venv` · `venv` · `.tox` |
+| `vendor` · `target` · `.gradle` |
+
+### 📂 LS — Sorted Output
+
+The `LS` tool output is now sorted: **directories first** (alphabetically), then **files** (alphabetically). Previously entries were returned in filesystem order which varies by OS and makes it harder to scan.
+
+### 🐛 PDF Reader ESM Fix
+
+The `Read` tool's PDF handler was calling `require('child_process')` inside an ES module, which throws a `ReferenceError` at runtime. The import is now a proper top-level `import { spawnSync }` statement.
+
+---
+
 ## What's New in v2.5 — permissions & session fixes 🔧
 
 ### 🔐 Permission Modes — All Modes Now Work Correctly

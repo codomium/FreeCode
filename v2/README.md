@@ -1,5 +1,47 @@
 # open-claude-code v2 — Technical Guide
 
+## What's New in v2.6 — agent reliability & tool improvements
+
+### Mandatory Agent Reliability Rules (`system-prompt.mjs`)
+
+Five hard rules are now injected into every system prompt:
+
+- **Always act via tools** — text descriptions of actions are not acceptable when a tool call is required
+- **Plan → Act → Verify** — every Write/Edit must be followed by a Read-back; run linter/tests when available
+- **3-attempt budget** — after 3 failed attempts emit `BLOCKED: … | root cause: … | need: …` and stop
+- **Root cause before fix** — read the file, capture the exact error, fix the root cause not symptoms
+- **Forbidden behaviours** — claiming success without verification, retrying identical failing calls, outputting code in chat instead of calling Write/Edit
+
+### Infinite-Loop Guard (`agent-loop.mjs`)
+
+The last three tool calls (by `toolName + JSON(input)` key and result value) are tracked. If all three are identical the loop stops and emits `{ type: 'stuck' }`, preventing silent infinite loops.
+
+### Edit / MultiEdit Verification (`verify-write.mjs`, `agent-loop.mjs`)
+
+A new `verifyEdit(filePath, oldString, newString)` function reads the file back after every `Edit` and `MultiEdit` call and checks that `new_string` is present and `old_string` is gone. A `{ type: 'warning' }` event is emitted on failure. This extends the existing `Write` verification.
+
+### HTML → Plain Text in WebFetch (`web-fetch.mjs`)
+
+HTML responses are automatically stripped to plain text:
+- `<script\b…</script\s*>` and `<style\b…</style\s*>` blocks removed first
+- Block tags converted to newlines; remaining tags stripped
+- HTML entities decoded with `String.fromCodePoint` (handles astral Unicode); `&amp;` decoded last
+- New `raw_html: true` parameter opt-out
+
+### Extended Glob Exclusions (`glob.mjs`)
+
+`walkDir` now skips: `.git`, `dist`, `build`, `out`, `.next`, `.nuxt`, `__pycache__`, `.cache`, `coverage`, `.nyc_output`, `.turbo`, `.venv`, `venv`, `.tox`, `vendor`, `target`, `.gradle` — in addition to the previous `node_modules`-only exclusion.
+
+### LS Sorted Output (`ls.mjs`)
+
+Entries are now sorted: directories first (alphabetical), then files (alphabetical).
+
+### PDF Reader ESM Fix (`read.mjs`)
+
+`require('child_process')` inside an ES module replaced with a top-level `import { spawnSync }`.
+
+---
+
 ## What's New in v2.3 (agent-loop / core)
 
 ### Transparent 429 / Rate-Limit Retry
