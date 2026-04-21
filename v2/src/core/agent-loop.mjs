@@ -5,8 +5,10 @@
 import { streamResponse, accumulateStream } from './streaming.mjs';
 import { ContextManager } from './context-manager.mjs';
 import { buildSystemPrompt, buildWorkspaceSnapshot, buildWorkspaceContent, buildThinkingModelSystemPrompt } from './system-prompt.mjs';
+import { verifyWrite } from './verify-write.mjs';
 import { isNvidiaModel } from './providers.mjs';
 import { RateLimiter } from './rate-limiter.mjs';
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -47,6 +49,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         model,
         tools,
         _contextManager: contextManager,
+        _recentToolCalls: [], // loop-detection: [{callKey, resultKey}]
     };
 
     async function* run(userMessage, options = {}) {
@@ -58,6 +61,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
             });
             state.turnCount++;
             state.continuationDepth = 0; // reset per new user message
+            state._recentToolCalls = []; // reset loop-detection on new user message
         } else if (options.continuation) {
             // Guard against infinite tool-call loops
             state.continuationDepth++;
@@ -276,6 +280,45 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     (result.startsWith('Tool error:') || result.startsWith('Error:') ||
                      result.includes('not found in file') || result.includes('does not exist'))) {
                     isToolError = true;
+                }
+
+                // Verify write: after a successful Write call, read the file back and
+                // diff it against the intended content.  Emit a warning if they diverge.
+                if (block.name === 'Write' && !isToolError && typeof result === 'string' && result.startsWith('File written:')) {
+                    const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
+                    if (filePath && typeof block.input?.content === 'string') {
+                        const { match, diff } = verifyWrite(filePath, block.input.content);
+                        if (!match) {
+                            yield {
+                                type: 'warning',
+                                tool: block.name,
+                                message: `Write verification failed for ${filePath} — on-disk content differs from what was written:\n${diff}`,
+                            };
+                        }
+                    }
+                }
+
+                // Loop-detection guard: if the same tool is called with identical arguments
+                // and produces the identical result 3 times in a row, the agent is stuck.
+                // We hash the full serialization to avoid false matches from truncation.
+                const callKey = createHash('sha1').update(block.name + ':' + JSON.stringify(block.input)).digest('hex');
+                const resultKey = createHash('sha1').update(typeof result === 'string' ? result : JSON.stringify(result)).digest('hex');
+                state._recentToolCalls.push({ callKey, resultKey });
+                if (state._recentToolCalls.length > 3) state._recentToolCalls.shift();
+                if (state._recentToolCalls.length === 3) {
+                    const [a, b, c] = state._recentToolCalls;
+                    if (a.callKey === b.callKey && b.callKey === c.callKey &&
+                        a.resultKey === b.resultKey && b.resultKey === c.resultKey) {
+                        yield {
+                            type: 'stuck',
+                            tool: block.name,
+                            input: block.input,
+                            result,
+                            message: `Agent stuck: "${block.name}" called 3 times in a row with identical arguments and identical result. Stopping to prevent an infinite loop.`,
+                        };
+                        yield { type: 'stop', reason: 'stuck' };
+                        return;
+                    }
                 }
 
                 yield { type: 'result', tool: block.name, result, input: block.input, isError: !!isToolError };
