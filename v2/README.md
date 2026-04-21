@@ -1,5 +1,33 @@
 # open-claude-code v2 — Technical Guide
 
+## What's New in v2.5 (agent-loop / core)
+
+### 🎯 Session Goal Tracking
+
+`agent-loop.mjs` now auto-extracts a session goal from the first user message and emits a `sessionGoal` event so UIs can display a sticky goal banner.
+
+- The goal is injected into every **context compaction summary** so it survives long sessions
+- Saved to `~/.freecode/sessions/<id>.json` alongside the conversation summary
+- Restored on resume via `context-manager.mjs` — `sessionGoal` is a first-class field in compaction state
+
+### 🤖 Strict Agent Execution Protocol (`system-prompt.mjs`)
+
+A mandatory discipline section has been added to the system prompt:
+
+```
+EXPLORE → PLAN → ACT → VERIFY → REPORT
+```
+
+| Rule | Detail |
+|------|--------|
+| Post-write read-back | After every file write, read the file back to confirm content |
+| 3-attempt cap | If a fix fails 3 times, STOP and report the blocker with evidence |
+| Loop detection | If the same action is repeated with the same outcome, propose a different approach |
+| Evidence required | Never claim success without actual output (e.g. `eslint: 0 errors ✓`) |
+| No placeholders | Never write `// TODO: implement this` or stub functions |
+
+---
+
 ## What's New in v2.3 (agent-loop / core)
 
 ### Transparent 429 / Rate-Limit Retry
