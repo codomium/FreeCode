@@ -8,6 +8,22 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New in v3.0 — MultiEdit & Edit reliability on Windows 🪟🔧
+
+### 🔁 `MultiEdit` "old_string not found" Fixed in All Modes
+
+`MultiEdit` would always fail validation with *"old_string not found"* on Windows projects, even when the `Edit` tool succeeded on the same file.  Three root causes were fixed:
+
+| Root cause | Fix |
+|---|---|
+| **CRLF leak in `Read` output** | The `Read` tool now normalises `\r\n` → `\n` before returning content to the model. The model was building `old_string` values containing `\r` from Windows files, which never matched even when `MultiEdit` also normalised internally. |
+| **`MultiEdit` skipped the read-first gate** | `Edit` has always required the target file to be `Read` before it can be edited, forcing the model to work from real file content rather than memory. `MultiEdit` had no such check. It now enforces the same contract — if the file wasn't read first, the agent receives an explicit `"You must Read … before editing it. Use the Read tool first."` message. |
+| **`MultiEdit` didn't call `markRead` after writing** | After a successful `MultiEdit`, any follow-up `Edit` call on the same file would fail with *"You must Read first"* because the write was not tracked. `MultiEdit` now calls `markRead` for every file it writes, keeping the read-tracking state consistent for the rest of the session. |
+
+Together these changes make `MultiEdit` behave reliably in **every permission mode** — `default`, `acceptEdits`, `dontAsk`, and `plan` — and on both Windows (CRLF) and Unix (LF) projects.
+
+---
+
 ## What's New in v2.9 — permission improvements 🔐
 
 ### ✏️ Edit Allowed in Plan Mode
