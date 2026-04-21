@@ -173,7 +173,7 @@ Additional guardrails prevent the agent from silently claiming success, retrying
 - **`default` mode hung indefinitely** — the Allow/Deny permission card appeared in the UI but the agent never received the answer because `resolvePermission` was missing from the bridge. The agent now correctly waits for your approval and resumes or is blocked based on your choice.
 - **`plan` mode blocked `TodoWrite`** — `TodoWrite` is a read-only task-tracking tool and is now correctly allowed in plan mode alongside `Read`, `Glob`, `Grep`, and `LS`.
 - **All modes: informative denial messages** — instead of a bare `"Permission denied"` result, the agent now receives a mode-specific explanation:
-  - Plan mode → *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+  - dontAsk mode → *"Edit is not allowed in dontAsk mode."*
   - Other blocked modes → *"Permission denied for Edit."*
 
 ### 🗂️ Session Context Leak — Fixed

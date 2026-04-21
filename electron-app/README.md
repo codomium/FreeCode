@@ -49,7 +49,7 @@ Extra guardrails cap retries at 3 attempts per fix, detect and break infinite lo
 - **`default` mode hung indefinitely** — the Allow/Deny card appeared but the agent never received the answer because `resolvePermission` was missing from the bridge. It now correctly waits for and receives your approval or denial.
 - **`plan` mode blocked `TodoWrite`** — `TodoWrite` is read-only task tracking and is now correctly allowed in plan mode.
 - **Informative denial messages** — instead of `"Permission denied"` the agent receives a mode-aware explanation, e.g.:  
-  *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+  *"Edit is not allowed in dontAsk mode."*
 
 ### 🗂️ Session Context Leak — Fixed
 

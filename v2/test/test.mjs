@@ -221,8 +221,8 @@ const planPerms = createPermissionChecker({ defaultMode: 'plan' });
 assert(await planPerms.check('Read', {}), 'Plan mode allows Read');
 assert(await planPerms.check('Glob', {}), 'Plan mode allows Glob');
 assert(await planPerms.check('Grep', {}), 'Plan mode allows Grep');
-assert(!(await planPerms.check('Bash', {})), 'Plan mode blocks Bash');
-assert(!(await planPerms.check('Write', {})), 'Plan mode blocks Write');
+assert(await planPerms.check('Bash', {}), 'Plan mode allows Bash');
+assert(await planPerms.check('Write', {}), 'Plan mode allows Write');
 
 const denyPerms = createPermissionChecker({ defaultMode: 'dontAsk' });
 assert(!(await denyPerms.check('Read', {})), 'DontAsk mode blocks Read');
@@ -1557,7 +1557,7 @@ const planChecker = createPermissionChecker({ defaultMode: 'plan' });
 const planRead = await planChecker.check('Read', { file_path: '/tmp/test.txt' });
 assertEqual(planRead, true, 'Plan mode allows Read');
 const planBash = await planChecker.check('Bash', { command: 'echo hello' });
-assertEqual(planBash, false, 'Plan mode blocks Bash');
+assertEqual(planBash, true, 'Plan mode allows Bash');
 
 // ========== PHASE 5: ADVANCED FEATURES ==========
 

@@ -42,7 +42,7 @@ export function createPermissionChecker(config = {}) {
                     return true;
                 case 'auto': return true; // AI decides
                 case 'dontAsk': return false; // deny everything not pre-approved
-                case 'plan': return ['Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'TodoWrite'].includes(toolName);
+                case 'plan': return true; // All tools are allowed in plan mode
                 case 'default':
                 default:
                     // In default mode, safe read-only tools pass through without asking
