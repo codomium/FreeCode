@@ -183,7 +183,7 @@ class AgentBridge {
      * Restore conversation history into the agent loop so the model remembers
      * the full session from the beginning (Claude Premium-style session memory).
      */
-    resume(messages) {
+    resume(messages, sessionGoal, sessionId) {
         this._queue = this._queue.then(
             () => new Promise((resolve) => {
                 this._currentHandler = (event) => {
@@ -192,7 +192,7 @@ class AgentBridge {
                         resolve();
                     }
                 };
-                if (!this._send({ type: 'resume', messages })) {
+                if (!this._send({ type: 'resume', messages, sessionGoal: sessionGoal || null, sessionId: sessionId || null })) {
                     // Bridge not running — skip gracefully; a new bridge will be
                     // created with auto-injected history by getBridge().
                     this._currentHandler = null;
@@ -290,7 +290,7 @@ async function getBridge() {
         ? extensionContext.globalState.get('openClaudeCode.activeSession')
         : null;
     if (savedSession?.messages?.length > 0) {
-        bridge.resume(savedSession.messages);
+        bridge.resume(savedSession.messages, savedSession.sessionGoal || null, savedSession.sessionId || null);
     }
 
     return bridge;
@@ -351,6 +351,7 @@ class ClaudeCodeViewProvider {
                     ? activeSession.messages : null;
                 // Also restore the session ID so continued messages update the right history entry
                 const activeSessionId = (activeSession && activeSession.sessionId) || null;
+                const activeSessionGoal = (activeSession && activeSession.sessionGoal) || null;
                 this.postMessage({
                     type: 'initialized',
                     model: config.get('model') || 'claude-sonnet-4-6',
@@ -360,6 +361,7 @@ class ClaudeCodeViewProvider {
                     hasApiKey,
                     activeSession: activeMessages,
                     activeSessionId,
+                    activeSessionGoal,
                 });
                 if (indexStats) this.postMessage({ type: 'workspaceIndexed', stats: indexStats });
                 break;
@@ -467,10 +469,11 @@ class ClaudeCodeViewProvider {
                         ? firstUser.text.slice(0, 80).replace(/\n/g, ' ')
                         : 'Untitled conversation';
                     sessions.unshift({
-                        id: Date.now().toString(),
+                        id:          Date.now().toString(),
                         title,
-                        createdAt: Date.now(),
-                        messages: msg.messages,
+                        createdAt:   Date.now(),
+                        messages:    msg.messages,
+                        sessionGoal: msg.sessionGoal || null,
                     });
                     // Keep the 30 most recent sessions
                     if (sessions.length > 30) sessions.length = 30;
@@ -482,10 +485,11 @@ class ClaudeCodeViewProvider {
             case 'getHistory': {
                 const sessions = this._context.globalState.get('openClaudeCode.chatHistory', []);
                 const sessionList = sessions.map(s => ({
-                    id: s.id,
-                    title: s.title,
-                    createdAt: s.createdAt,
+                    id:           s.id,
+                    title:        s.title,
+                    createdAt:    s.createdAt,
                     messageCount: s.messages ? s.messages.length : 0,
+                    sessionGoal:  s.sessionGoal || null,
                 }));
                 this.postMessage({ type: 'historyData', sessions: sessionList });
                 break;
@@ -496,7 +500,7 @@ class ClaudeCodeViewProvider {
                 const session = sessions.find(s => s.id === msg.id);
                 if (session) {
                     // Include id so the webview can track which session is being viewed
-                    this.postMessage({ type: 'sessionData', id: session.id, messages: session.messages || [] });
+                    this.postMessage({ type: 'sessionData', id: session.id, messages: session.messages || [], sessionGoal: session.sessionGoal || null });
                 }
                 break;
             }
@@ -506,7 +510,7 @@ class ClaudeCodeViewProvider {
                 const sessions = this._context.globalState.get('openClaudeCode.chatHistory', []);
                 const session = sessions.find(s => s.id === msg.id);
                 if (session) {
-                    this.postMessage({ type: 'resumeFromHistoryData', id: session.id, messages: session.messages || [] });
+                    this.postMessage({ type: 'resumeFromHistoryData', id: session.id, messages: session.messages || [], sessionGoal: session.sessionGoal || null });
                 }
                 break;
             }
@@ -520,6 +524,7 @@ class ClaudeCodeViewProvider {
                     sess.messageCount = sess.messages.length;
                     const firstUser = sess.messages.find(m => m.type === 'user');
                     if (firstUser) sess.title = firstUser.text.slice(0, 80).replace(/\n/g, ' ');
+                    if (msg.sessionGoal) sess.sessionGoal = msg.sessionGoal;
                     await this._context.globalState.update('openClaudeCode.chatHistory', sessions);
                 }
                 break;
@@ -563,7 +568,8 @@ class ClaudeCodeViewProvider {
                     await this._context.globalState.update('openClaudeCode.activeSession', {
                         messages: capped,
                         // Track which history session this is so it can be updated on restart
-                        sessionId: msg.sessionId || null,
+                        sessionId:   msg.sessionId   || null,
+                        sessionGoal: msg.sessionGoal || null,
                         savedAt: Date.now(),
                     });
                 } else {
@@ -578,11 +584,20 @@ class ClaudeCodeViewProvider {
                 if (msg.messages && msg.messages.length > 0) {
                     try {
                         const agentBridge = await getBridge();
-                        await agentBridge.resume(msg.messages);
+                        await agentBridge.resume(msg.messages, msg.sessionGoal || null, msg.sessionId || null);
                     } catch (err) {
                         this.postMessage({ type: 'error', message: 'Failed to resume session: ' + err.message });
                     }
                 }
+                break;
+            }
+
+            case 'setGoal': {
+                // User edited/cleared the session goal — forward to agent bridge
+                try {
+                    const agentBridge = await getBridge();
+                    agentBridge._send({ type: 'setGoal', goal: msg.goal || null, sessionId: msg.sessionId || null });
+                } catch { /* ignore */ }
                 break;
             }
 

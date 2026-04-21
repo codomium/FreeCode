@@ -4,6 +4,42 @@ A **Cursor-style AI coding assistant** built directly into VSCode — no termina
 
 ---
 
+## What's New in v2.5 — session memory edition 🧠
+
+### 🎯 Session Goal Memory
+
+freeCode now tracks **what you are trying to accomplish** and keeps it visible throughout the session:
+
+- A **sticky goal banner** appears below the toolbar, auto-populated from your first message
+- Click the goal text to **edit it inline** — press Enter or click away to save
+- Click **✕** to dismiss the banner at any time
+- The goal **survives context compaction** — when long sessions are summarised to free up tokens, the goal is re-injected so the agent never forgets it
+- The goal **persists across VS Code restarts** — reopening a saved session restores the goal automatically
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  🎯 Build a REST API with authentication and rate limiting  ✕ │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 🔄 Cross-Session Context Persistence
+
+Session goals round-trip through every save/load path — `autoSaveSession`, `saveSession`, `updateSession`, `resumeFromHistory`, and `loadSession` — so switching between history entries always restores the correct goal.
+
+### 🤖 Strict Agent Execution Protocol
+
+The agent now follows a mandatory discipline loop for every task:
+
+1. **EXPLORE** — reads all relevant files before changing anything
+2. **PLAN** — states in ≤ 5 bullet points exactly what will change and why
+3. **ACT** — executes changes using tools; never just describes them
+4. **VERIFY** — re-reads the changed file and runs the linter/build to confirm success
+5. **REPORT** — states the final result with actual output (e.g. `eslint: 0 errors ✓`)
+
+Extra guardrails cap retries at 3 attempts per fix, detect and break infinite loops, and forbid silent success claims without evidence.
+
+---
+
 ## What's New in v2.3
 
 ### 🟩🟥 Accurate Diff View for Agent File Edits

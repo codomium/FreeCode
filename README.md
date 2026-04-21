@@ -132,7 +132,39 @@ The `Read` tool's PDF handler was calling `require('child_process')` inside an E
 
 ---
 
-## What's New in v2.5 — permissions & session fixes 🔧
+## What's New in v2.5 — session memory & permissions 🧠🔧
+
+### 🎯 Session Goal Memory
+
+freeCode now tracks **what you're trying to accomplish** and keeps it visible throughout the entire session:
+
+- A **sticky goal banner** appears below the toolbar, auto-populated from your very first message
+- Click the goal text to **edit it inline** — press Enter or click away to save
+- Click **✕** to dismiss the banner
+- The goal **survives context compaction** — when the conversation history is summarised to free up tokens, the goal is re-injected so the agent never forgets it
+- The goal is **persisted to disk** alongside the session history and automatically restored when you reopen a past session
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  🎯 Build a REST API with authentication and rate limiting │  ✕  │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 🔄 Cross-Session Context Persistence
+
+Session goals round-trip through every save/load path — `autoSaveSession`, `saveSession`, `updateSession`, `resumeFromHistory`, and `loadSession` — so switching between past sessions always restores the correct goal.
+
+### 🤖 Strict Agent Execution Protocol
+
+The agent now follows a mandatory discipline loop for every task:
+
+1. **EXPLORE** — reads all relevant files before touching anything
+2. **PLAN** — states in ≤ 5 bullet points exactly what will change and why
+3. **ACT** — executes changes using tools; never just describes them
+4. **VERIFY** — re-reads the file and runs the linter/build to confirm the change worked
+5. **REPORT** — states the final result with actual output (e.g. `eslint: 0 errors ✓`)
+
+Additional guardrails prevent the agent from silently claiming success, retrying the same failed approach more than 3 times, or writing placeholder code.
 
 ### 🔐 Permission Modes — All Modes Now Work Correctly
 
