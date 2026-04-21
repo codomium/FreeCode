@@ -5,10 +5,9 @@
 import { streamResponse, accumulateStream } from './streaming.mjs';
 import { ContextManager } from './context-manager.mjs';
 import { buildSystemPrompt, buildWorkspaceSnapshot, buildWorkspaceContent, buildThinkingModelSystemPrompt } from './system-prompt.mjs';
-import { verifyWrite } from './verify-write.mjs';
+import { verifyWrite, verifyEdit } from './verify-write.mjs';
 import { isNvidiaModel } from './providers.mjs';
 import { RateLimiter } from './rate-limiter.mjs';
-import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -298,11 +297,37 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     }
                 }
 
+                // Verify edit: after a successful Edit call, read the file back and
+                // confirm new_string is present and old_string is gone.
+                if (block.name === 'Edit' && !isToolError && typeof result === 'string' && result.startsWith('File updated:')) {
+                    const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
+                    if (filePath && typeof block.input?.new_string === 'string') {
+                        const { match, message } = verifyEdit(filePath, block.input.old_string || '', block.input.new_string);
+                        if (!match) {
+                            yield { type: 'warning', tool: block.name, message };
+                        }
+                    }
+                }
+
+                // Verify multi-edit: after a successful MultiEdit call, verify each
+                // edit's new_string is present in the corresponding file.
+                if (block.name === 'MultiEdit' && !isToolError && typeof result === 'string' && result.startsWith('Applied')) {
+                    const edits = Array.isArray(block.input?.edits) ? block.input.edits : [];
+                    for (const edit of edits) {
+                        if (!edit.file_path || typeof edit.new_string !== 'string') continue;
+                        const filePath = path.resolve(edit.file_path);
+                        const { match, message } = verifyEdit(filePath, edit.old_string || '', edit.new_string);
+                        if (!match) {
+                            yield { type: 'warning', tool: block.name, message };
+                        }
+                    }
+                }
+
                 // Loop-detection guard: if the same tool is called with identical arguments
                 // and produces the identical result 3 times in a row, the agent is stuck.
-                // We hash the full serialization to avoid false matches from truncation.
-                const callKey = createHash('sha1').update(block.name + ':' + JSON.stringify(block.input)).digest('hex');
-                const resultKey = createHash('sha1').update(typeof result === 'string' ? result : JSON.stringify(result)).digest('hex');
+                // We use a simple string key (no crypto needed — we only need equality).
+                const callKey = block.name + ':' + JSON.stringify(block.input);
+                const resultKey = typeof result === 'string' ? result : JSON.stringify(result);
                 state._recentToolCalls.push({ callKey, resultKey });
                 if (state._recentToolCalls.length > 3) state._recentToolCalls.shift();
                 if (state._recentToolCalls.length === 3) {

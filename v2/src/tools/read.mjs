@@ -11,6 +11,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { spawnSync } from 'child_process';
 
 const DEFAULT_LIMIT = 2000;
 
@@ -119,7 +120,6 @@ function readPdf(filePath, pages) {
     // PDF reading requires external tools; provide a best-effort
     // text extraction using a simple approach
     try {
-        const { spawnSync } = require('child_process');
         const [startPage, endPage] = pages
             ? [pages.split('-')[0], pages.split('-').pop()]
             : ['1', '20'];

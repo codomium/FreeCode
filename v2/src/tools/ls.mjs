@@ -39,11 +39,22 @@ export const LsTool = {
                 }
 
                 const type = entry.isDirectory() ? 'd' : entry.isSymbolicLink() ? 'l' : '-';
-                results.push(`${type} ${size.padStart(8)} ${entry.name}${entry.isDirectory() ? '/' : ''}`);
+                results.push({
+                    isDir: entry.isDirectory(),
+                    name: entry.name,
+                    line: `${type} ${size.padStart(8)} ${entry.name}${entry.isDirectory() ? '/' : ''}`,
+                });
             }
 
             if (results.length === 0) return 'Empty directory';
-            return `${dirPath}:\n${results.join('\n')}`;
+
+            // Sort: directories first, then files; each group alphabetically
+            results.sort((a, b) => {
+                if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+
+            return `${dirPath}:\n${results.map(r => r.line).join('\n')}`;
         } catch (err) {
             return `Error: ${err.message}`;
         }

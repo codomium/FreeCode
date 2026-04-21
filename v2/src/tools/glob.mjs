@@ -50,15 +50,22 @@ function globToRegex(pattern) {
     return new RegExp('^' + regex + '$');
 }
 
+/** Directories that are always excluded when walking for glob matches. */
+const GLOB_EXCLUDE_DIRS = new Set([
+    'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
+    '__pycache__', '.cache', 'coverage', '.nyc_output', '.turbo',
+    '.venv', 'venv', '.tox', 'vendor', 'target', '.gradle',
+]);
+
 function walkDir(dir, maxDepth = 20, depth = 0) {
     const results = [];
     if (depth > maxDepth) return results;
     try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-            // Skip hidden dirs and node_modules
+            // Skip excluded directories and hidden dirs below root
+            if (GLOB_EXCLUDE_DIRS.has(entry.name)) continue;
             if (entry.name.startsWith('.') && depth > 0) continue;
-            if (entry.name === 'node_modules') continue;
 
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {

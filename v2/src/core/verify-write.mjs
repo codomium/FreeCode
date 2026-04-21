@@ -1,7 +1,7 @@
 /**
  * Verify Write Helper — reads a file back after a Write/Edit and diffs it
  * against the expected content.  Called by the agent loop after every
- * successful Write tool call.
+ * successful Write, Edit, or MultiEdit tool call.
  *
  * Returns { match: boolean, diff: string|null }.
  * The caller is responsible for yielding a warning event when match === false.
@@ -54,4 +54,43 @@ export function verifyWrite(filePath, expectedContent) {
 
     const diff = produceDiff(expectedContent.split('\n'), actual.split('\n'));
     return { match: false, diff };
+}
+
+/**
+ * Verify that an Edit or MultiEdit was applied correctly by checking that
+ * `new_string` is present in the file and `old_string` is no longer there
+ * (unless replace_all was used, in which case we only check new_string).
+ *
+ * @param {string} filePath  - absolute path to the file
+ * @param {string} oldString - the text that was replaced
+ * @param {string} newString - the text that replaced it
+ * @returns {{ match: boolean, message: string|null }}
+ */
+export function verifyEdit(filePath, oldString, newString) {
+    let actual;
+    try {
+        actual = fs.readFileSync(filePath, 'utf-8');
+    } catch (e) {
+        return { match: false, message: `Cannot read file after edit: ${e.message}` };
+    }
+
+    // new_string must be present after the edit
+    if (!actual.includes(newString)) {
+        return {
+            match: false,
+            message: `Edit verification failed for ${filePath}: new_string not found in file after edit.`,
+        };
+    }
+
+    // old_string should no longer appear (it was replaced).
+    // Skip this check when old_string === '' (insert-only edits) or when
+    // new_string happens to contain old_string (legitimate partial updates).
+    if (oldString && !newString.includes(oldString) && actual.includes(oldString)) {
+        return {
+            match: false,
+            message: `Edit verification warning for ${filePath}: old_string still found in file after edit — the replacement may have been incomplete.`,
+        };
+    }
+
+    return { match: true, message: null };
 }
