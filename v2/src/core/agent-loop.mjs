@@ -75,7 +75,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         } else if (options.continuation) {
             // Guard against infinite tool-call loops
             state.continuationDepth++;
-            const maxContinuation = settings.maxContinuationTurns || 50;
+            const maxContinuation = settings.maxContinuationTurns || 100;
             if (state.continuationDepth >= maxContinuation) {
                 yield {
                     type: 'error',

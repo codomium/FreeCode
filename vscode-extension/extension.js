@@ -439,6 +439,27 @@ class ClaudeCodeViewProvider {
                 break;
             }
 
+            case 'openFile': {
+                // Open a file from a chat-file-link click in the webview
+                if (msg.path) {
+                    try {
+                        let filePath = msg.path;
+                        // Resolve relative paths against workspace root
+                        if (!/^(\/|[a-zA-Z]:[\\/])/.test(filePath)) {
+                            const wsFolder = vscode.workspace.workspaceFolders?.[0];
+                            if (wsFolder) {
+                                filePath = vscode.Uri.joinPath(wsFolder.uri, filePath).fsPath;
+                            }
+                        }
+                        const uri = vscode.Uri.file(filePath);
+                        await vscode.commands.executeCommand('vscode.open', uri);
+                    } catch (err) {
+                        // File may not exist or path may be invalid — ignore silently
+                    }
+                }
+                break;
+            }
+
             case 'pickFile': {
                 const uris = await vscode.window.showOpenDialog({
                     canSelectMany: false,

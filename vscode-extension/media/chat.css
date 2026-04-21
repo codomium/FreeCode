@@ -2273,3 +2273,22 @@ select:focus { border-color: var(--accent); }
   font-size: 12px;
 }
 .bookmarks-empty .bookmarks-empty-icon { font-size: 32px; margin-bottom: 8px; }
+
+/* ── Clickable file-path links in chat messages ──── */
+.chat-file-link {
+  cursor: pointer;
+  display: inline;
+}
+.chat-file-link code {
+  color: var(--accent);
+  background: rgba(0,122,204,0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border-bottom: 1px solid var(--accent);
+  font-family: var(--font-code, monospace);
+  font-size: 0.9em;
+  transition: background 0.12s;
+}
+.chat-file-link:hover code {
+  background: rgba(0,122,204,0.2);
+}

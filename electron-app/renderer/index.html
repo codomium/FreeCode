@@ -48,6 +48,16 @@
       <option value="acceptEdits">acceptEdits</option>
       <option value="bypassPermissions">bypass</option>
     </select>
+    <span class="control-label" title="AI persona / behavior preset">🎭</span>
+    <select id="persona-quick-select" title="AI persona — affects agent behavior and focus">
+      <option value="auto">auto</option>
+      <option value="expert-engineer">Expert Engineer</option>
+      <option value="code-reviewer">Code Reviewer</option>
+      <option value="architect">Architect</option>
+      <option value="debugger">Debugger</option>
+      <option value="devops">DevOps</option>
+      <option value="security">Security</option>
+    </select>
     <span class="control-label thinking-ctrl" id="thinking-label" style="display:none" title="Enable extended reasoning mode for Kimi K2.5 / DeepSeek R1 (disables live tools)">💭 Thinking</span>
     <label class="toggle-switch thinking-ctrl" id="thinking-toggle-wrapper" style="display:none" title="Enable extended reasoning mode (disables live tools)">
       <input type="checkbox" id="thinking-toggle">
@@ -643,10 +653,14 @@
       <div class="settings-row">
         <label class="settings-label" for="setting-persona">AI Persona</label>
         <select id="setting-persona" class="settings-select">
+          <option value="auto">auto (AI decides)</option>
           <option value="expert-engineer">expert-engineer</option>
           <option value="pair-programmer">pair-programmer</option>
           <option value="code-reviewer">code-reviewer</option>
           <option value="architect">architect</option>
+          <option value="debugger">debugger</option>
+          <option value="devops">devops</option>
+          <option value="security">security</option>
         </select>
       </div>
       <div class="settings-row">
