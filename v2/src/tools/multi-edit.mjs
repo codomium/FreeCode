@@ -8,78 +8,12 @@
 import fs from 'fs';
 import path from 'path';
 import { hasBeenRead, markRead } from './read.mjs';
-
-/** Minimum length for a trimmed line to be used as a similarity search needle */
-const MIN_SEARCH_LINE_LENGTH = 4;
-
-/**
- * Normalize line endings to LF so that CRLF files (Windows) can be matched
- * against LF-only search strings supplied by the model.
- */
-function normalizeLineEndings(str) {
-    return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-}
-
-/**
- * When old_string is not found verbatim, find lines in the file that contain
- * the first non-empty trimmed line of old_string. Returns a formatted hint
- * string (or '') to help the model self-correct.
- */
-function findSimilarLinesHint(content, oldString, filePath) {
-    const needle = (oldString || '').split('\n').map(l => l.trim()).find(l => l.length >= MIN_SEARCH_LINE_LENGTH);
-    if (!needle) return '';
-    const lines = content.split('\n');
-    const matches = [];
-    for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes(needle)) {
-            matches.push(`  line ${i + 1}: ${lines[i]}`);
-            if (matches.length >= 5) break;
-        }
-    }
-    if (matches.length === 0) return '';
-    return `\nClosest match(es) in ${path.basename(filePath)}:\n${matches.join('\n')}`;
-}
-
-/**
- * Attempt to find `oldString` in `content` using trailing-whitespace-insensitive
- * line matching (the same fallback used by the Edit tool).
- *
- * Returns the *actual* substring from `content` that corresponds to `oldString`
- * (with the file's real indentation/trailing-space characters) so it can be used
- * directly as the search string in String.prototype.replace().
- * Returns null when no match is found.
- *
- * @param {string} content   - normalized (LF) file content
- * @param {string} oldString - normalized (LF) old_string from the edit
- * @returns {string|null}
- */
-function tryWhitespaceNormalizedMatch(content, oldString) {
-    const normalizeWs = (s) => s.split('\n').map(l => l.trimEnd()).join('\n');
-    const normContent = normalizeWs(content);
-    const normOld = normalizeWs(oldString);
-    if (!normContent.includes(normOld)) return null;
-
-    // Locate the actual lines in the file by finding where the first significant
-    // line of old_string occurs.
-    const firstLine = oldString.split('\n').find(l => l.trim().length >= MIN_SEARCH_LINE_LENGTH);
-    if (!firstLine) return null;
-
-    const lines = content.split('\n');
-    const startIdx = lines.findIndex(l => l.trimEnd() === firstLine.trimEnd());
-    if (startIdx === -1) return null;
-
-    const oldLines = oldString.split('\n');
-    const candidateLines = lines.slice(startIdx, startIdx + oldLines.length);
-
-    // Every line must match when trailing whitespace is stripped.
-    const allMatch = oldLines.every((ol, i) =>
-        candidateLines[i] !== undefined &&
-        candidateLines[i].trimEnd() === ol.trimEnd()
-    );
-    if (!allMatch) return null;
-
-    return candidateLines.join('\n');
-}
+import {
+    normalizeContent,
+    normalizeLineEndings,
+    findSimilarLinesHint,
+    tryWhitespaceNormalizedMatch,
+} from './edit-utils.mjs';
 
 export const MultiEditTool = {
     name: 'MultiEdit',
@@ -152,8 +86,8 @@ export const MultiEditTool = {
                 try {
                     const raw = fs.readFileSync(filePath, 'utf-8');
                     rawContents.set(filePath, raw);
-                    // Normalize CRLF → LF so Windows files match LF-only search strings
-                    fileContents.set(filePath, normalizeLineEndings(raw));
+                    // Strip BOM and normalize CRLF → LF so Windows files match LF-only search strings
+                    fileContents.set(filePath, normalizeContent(raw));
                 } catch (err) {
                     errors.push(`edit[${i}]: cannot read ${filePath}: ${err.message}`);
                     continue;
