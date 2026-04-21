@@ -3666,3 +3666,341 @@ select:focus { border-color: var(--accent); }
   background: rgba(244,135,113,0.2);
 }
 
+
+/* ============================================================
+   Inline Edit Bar (Cmd+K over editor panel)
+   ============================================================ */
+#inline-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--accent);
+  flex-shrink: 0;
+  animation: slideDown 0.12s ease;
+}
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.inline-edit-label {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#inline-edit-input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  outline: none;
+  min-width: 0;
+}
+#inline-edit-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0,122,204,0.18);
+}
+#inline-edit-submit {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+#inline-edit-submit:hover { background: var(--accent-hover); }
+#inline-edit-cancel {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+#inline-edit-cancel:hover { color: var(--text); }
+
+/* ── Diff Reject All button ─────────────────────────────────── */
+.diff-reject-all {
+  background: rgba(244,135,113,0.12) !important;
+  border-color: rgba(244,135,113,0.4) !important;
+  color: var(--error-text) !important;
+}
+.diff-reject-all:hover {
+  background: rgba(244,135,113,0.25) !important;
+}
+
+/* ============================================================
+   Custom Quick Actions (My Prompts)
+   ============================================================ */
+.qa-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.qa-add-btn {
+  background: rgba(0,122,204,0.12);
+  border: 1px solid rgba(0,122,204,0.3);
+  color: var(--accent);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: auto;
+}
+.qa-add-btn:hover {
+  background: rgba(0,122,204,0.22);
+}
+#custom-qa-form {
+  padding: 6px 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.custom-qa-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  outline: none;
+  width: 100%;
+}
+.custom-qa-input:focus { border-color: var(--accent); }
+.custom-qa-form-row {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.custom-qa-save-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.custom-qa-save-btn:hover { background: var(--accent-hover); }
+.custom-qa-cancel-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.custom-qa-cancel-btn:hover { background: var(--bg-input); color: var(--text); }
+/* Custom QA button wrapper (button + delete icon) */
+.qa-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.qa-btn-wrap .qa-btn {
+  padding-right: 22px;
+}
+.qa-btn-delete {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.12s;
+}
+.qa-btn-delete:hover { color: var(--error-text); }
+
+/* ============================================================
+   Response Style Pill Selector
+   ============================================================ */
+#response-style-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 0;
+  flex-shrink: 0;
+}
+.response-style-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+#response-style-pills {
+  display: flex;
+  gap: 3px;
+}
+.style-pill {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 12px;
+  padding: 2px 9px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.style-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.style-pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ============================================================
+   Message Star / Bookmark Button
+   ============================================================ */
+.msg-star-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.msg-assistant:hover .msg-star-btn { opacity: 1; }
+.msg-star-btn.starred {
+  color: #f5c518;
+  opacity: 1;
+}
+.msg-star-btn:hover { color: #f5c518; opacity: 1; }
+
+/* ============================================================
+   Bookmarks Panel
+   ============================================================ */
+#bookmarks-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 380px;
+  height: 100%;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  overflow: hidden;
+}
+#bookmarks-panel.open {
+  transform: translateX(0);
+}
+#bookmarks-panel-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 6px;
+}
+#bookmarks-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+#bookmarks-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.bookmark-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+}
+.bookmark-item:last-child { border-bottom: none; }
+.bookmark-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.bookmark-text {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  max-height: 100px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bookmark-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.bookmark-copy-btn, .bookmark-delete-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.bookmark-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.bookmark-delete-btn:hover { color: var(--error-text); border-color: var(--error-text); }
+.bookmarks-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.bookmarks-empty .bookmarks-empty-icon { font-size: 32px; margin-bottom: 8px; }
+
+/* ============================================================
+   Focus / Zen Mode  (hides editor + explorer columns)
+   ============================================================ */
+#workbench.focus-mode #panel-editor,
+#workbench.focus-mode #panel-explorer,
+#workbench.focus-mode #resize-left,
+#workbench.focus-mode #resize-right {
+  display: none !important;
+}
+#workbench.focus-mode #panel-chat {
+  max-width: 860px;
+  margin: 0 auto;
+}
+#focus-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}

@@ -17,6 +17,121 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.8 — AI power & UX supremacy 🚀
+
+These three enhancements are present in **both** the VS Code extension and the Electron desktop app (Focus Mode is Electron-only).
+
+### ⚡📖 Response Style Pill (both apps)
+
+No competitor has this built-in. A compact three-state pill selector sits just above the message input in both apps:
+
+| Pill | Effect |
+|------|--------|
+| **Auto** (default) | No modifier — let the model decide |
+| **⚡ Brief** | Appends *"Respond concisely. Use bullet points where suitable."* |
+| **📖 Thorough** | Appends *"Provide a thorough, detailed explanation with examples and reasoning."* |
+
+Selection persists in `localStorage` across sessions. Zero friction — one click, every future message adapts.
+
+### ⭐ Message Bookmarks / Starred Replies (both apps)
+
+Every AI reply now has a ☆ star button in its header (visible on hover). Clicking it:
+
+1. Marks the message with a gold ★
+2. Saves the full text to `localStorage` under the current session title + timestamp
+3. If the **⭐ Stars** panel (new header button) is open, it refreshes immediately
+
+The **Stars panel** shows all saved messages with copy and remove buttons. A **🗑 Clear all** button with a confirmation dialog removes everything at once. Neither Cursor nor Windsurf offers any form of reply bookmarking.
+
+### 🎯 Focus / Zen Mode (Electron app)
+
+Click the **⊞ Focus** button in the header (or press **Ctrl+Shift+Z**) to hide the Explorer and Editor panels, giving the chat column the full window width. A centred max-width layout (860 px) makes long AI conversations comfortable to read. Click again or press the shortcut again to exit.
+
+---
+
+## What's New in v2.7 — Cursor & Windsurf killers 🎯
+
+These three enhancements are present in **both** the VS Code extension and the Electron desktop app.
+
+### ✏️ Inline Edit Bar (Cmd+K / Ctrl+K)
+
+The #1 feature that makes Cursor famous is now in freeCode — and it works without any third-party subscription.
+
+- **Electron app**: open a file in the built-in editor, select any code (or place the cursor on a line), then press **Cmd+K / Ctrl+K**. A sleek edit bar slides in at the top of the editor panel.  Type your instruction and press Enter — the selected code and your instruction are sent to the AI, which edits the file directly.
+- **VS Code extension**: press **Ctrl+K** anywhere in the chat panel (when the input is not focused) to open a Quick-Edit bar. Type your instruction and press Enter — the active file is automatically added to context and the instruction is prefilled in the message box ready to send.
+
+Esc or the ✕ button cancels without sending.
+
+### ⭐ Custom Quick Actions (User-Saved Prompts)
+
+Both Cursor and Windsurf ship a fixed list of slash commands. freeCode lets you **save your own prompt buttons**.
+
+Click **⚡ Actions** to open the Quick Actions panel. Scroll to the new **⭐ My Prompts** section and click **+ Save prompt**. Enter a short label (e.g. *"Add logging"*) and a template (use `{selection}` to insert selected text). The button is saved in browser localStorage and persists across sessions. Each saved button has a **×** to delete it.
+
+### ✗ Reject All (Electron)
+
+The diff toolbar in the Electron app now has a **✗ Reject All** button next to **✓ Accept All**.  
+Clicking it restores the original content of every open diff tab to disk and closes them in one shot — the symmetric counterpart to Accept All.
+
+---
+
+## What's New in v2.6 — agent reliability & tool improvements 🛡️
+
+### 🛡️ Mandatory Agent Reliability Rules
+
+The system prompt now enforces five hard rules that prevent the agent from silently doing the wrong thing:
+
+- **Always act via tools** — describing an action without calling a tool is a critical failure; text like *"I would create …"* is never acceptable when the task requires a real change
+- **Plan → Act → Verify** — every `Write`/`Edit` must be followed by a `Read`-back to confirm the result; linter/test commands are run if available
+- **3-attempt loop budget** — after 3 failed attempts on the same step the agent emits a structured `BLOCKED: … | root cause: … | need: …` message and stops rather than looping forever
+- **Root cause before fix** — the agent must read the file and capture the exact error before attempting a fix, preventing guess-and-retry spirals
+- **Forbidden behaviours explicitly listed** — claiming success without verification, retrying an identical failing call, or outputting code in chat instead of calling `Write`/`Edit` are all prohibited
+
+### 🔁 Infinite-Loop Guard
+
+The agent loop now tracks the last three tool calls. If the same tool is called with identical arguments and produces an identical result three times in a row, the loop is stopped automatically and a `{ type: 'stuck' }` event is emitted — preventing silent CPU-burning loops when an edit can never succeed.
+
+### ✅ Edit & MultiEdit Verification
+
+After every `Edit` or `MultiEdit` call the agent now reads the file back and checks:
+
+1. `new_string` is present in the file (replacement was actually applied)
+2. `old_string` is no longer present (the old text is gone)
+
+If either check fails a `{ type: 'warning' }` event is emitted so the agent can self-correct. This extends the existing `Write` verification that was already in place.
+
+### 🌐 HTML → Plain Text in WebFetch
+
+When the `WebFetch` tool receives an `text/html` or `application/xhtml` response it now automatically strips tags and returns clean plain text instead of raw HTML markup. This dramatically reduces the token cost of reading documentation pages.
+
+- `<script>` and `<style>` blocks (including their content) are removed first
+- Block-level elements (`<p>`, `<div>`, `<h1>`–`<h6>`, `<li>`, etc.) become newlines
+- All remaining tags are stripped
+- HTML entities are decoded (`&amp;`, `&lt;`, `&gt;`, `&#8230;`, `&#x2019;`, etc.)
+- A new `raw_html: true` parameter is available for callers that need the original markup
+
+### 🗂️ Smarter Glob — Fewer Noise Files
+
+The `Glob` tool's directory walk now skips a much broader list of generated/vendor directories that are never useful to search:
+
+| Added exclusions |
+|---|
+| `.git` · `dist` · `build` · `out` |
+| `.next` · `.nuxt` · `__pycache__` |
+| `.cache` · `coverage` · `.nyc_output` |
+| `.turbo` · `.venv` · `venv` · `.tox` |
+| `vendor` · `target` · `.gradle` |
+
+### 📂 LS — Sorted Output
+
+The `LS` tool output is now sorted: **directories first** (alphabetically), then **files** (alphabetically). Previously entries were returned in filesystem order which varies by OS and makes it harder to scan.
+
+### 🐛 PDF Reader ESM Fix
+
+The `Read` tool's PDF handler was calling `require('child_process')` inside an ES module, which throws a `ReferenceError` at runtime. The import is now a proper top-level `import { spawnSync }` statement.
+
+---
+
 ## What's New in v2.5 — session memory & permissions 🧠🔧
 
 ### 🎯 Session Goal Memory

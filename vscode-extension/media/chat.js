@@ -735,6 +735,25 @@
     function addCopyButtonToMessage(msgDiv, rawText, userPrompt) {
         const header = msgDiv.querySelector('.msg-header');
         if (!header || header.querySelector('.msg-copy-btn')) return;
+
+        // ⭐ Star/bookmark button
+        const msgId = 'bm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        msgDiv._bookmarkId = msgId;
+        const isStarred = bookmarks.some(b => b.id === msgId);
+        const starBtn = document.createElement('button');
+        starBtn.className = 'msg-star-btn' + (isStarred ? ' starred' : '');
+        starBtn.title = isStarred ? 'Remove star' : 'Star this reply';
+        starBtn.textContent = isStarred ? '★' : '☆';
+        starBtn.addEventListener('click', () => {
+            const added = toggleBookmark(msgId, rawText);
+            starBtn.classList.toggle('starred', added);
+            starBtn.textContent = added ? '★' : '☆';
+            starBtn.title = added ? 'Remove star' : 'Star this reply';
+            if (bookmarksPanelEl && bookmarksPanelEl.classList.contains('open')) {
+                renderBookmarksPanel();
+            }
+        });
+        header.appendChild(starBtn);
         const btn = document.createElement('button');
         btn.className = 'msg-copy-btn';
         btn.title = 'Copy answer';
@@ -2293,7 +2312,7 @@
             if (f.isGit && f.content)    specialParts.push('\n\n[Git Context]\n' + f.content);
             if (f.isErrors && f.content) specialParts.push('\n\n[Workspace Problems]\n' + f.content);
         }
-        const finalMessage = specialParts.length > 0 ? rawText + specialParts.join('') : rawText;
+        const finalMessage = applyStyleSuffix(specialParts.length > 0 ? rawText + specialParts.join('') : rawText);
 
         // Separate file paths from image/codebase/special context entries
         const sendContextFiles = contextFiles
@@ -2958,6 +2977,322 @@
             }
         }
     });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // INLINE QUICK-EDIT BAR — Ctrl+K anywhere in the chat panel (Cursor-style)
+    // Opens a bar above the input where user types an edit instruction.
+    // On submit, the active file is auto-added to context and the instruction sent.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const inlineEditBarEl     = document.getElementById('inline-edit-bar');
+    const inlineEditInputEl   = document.getElementById('inline-edit-input');
+    const inlineEditSubmitBtn = document.getElementById('inline-edit-submit');
+    const inlineEditCancelBtn = document.getElementById('inline-edit-cancel');
+
+    function showInlineEditBar() {
+        if (inlineEditBarEl)  inlineEditBarEl.style.display  = '';
+        if (inlineEditInputEl) { inlineEditInputEl.value = ''; inlineEditInputEl.focus(); }
+    }
+
+    function hideInlineEditBar() {
+        if (inlineEditBarEl) inlineEditBarEl.style.display = 'none';
+        if (inputEl) inputEl.focus();
+    }
+
+    function submitInlineEdit() {
+        const instruction = inlineEditInputEl ? inlineEditInputEl.value.trim() : '';
+        if (!instruction) return;
+        hideInlineEditBar();
+        // Request the active file so it lands in context, then fill the input
+        vscode.postMessage({ type: 'getActiveFile' });
+        if (inputEl) {
+            inputEl.value = `Edit the active file: ${instruction}\n`;
+            inputEl.style.height = 'auto';
+            inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+            inputEl.focus();
+            inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+        }
+    }
+
+    if (inlineEditSubmitBtn) inlineEditSubmitBtn.addEventListener('click', submitInlineEdit);
+    if (inlineEditCancelBtn) inlineEditCancelBtn.addEventListener('click', hideInlineEditBar);
+    if (inlineEditInputEl) {
+        inlineEditInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submitInlineEdit(); }
+            if (e.key === 'Escape') hideInlineEditBar();
+        });
+    }
+
+    // Ctrl+K (not Ctrl+`) — open quick-edit bar (avoids clashing with terminal shortcut)
+    document.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k' && !e.shiftKey && !e.altKey) {
+            // Only activate when input is not already focused (to avoid overriding cursor movement)
+            if (document.activeElement === inputEl) return;
+            e.preventDefault();
+            showInlineEditBar();
+        }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CUSTOM QUICK ACTIONS — User-saved prompt buttons (persisted in localStorage)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const CUSTOM_QA_KEY = 'freecode_custom_qa';
+    let customQuickActions = [];
+
+    (function loadCustomQA() {
+        try {
+            const raw = localStorage.getItem(CUSTOM_QA_KEY);
+            if (raw) customQuickActions = JSON.parse(raw);
+        } catch { /* ignore */ }
+    }());
+
+    function saveCustomQA() {
+        try { localStorage.setItem(CUSTOM_QA_KEY, JSON.stringify(customQuickActions)); } catch { /* ignore */ }
+    }
+
+    function renderCustomQA() {
+        const grid = document.getElementById('custom-qa-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        for (let i = 0; i < customQuickActions.length; i++) {
+            const qa = customQuickActions[i];
+            const wrap = document.createElement('div');
+            wrap.className = 'qa-btn-wrap';
+
+            const btn = document.createElement('button');
+            btn.className = 'qa-btn';
+            btn.textContent = qa.name;
+            btn.title = qa.template;
+            btn.addEventListener('click', () => {
+                if (!inputEl) return;
+                inputEl.value = qa.template + '\n';
+                inputEl.style.height = 'auto';
+                inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+                inputEl.focus();
+                inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+                if (quickActionsPanel) quickActionsPanel.style.display = 'none';
+                if (actionsBtn) actionsBtn.classList.remove('active');
+            });
+
+            const del = document.createElement('button');
+            del.className = 'qa-btn-delete';
+            del.textContent = '×';
+            del.title = 'Remove this prompt';
+            const capturedIdx = i;
+            del.addEventListener('click', (e) => {
+                e.stopPropagation();
+                customQuickActions = customQuickActions.filter((_, j) => j !== capturedIdx);
+                saveCustomQA();
+                renderCustomQA();
+            });
+
+            wrap.appendChild(btn);
+            wrap.appendChild(del);
+            grid.appendChild(wrap);
+        }
+    }
+
+    const customQaAddBtn    = document.getElementById('custom-qa-add-btn');
+    const customQaForm      = document.getElementById('custom-qa-form');
+    const customQaNameEl    = document.getElementById('custom-qa-name');
+    const customQaTemplEl   = document.getElementById('custom-qa-template');
+    const customQaSaveBtn   = document.getElementById('custom-qa-save');
+    const customQaCancelBtn = document.getElementById('custom-qa-cancel');
+
+    if (customQaAddBtn) {
+        customQaAddBtn.addEventListener('click', () => {
+            if (customQaForm) customQaForm.style.display = '';
+            if (customQaNameEl) { customQaNameEl.value = ''; customQaNameEl.focus(); }
+            if (customQaTemplEl) customQaTemplEl.value = '';
+        });
+    }
+
+    if (customQaSaveBtn) {
+        customQaSaveBtn.addEventListener('click', () => {
+            const name     = customQaNameEl ? customQaNameEl.value.trim() : '';
+            const template = customQaTemplEl ? customQaTemplEl.value.trim() : '';
+            if (!name || !template) return;
+            customQuickActions.push({ name, template });
+            saveCustomQA();
+            renderCustomQA();
+            if (customQaForm) customQaForm.style.display = 'none';
+        });
+    }
+
+    if (customQaCancelBtn) {
+        customQaCancelBtn.addEventListener('click', () => {
+            if (customQaForm) customQaForm.style.display = 'none';
+        });
+    }
+
+    if (customQaTemplEl) {
+        customQaTemplEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); customQaSaveBtn && customQaSaveBtn.click(); }
+            if (e.key === 'Escape') { customQaCancelBtn && customQaCancelBtn.click(); }
+        });
+    }
+
+    // Initial render (shows any saved prompts on load)
+    renderCustomQA();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RESPONSE STYLE PILL — controls AI verbosity per-message
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const STYLE_KEY = 'freecode_response_style';
+    let responseStyle = 'auto';
+
+    (function loadResponseStyle() {
+        try { responseStyle = localStorage.getItem(STYLE_KEY) || 'auto'; } catch { /* ignore */ }
+    }());
+
+    function saveResponseStyle(s) {
+        responseStyle = s;
+        try { localStorage.setItem(STYLE_KEY, s); } catch { /* ignore */ }
+    }
+
+    function applyStyleSuffix(message) {
+        if (responseStyle === 'brief') {
+            return message + '\n\n[Respond concisely. Use bullet points where suitable. Avoid unnecessary prose.]';
+        }
+        if (responseStyle === 'thorough') {
+            return message + '\n\n[Provide a thorough, detailed explanation. Cover edge cases, include examples where helpful, and explain your reasoning step by step.]';
+        }
+        return message;
+    }
+
+    const styleBarEl = document.getElementById('response-style-pills');
+    if (styleBarEl) {
+        styleBarEl.querySelectorAll('.style-pill').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.style === responseStyle);
+        });
+        styleBarEl.addEventListener('click', (e) => {
+            const pill = e.target.closest('.style-pill');
+            if (!pill) return;
+            const style = pill.dataset.style;
+            saveResponseStyle(style);
+            styleBarEl.querySelectorAll('.style-pill').forEach(b => b.classList.toggle('active', b.dataset.style === style));
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MESSAGE BOOKMARKS — star / save important AI replies
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const BOOKMARKS_KEY = 'freecode_bookmarks';
+    let bookmarks = [];
+
+    (function loadBookmarks() {
+        try {
+            const raw = localStorage.getItem(BOOKMARKS_KEY);
+            if (raw) bookmarks = JSON.parse(raw);
+        } catch { /* ignore */ }
+    }());
+
+    function saveBookmarks() {
+        try { localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks)); } catch { /* ignore */ }
+    }
+
+    function toggleBookmark(msgId, rawText) {
+        const idx = bookmarks.findIndex(b => b.id === msgId);
+        if (idx >= 0) {
+            bookmarks.splice(idx, 1);
+            saveBookmarks();
+            return false;
+        }
+        bookmarks.unshift({ id: msgId, text: rawText, date: new Date().toISOString(), sessionTitle: currentSessionTitle || 'Conversation' });
+        saveBookmarks();
+        return true;
+    }
+
+    function renderBookmarksPanel() {
+        const listEl = document.getElementById('bookmarks-list');
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        if (bookmarks.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.className = 'bookmarks-empty';
+            emptyDiv.innerHTML = '<div class="bookmarks-empty-icon">⭐</div>Star important AI replies to save them here.<br>Click ⭐ on any response to bookmark it.';
+            listEl.appendChild(emptyDiv);
+            return;
+        }
+        for (let i = 0; i < bookmarks.length; i++) {
+            const bm = bookmarks[i];
+            const item = document.createElement('div');
+            item.className = 'bookmark-item';
+
+            const meta = document.createElement('div');
+            meta.className = 'bookmark-meta';
+            meta.textContent = `${bm.sessionTitle} · ${new Date(bm.date).toLocaleDateString()}`;
+            item.appendChild(meta);
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'bookmark-text';
+            textDiv.textContent = bm.text.slice(0, 300) + (bm.text.length > 300 ? '…' : '');
+            item.appendChild(textDiv);
+
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'bookmark-actions';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'bookmark-copy-btn';
+            copyBtn.textContent = '⎘ Copy';
+            copyBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'copyToClipboard', text: bm.text });
+                copyBtn.textContent = '✓ Copied';
+                setTimeout(() => { copyBtn.textContent = '⎘ Copy'; }, 1500);
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'bookmark-delete-btn';
+            delBtn.textContent = '× Remove';
+            const capturedIdx = i;
+            delBtn.addEventListener('click', () => {
+                bookmarks = bookmarks.filter((_, j) => j !== capturedIdx);
+                saveBookmarks();
+                renderBookmarksPanel();
+            });
+
+            actionsDiv.appendChild(copyBtn);
+            actionsDiv.appendChild(delBtn);
+            item.appendChild(actionsDiv);
+            listEl.appendChild(item);
+        }
+    }
+
+    const bookmarksBtnEl    = document.getElementById('bookmarks-btn');
+    const bookmarksPanelEl  = document.getElementById('bookmarks-panel');
+    const bookmarksCloseBtn = document.getElementById('bookmarks-close-btn');
+    const bookmarksClearBtn = document.getElementById('bookmarks-clear-btn');
+
+    if (bookmarksBtnEl && bookmarksPanelEl) {
+        bookmarksBtnEl.addEventListener('click', () => {
+            const isOpen = bookmarksPanelEl.classList.contains('open');
+            if (!isOpen) renderBookmarksPanel();
+            bookmarksPanelEl.classList.toggle('open', !isOpen);
+            bookmarksBtnEl.classList.toggle('active', !isOpen);
+        });
+    }
+    if (bookmarksCloseBtn) {
+        bookmarksCloseBtn.addEventListener('click', () => {
+            if (bookmarksPanelEl) bookmarksPanelEl.classList.remove('open');
+            if (bookmarksBtnEl)   bookmarksBtnEl.classList.remove('active');
+        });
+    }
+    if (bookmarksClearBtn) {
+        bookmarksClearBtn.addEventListener('click', () => {
+            if (!confirm('Remove all starred messages?')) return;
+            bookmarks = [];
+            saveBookmarks();
+            renderBookmarksPanel();
+            document.querySelectorAll('.msg-star-btn.starred').forEach(btn => {
+                btn.classList.remove('starred');
+                btn.title = 'Star this reply';
+                btn.textContent = '☆';
+            });
+        });
+    }
 
     // ── Signal ready ──────────────────────────────────────────────────────────
     vscode.postMessage({ type: 'ready' });
