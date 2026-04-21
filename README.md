@@ -17,6 +17,111 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.9 — Reliability, UX polish & smarter agent 🛡️✨
+
+Eight focused improvements across **both** the VS Code extension and the Electron app.
+
+### 🔗 Clickable File Paths in Plain Chat Text (both apps)
+
+File paths mentioned in plain prose — not just in backtick code spans — are now automatically detected and rendered as **clickable links**.
+
+- Patterns like `Found in lib/core/utils/content_validation.dart` become one-click navigation
+- Extended file-extension coverage: `.dart`, `.vue`, `.svelte`, `.graphql`, `.proto`, `.tf`, and more
+- In the Electron app the file opens directly in the built-in editor panel; in VS Code the file opens in the editor
+- If the agent just edited that file, the click jumps straight to the **diff tab**
+
+### 🎭 AI Persona Quick-Select (both apps)
+
+A compact **🎭 persona selector** now lives in the header toolbar alongside the Model and Mode dropdowns, letting you switch agent personality in one click without opening Settings.
+
+| Persona | Behaviour |
+|---------|-----------|
+| **auto** | Let the AI decide the most appropriate style |
+| **expert-engineer** | Precise, production-ready code with full context |
+| **pair-programmer** | Conversational, step-by-step guidance |
+| **code-reviewer** | Focused on correctness, edge cases, and style |
+| **architect** | High-level design and system thinking |
+| **debugger** | Root-cause analysis and targeted fixes |
+| **devops** | CI/CD, infra-as-code, deployment pipelines |
+| **security** | Threat modelling, secure coding, vulnerability analysis |
+
+The selector syncs with the Settings panel and persists across sessions.
+
+### 🔐 Inline Cursor-Style Permission Cards + "Allow for Session" (both apps)
+
+Permission prompts no longer interrupt the entire UI with a modal overlay.  They are now rendered as **inline cards directly in the chat stream**, exactly like Cursor's approach:
+
+```
+┌──────────────────────────────────────────────────────┐
+│ 🔐 Permission Required                               │
+│  The agent wants to run: Edit                        │
+│  File: src/auth/middleware.ts                        │
+│  [✗ Deny]  [✓ Allow for Session]  [✓ Allow Once]    │
+└──────────────────────────────────────────────────────┘
+```
+
+- **Allow Once** — approves this single request
+- **Allow for Session** — adds the tool to an in-memory approved set; all future requests for that tool in this session are auto-approved without showing the card again
+- **Deny** — blocks the action and informs the agent
+
+### 🖥️ Bash Command UI — Syntax Colors + Copy (both apps)
+
+Terminal output from the agent now looks like a real terminal:
+
+- Lines are colour-coded: **commands** (accent blue), **errors** (red), **warnings** (yellow), **success messages** (green)
+- Font size increased to `12px` with `1.5×` line-height for comfortable reading
+- A **📋 Copy** button in the tool card header lets you copy the full output to the clipboard in one click
+- Works for both live-streamed output and instant results
+
+### 🔧 Edit Tool — Fuzzy Whitespace Recovery
+
+The `Edit` tool no longer fails with `"old_string not found"` when trailing whitespace on a line differs between what the agent sent and what is on disk:
+
+1. If an exact match fails, the tool retries with **trailing whitespace stripped** from each line
+2. If a line-trimmed match is found, the replacement is applied against the **actual file content** — preserving the real indentation
+3. The result message indicates `(matched after whitespace normalization)` for transparency
+
+This eliminates the most common agent self-correction loop.
+
+### ⚡ Editor Diff Auto-Reveal + In-Chat Notification (Electron)
+
+When the agent edits a file the diff is now impossible to miss:
+
+- The **Editor panel expands automatically** (removes `panel-collapsed`) — you no longer have to manually click to reveal it
+- An **inline notification card** appears in the chat stream:
+  ```
+  ⚡ Diff opened for middleware.ts   [View Diff →]
+  ```
+  Clicking **View Diff →** focuses the editor panel on that file's diff tab
+
+### ▶ Agent Continuation — Never Stops Unexpectedly (both apps)
+
+Two complementary improvements prevent the agent from silently abandoning tasks:
+
+1. **Higher continuation budget** — the internal `maxContinuationTurns` limit is raised from 50 to **100**, giving complex multi-file tasks enough headroom to complete
+2. **Inline Continue button** — when the turn limit is reached, instead of a silent stop an **inline card** appears in chat:
+   ```
+   ⏸ Max turns reached — the agent paused before finishing.   [▶ Continue]
+   ```
+   Clicking **▶ Continue** sends a resumption prompt so the agent picks up exactly where it left off — no copy-pasting, no rephrasing
+
+### 💾 CLAUDE.md Offer as Inline Chat Card (both apps)
+
+The session-summary prompt is now a **first-class chat message** rather than a small toast banner that's easy to miss:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ 💾 Session Summary                                       │
+│  Update CLAUDE.md with a summary of this session?        │
+│  This helps the agent remember context in future sessions│
+│  [Not now]  [💾 Yes, update]                             │
+└──────────────────────────────────────────────────────────┘
+```
+
+Clicking **Yes, update** triggers the agent to write (or update) `CLAUDE.md` with decisions made, files changed, architectural patterns, and conventions for future sessions.
+
+---
+
 ## What's New in v2.8 — AI power & UX supremacy 🚀
 
 These three enhancements are present in **both** the VS Code extension and the Electron desktop app (Focus Mode is Electron-only).
