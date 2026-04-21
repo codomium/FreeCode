@@ -40,6 +40,47 @@ function findSimilarLinesHint(content, oldString, filePath) {
     return `\nClosest match(es) in ${path.basename(filePath)}:\n${matches.join('\n')}`;
 }
 
+/**
+ * Attempt to find `oldString` in `content` using trailing-whitespace-insensitive
+ * line matching (the same fallback used by the Edit tool).
+ *
+ * Returns the *actual* substring from `content` that corresponds to `oldString`
+ * (with the file's real indentation/trailing-space characters) so it can be used
+ * directly as the search string in String.prototype.replace().
+ * Returns null when no match is found.
+ *
+ * @param {string} content   - normalized (LF) file content
+ * @param {string} oldString - normalized (LF) old_string from the edit
+ * @returns {string|null}
+ */
+function tryWhitespaceNormalizedMatch(content, oldString) {
+    const normalizeWs = (s) => s.split('\n').map(l => l.trimEnd()).join('\n');
+    const normContent = normalizeWs(content);
+    const normOld = normalizeWs(oldString);
+    if (!normContent.includes(normOld)) return null;
+
+    // Locate the actual lines in the file by finding where the first significant
+    // line of old_string occurs.
+    const firstLine = oldString.split('\n').find(l => l.trim().length >= MIN_SEARCH_LINE_LENGTH);
+    if (!firstLine) return null;
+
+    const lines = content.split('\n');
+    const startIdx = lines.findIndex(l => l.trimEnd() === firstLine.trimEnd());
+    if (startIdx === -1) return null;
+
+    const oldLines = oldString.split('\n');
+    const candidateLines = lines.slice(startIdx, startIdx + oldLines.length);
+
+    // Every line must match when trailing whitespace is stripped.
+    const allMatch = oldLines.every((ol, i) =>
+        candidateLines[i] !== undefined &&
+        candidateLines[i].trimEnd() === ol.trimEnd()
+    );
+    if (!allMatch) return null;
+
+    return candidateLines.join('\n');
+}
+
 export const MultiEditTool = {
     name: 'MultiEdit',
     description: 'Apply multiple file edits in a single operation. All edits are validated first.',
@@ -122,11 +163,20 @@ export const MultiEditTool = {
             const content = fileContents.get(filePath);
             // Normalize the search string too (model may have received CRLF content)
             const normalizedOld = normalizeLineEndings(edit.old_string);
-            if (!content.includes(normalizedOld)) {
-                errors.push(`edit[${i}]: old_string not found in ${edit.file_path}${findSimilarLinesHint(content, normalizedOld, filePath)}`);
-            } else {
+            if (content.includes(normalizedOld)) {
                 // Store normalized old_string back so Phase 2 uses it consistently
                 edit._normalizedOld = normalizedOld;
+            } else {
+                // Fallback: try trailing-whitespace-insensitive line matching so that
+                // minor indentation/trailing-space differences don't block the edit.
+                const actualOld = tryWhitespaceNormalizedMatch(content, normalizedOld);
+                if (actualOld !== null) {
+                    // Store the file's actual substring (with its real trailing whitespace)
+                    // so Phase 2 can replace it precisely.
+                    edit._wsNormalizedOld = actualOld;
+                } else {
+                    errors.push(`edit[${i}]: old_string not found in ${edit.file_path}${findSimilarLinesHint(content, normalizedOld, filePath)}`);
+                }
             }
         }
 
@@ -138,7 +188,9 @@ export const MultiEditTool = {
         for (const edit of input.edits) {
             const filePath = path.resolve(edit.file_path);
             let content = fileContents.get(filePath);
-            const searchStr = edit._normalizedOld ?? normalizeLineEndings(edit.old_string);
+            // Prefer the whitespace-normalized actual substring (_wsNormalizedOld), then the
+            // exact normalized string (_normalizedOld), then fall back to re-normalizing inline.
+            const searchStr = edit._wsNormalizedOld ?? edit._normalizedOld ?? normalizeLineEndings(edit.old_string);
             const replaceStr = normalizeLineEndings(edit.new_string);
             content = content.replace(searchStr, replaceStr);
             fileContents.set(filePath, content);
