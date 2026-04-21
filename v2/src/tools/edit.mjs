@@ -64,6 +64,16 @@ export const EditTool = {
         required: ['file_path', 'old_string', 'new_string'],
     },
     validateInput(input) {
+        // Normalize common alternative parameter names the model may use
+        if (!input.file_path) {
+            input.file_path = input.filename ?? input.path ?? input.file ?? null;
+        }
+        if (input.old_string === undefined || input.old_string === null) {
+            input.old_string = input.old_content ?? input.original_string ?? input.original ?? input.search ?? null;
+        }
+        if (input.new_string === undefined || input.new_string === null) {
+            input.new_string = input.new_content ?? input.replacement_string ?? input.replacement ?? input.replace ?? null;
+        }
         const errors = [];
         if (!input.file_path) errors.push('file_path required');
         if (!input.old_string && input.old_string !== '') errors.push('old_string required');
