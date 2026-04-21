@@ -105,6 +105,45 @@ export const EditTool = {
         const newString = normalizeLineEndings(input.new_string);
 
         if (!content.includes(oldString)) {
+            // Try whitespace-normalized match as a fallback to help the agent recover
+            const normalizeWs = (s) => s.split('\n').map(l => l.trimEnd()).join('\n');
+            const normContent = normalizeWs(content);
+            const normOld = normalizeWs(oldString);
+            if (normContent.includes(normOld)) {
+                // Find the original substring that corresponds to the normalized match
+                // by locating the first significant line of old_string in the file
+                const firstLine = oldString.split('\n').find(l => l.trim().length >= MIN_SEARCH_LINE_LENGTH);
+                if (firstLine) {
+                    const lines = content.split('\n');
+                    const startIdx = lines.findIndex(l => l.trimEnd() === firstLine.trimEnd());
+                    if (startIdx !== -1) {
+                        const oldLines = oldString.split('\n');
+                        const candidateLines = lines.slice(startIdx, startIdx + oldLines.length);
+                        // Verify each line matches when trailing whitespace is stripped
+                        const allMatch = oldLines.every((ol, i) =>
+                            candidateLines[i] !== undefined &&
+                            candidateLines[i].trimEnd() === ol.trimEnd()
+                        );
+                        if (allMatch) {
+                            const actualOld = candidateLines.join('\n');
+                            // Apply the replacement using the actual (indentation-correct) old string
+                            if (input.replace_all) {
+                                const escaped = actualOld.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                content = content.replace(new RegExp(escaped, 'g'), newString);
+                            } else {
+                                content = content.replace(actualOld, newString);
+                            }
+                            try {
+                                fs.writeFileSync(filePath, content);
+                                markRead(filePath);
+                                return `File updated: ${filePath} (matched after whitespace normalization)`;
+                            } catch (e) {
+                                return `Error writing file: ${e.message}`;
+                            }
+                        }
+                    }
+                }
+            }
             return `Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.${findSimilarLinesHint(content, oldString, filePath)}`;
         }
 

@@ -326,9 +326,18 @@
         });
         md = paragraphs.join('\n');
 
-        // Restore inline code
+        // Restore inline code — linkify file paths in code tokens
         md = md.replace(/\x00INLINE(\d+)\x00/g, (_, i) => {
-            return `<code>${escapeHtml(inlineCode[+i])}</code>`;
+            const raw = inlineCode[+i];
+            if (looksLikeFilePath(raw)) {
+                return `<span class="chat-file-link" data-path="${escapeHtml(raw)}" title="Open ${escapeHtml(raw)}"><code>${escapeHtml(raw)}</code></span>`;
+            }
+            return `<code>${escapeHtml(raw)}</code>`;
+        });
+
+        // Linkify file paths in plain text (outside of code blocks)
+        md = md.replace(PLAIN_FILE_PATH_RE, (match) => {
+            return `<span class="chat-file-link" data-path="${escapeHtml(match)}" title="Open ${escapeHtml(match)}"><code>${escapeHtml(match)}</code></span>`;
         });
 
         // Restore code blocks — rendered as interactive elements
@@ -341,6 +350,20 @@
     }
 
     // ── Syntax Highlighter ────────────────────────────────────────────────────
+
+    const FILE_PATH_EXT_RE = /\.(js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|dart|scala|sh|bash|zsh|css|scss|less|html|json|yaml|yml|toml|md|txt|log|env|vue|svelte|graphql|proto|gradle|tf|ex|exs|elm|lua|r|jl|m|pl)$/i;
+
+    function looksLikeFilePath(text) {
+        if (!text || text.length > 300) return false;
+        if (/\s/.test(text)) return false;
+        const norm = text.replace(/\\/g, '/');
+        if (/^(\/|[a-zA-Z]:[\\/])/.test(text) && FILE_PATH_EXT_RE.test(norm)) return true;
+        if (/\//.test(norm) && FILE_PATH_EXT_RE.test(norm)) return true;
+        if (/^[a-zA-Z0-9_.-]+$/.test(text) && FILE_PATH_EXT_RE.test(text)) return true;
+        return false;
+    }
+
+    const PLAIN_FILE_PATH_RE = /(?<![='"#`\w/\\])((?:\.{1,2}\/|(?:[a-zA-Z0-9_-]+\/)+)[a-zA-Z0-9_./\\-]+\.(?:js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|dart|scala|sh|bash|zsh|css|scss|less|html|json|yaml|yml|toml|md|txt|log|env|vue|svelte|graphql|proto|gradle|tf|ex|exs|elm|lua|r|jl|m|pl))(?![a-zA-Z0-9_])/g;
 
     const keywords = {
         js: ['const','let','var','function','return','if','else','for','while','do','break','continue',
@@ -544,6 +567,17 @@
     // ── Event delegation for code block buttons ───────────────────────────────
     // (replaces window.copyCode / window.applyCode inline onclick handlers)
     messagesEl.addEventListener('click', (e) => {
+        // Handle inline file-path link clicks
+        const link = e.target.closest('.chat-file-link');
+        if (link) {
+            e.preventDefault();
+            const rawPath = link.dataset.path || '';
+            if (rawPath) {
+                vscode.postMessage({ type: 'openFile', path: rawPath });
+            }
+            return;
+        }
+
         const btn = e.target.closest('[data-action]');
         if (!btn) return;
         const action = btn.dataset.action;
