@@ -226,6 +226,8 @@ assert(await planPerms.check('Write', {}), 'Plan mode allows Write');
 
 const denyPerms = createPermissionChecker({ defaultMode: 'dontAsk' });
 assert(!(await denyPerms.check('Read', {})), 'DontAsk mode blocks Read');
+assert(await denyPerms.check('WebSearch', {}), 'DontAsk mode allows WebSearch');
+assert(await denyPerms.check('WebFetch', { url: 'https://example.com' }), 'DontAsk mode allows WebFetch');
 
 const autoPerms = createPermissionChecker({ defaultMode: 'auto' });
 assert(await autoPerms.check('Bash', {}), 'Auto mode allows');
