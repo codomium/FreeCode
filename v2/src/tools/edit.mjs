@@ -15,6 +15,14 @@ import { hasBeenRead, markRead } from './read.mjs';
 const MIN_SEARCH_LINE_LENGTH = 4;
 
 /**
+ * Normalize line endings to LF so that CRLF files (Windows) can be matched
+ * against LF-only search strings supplied by the model.
+ */
+function normalizeLineEndings(str) {
+    return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+/**
  * When old_string is not found verbatim, find lines in the file that contain
  * the first non-empty trimmed line of old_string. Returns a formatted hint
  * string (or '' when nothing useful is found) to help the model self-correct.
@@ -77,28 +85,32 @@ export const EditTool = {
 
         let content;
         try {
-            content = fs.readFileSync(filePath, 'utf-8');
+            // Normalize CRLF → LF so Windows files match LF-only search strings from the model
+            content = normalizeLineEndings(fs.readFileSync(filePath, 'utf-8'));
         } catch (e) {
             return `Error: ${e.message}`;
         }
 
-        if (!content.includes(input.old_string)) {
-            return `Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.${findSimilarLinesHint(content, input.old_string, filePath)}`;
+        const oldString = normalizeLineEndings(input.old_string);
+        const newString = normalizeLineEndings(input.new_string);
+
+        if (!content.includes(oldString)) {
+            return `Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.${findSimilarLinesHint(content, oldString, filePath)}`;
         }
 
         if (input.replace_all) {
             // Replace all occurrences
-            const escaped = input.old_string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            content = content.replace(new RegExp(escaped, 'g'), input.new_string);
+            const escaped = oldString.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            content = content.replace(new RegExp(escaped, 'g'), newString);
         } else {
             // Check uniqueness: old_string must appear exactly once
-            const firstIdx = content.indexOf(input.old_string);
-            const secondIdx = content.indexOf(input.old_string, firstIdx + 1);
+            const firstIdx = content.indexOf(oldString);
+            const secondIdx = content.indexOf(oldString, firstIdx + 1);
             if (secondIdx !== -1) {
-                const count = content.split(input.old_string).length - 1;
+                const count = content.split(oldString).length - 1;
                 return `Error: old_string is not unique in the file (found ${count} occurrences). Provide more context to make it unique, or use replace_all to replace all occurrences.`;
             }
-            content = content.replace(input.old_string, input.new_string);
+            content = content.replace(oldString, newString);
         }
 
         try {

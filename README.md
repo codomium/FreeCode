@@ -17,6 +17,25 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.9 — permission improvements 🔐
+
+### ✏️ Edit Allowed in Plan Mode
+
+`Edit`, `Write`, `Bash`, and all other tools are now fully allowed when the agent runs in **plan mode**. Previously plan mode used a narrow read-only allowlist (`Read`, `Glob`, `Grep`, `LS`, `TodoWrite`) that prevented the agent from performing actions the user explicitly requested while planning. The mode now returns `true` for every tool, matching the intent of letting the agent plan and prototype freely.
+
+### 🌐 Web Search Allowed in Every Permission Mode
+
+`WebSearch` and `WebFetch` are now **unconditionally allowed in all permission modes**, including `dontAsk` (which previously blocked every tool call).
+
+| What changed | Detail |
+|---|---|
+| `checker.mjs` early-return | `WebSearch` / `WebFetch` bypass the mode switch entirely — no mode can block them |
+| `SAFE_TOOLS` in `prompt.mjs` | Both tools added to the safe set so `default` mode never shows an interactive permission prompt |
+
+This means you can always ask the agent to look something up on the web, regardless of which permission mode the project is in.
+
+---
+
 ## What's New in v2.8 — AI power & UX supremacy 🚀
 
 These three enhancements are present in **both** the VS Code extension and the Electron desktop app (Focus Mode is Electron-only).
@@ -173,7 +192,7 @@ Additional guardrails prevent the agent from silently claiming success, retrying
 - **`default` mode hung indefinitely** — the Allow/Deny permission card appeared in the UI but the agent never received the answer because `resolvePermission` was missing from the bridge. The agent now correctly waits for your approval and resumes or is blocked based on your choice.
 - **`plan` mode blocked `TodoWrite`** — `TodoWrite` is a read-only task-tracking tool and is now correctly allowed in plan mode alongside `Read`, `Glob`, `Grep`, and `LS`.
 - **All modes: informative denial messages** — instead of a bare `"Permission denied"` result, the agent now receives a mode-specific explanation:
-  - Plan mode → *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+  - dontAsk mode → *"Edit is not allowed in dontAsk mode."*
   - Other blocked modes → *"Permission denied for Edit."*
 
 ### 🗂️ Session Context Leak — Fixed

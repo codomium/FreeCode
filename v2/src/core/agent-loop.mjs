@@ -239,9 +239,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 if (!allowed) {
                     yield { type: 'hookPermissionResult', tool: block.name, allowed: false };
                     const mode = permissions.mode;
-                    const modeReason = mode === 'plan'
-                        ? `${block.name} is not allowed in plan mode (read-only). Switch to a different mode to make changes.`
-                        : mode === 'dontAsk'
+                    const modeReason = mode === 'dontAsk'
                         ? `${block.name} is not allowed in dontAsk mode.`
                         : `Permission denied for ${block.name}.`;
                     toolResults.push({

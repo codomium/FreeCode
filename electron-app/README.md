@@ -8,6 +8,25 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New in v2.9 — permission improvements 🔐
+
+### ✏️ Edit Allowed in Plan Mode
+
+`Edit`, `Write`, `Bash`, and all other tools are now fully allowed when the agent runs in **plan mode**. Previously plan mode used a narrow read-only allowlist that blocked edits even when the user explicitly asked for them. The mode now allows every tool so the agent can prototype and apply changes freely while planning.
+
+### 🌐 Web Search Allowed in Every Permission Mode
+
+`WebSearch` and `WebFetch` are now **always allowed in every permission mode**, including `dontAsk` (which previously blocked them along with everything else).
+
+| What changed | Detail |
+|---|---|
+| Bypass guard in `checker.mjs` | `WebSearch` / `WebFetch` skip the mode switch — no mode can block them |
+| `SAFE_TOOLS` in `prompt.mjs` | Both tools added so `default` mode never shows an interactive permission prompt for web lookups |
+
+You can now ask the agent to search the web regardless of which permission mode is active.
+
+---
+
 ## What's New in v2.5 — session memory & permissions 🧠🔧
 
 ### 🎯 Session Goal Memory
@@ -49,7 +68,7 @@ Extra guardrails cap retries at 3 attempts per fix, detect and break infinite lo
 - **`default` mode hung indefinitely** — the Allow/Deny card appeared but the agent never received the answer because `resolvePermission` was missing from the bridge. It now correctly waits for and receives your approval or denial.
 - **`plan` mode blocked `TodoWrite`** — `TodoWrite` is read-only task tracking and is now correctly allowed in plan mode.
 - **Informative denial messages** — instead of `"Permission denied"` the agent receives a mode-aware explanation, e.g.:  
-  *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+  *"Edit is not allowed in dontAsk mode."*
 
 ### 🗂️ Session Context Leak — Fixed
 
