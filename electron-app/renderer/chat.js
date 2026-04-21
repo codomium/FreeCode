@@ -1601,8 +1601,12 @@
                     // long-running commands don't cause excessive memory use.
                     const text = b.pre.textContent;
                     if (text.length > MAX_BASH_OUTPUT_LENGTH) {
-                        // Trim excess by removing leading child nodes
-                        while (b.pre.textContent.length > RETAINED_BASH_OUTPUT_LENGTH && b.pre.firstChild) {
+                        // Remove leading child nodes until we're within the retention limit.
+                        // Calculate how many characters to remove first.
+                        const excess = text.length - RETAINED_BASH_OUTPUT_LENGTH;
+                        let removed = 0;
+                        while (removed < excess && b.pre.firstChild) {
+                            removed += (b.pre.firstChild.textContent || '').length;
                             b.pre.removeChild(b.pre.firstChild);
                         }
                     }
@@ -4328,7 +4332,7 @@
     }
     if (settingPersona) {
         settingPersona.addEventListener('change', () => {
-            const val = settingPersona.value || 'expert-engineer';
+            const val = settingPersona.value || 'auto';
             vscode.postMessage({ type: 'saveSettings', key: 'systemPromptPreset', value: val });
             // Sync quick persona selector in header
             if (personaQuickSelect) personaQuickSelect.value = val;
@@ -4647,8 +4651,8 @@
         pendingPermReqId = msg.reqId;
         const toolLabel = msg.tool || 'unknown tool';
 
-        // If this tool was already session-approved, auto-allow without showing UI
-        if (sessionAllowedTools.has(toolLabel)) {
+        // If this tool was already session-approved (and tool name is known), auto-allow without showing UI
+        if (msg.tool && sessionAllowedTools.has(msg.tool)) {
             if (pendingPermReqId) {
                 vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: true });
             }
@@ -4700,7 +4704,10 @@
             closePermissionCard();
         });
         card.querySelector('.perm-allow-session-btn').addEventListener('click', () => {
-            sessionAllowedTools.add(toolLabel);
+            // Only store to session-allowed if we have a valid tool name
+            if (msg.tool) {
+                sessionAllowedTools.add(msg.tool);
+            }
             if (pendingPermReqId) {
                 vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: true });
             }

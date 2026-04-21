@@ -454,7 +454,7 @@ class ClaudeCodeViewProvider {
                         const uri = vscode.Uri.file(filePath);
                         await vscode.commands.executeCommand('vscode.open', uri);
                     } catch (err) {
-                        // File may not exist or path may be invalid — ignore silently
+                        vscode.window.showWarningMessage(`Could not open file: ${msg.path}`);
                     }
                 }
                 break;

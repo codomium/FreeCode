@@ -93,7 +93,7 @@ export const EditTool = {
                 const firstLine = input.old_string.split('\n').find(l => l.trim().length >= MIN_SEARCH_LINE_LENGTH);
                 if (firstLine) {
                     const lines = content.split('\n');
-                    const startIdx = lines.findIndex(l => l.trimEnd() === firstLine.trimEnd() || l.includes(firstLine.trim()));
+                    const startIdx = lines.findIndex(l => l.trimEnd() === firstLine.trimEnd());
                     if (startIdx !== -1) {
                         const oldLines = input.old_string.split('\n');
                         const candidateLines = lines.slice(startIdx, startIdx + oldLines.length);
