@@ -7,6 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { hasBeenRead, markRead } from './read.mjs';
 
 /** Minimum length for a trimmed line to be used as a similarity search needle */
 const MIN_SEARCH_LINE_LENGTH = 4;
@@ -102,6 +103,11 @@ export const MultiEditTool = {
             const filePath = path.resolve(edit.file_path);
 
             if (!fileContents.has(filePath)) {
+                // Require file was read first (same contract as the Edit tool)
+                if (!hasBeenRead(filePath)) {
+                    errors.push(`edit[${i}]: You must Read ${filePath} before editing it. Use the Read tool first.`);
+                    continue;
+                }
                 try {
                     const raw = fs.readFileSync(filePath, 'utf-8');
                     rawContents.set(filePath, raw);
@@ -142,6 +148,8 @@ export const MultiEditTool = {
         const applied = [];
         for (const [filePath, content] of fileContents) {
             fs.writeFileSync(filePath, content);
+            // Keep the file tracked as read so subsequent Edit calls work without re-reading
+            markRead(filePath);
             applied.push(filePath);
         }
 
