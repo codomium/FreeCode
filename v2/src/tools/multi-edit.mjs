@@ -7,37 +7,13 @@
 
 import fs from 'fs';
 import path from 'path';
-
-/** Minimum length for a trimmed line to be used as a similarity search needle */
-const MIN_SEARCH_LINE_LENGTH = 4;
-
-/**
- * Normalize line endings to LF so that CRLF files (Windows) can be matched
- * against LF-only search strings supplied by the model.
- */
-function normalizeLineEndings(str) {
-    return str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-}
-
-/**
- * When old_string is not found verbatim, find lines in the file that contain
- * the first non-empty trimmed line of old_string. Returns a formatted hint
- * string (or '') to help the model self-correct.
- */
-function findSimilarLinesHint(content, oldString, filePath) {
-    const needle = (oldString || '').split('\n').map(l => l.trim()).find(l => l.length >= MIN_SEARCH_LINE_LENGTH);
-    if (!needle) return '';
-    const lines = content.split('\n');
-    const matches = [];
-    for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes(needle)) {
-            matches.push(`  line ${i + 1}: ${lines[i]}`);
-            if (matches.length >= 5) break;
-        }
-    }
-    if (matches.length === 0) return '';
-    return `\nClosest match(es) in ${path.basename(filePath)}:\n${matches.join('\n')}`;
-}
+import { hasBeenRead, markRead } from './read.mjs';
+import {
+    normalizeContent,
+    normalizeLineEndings,
+    findSimilarLinesHint,
+    tryWhitespaceNormalizedMatch,
+} from './edit-utils.mjs';
 
 export const MultiEditTool = {
     name: 'MultiEdit',
@@ -102,11 +78,16 @@ export const MultiEditTool = {
             const filePath = path.resolve(edit.file_path);
 
             if (!fileContents.has(filePath)) {
+                // Require file was read first (same contract as the Edit tool)
+                if (!hasBeenRead(filePath)) {
+                    errors.push(`edit[${i}]: You must Read ${filePath} before editing it. Use the Read tool first.`);
+                    continue;
+                }
                 try {
                     const raw = fs.readFileSync(filePath, 'utf-8');
                     rawContents.set(filePath, raw);
-                    // Normalize CRLF → LF so Windows files match LF-only search strings
-                    fileContents.set(filePath, normalizeLineEndings(raw));
+                    // Strip BOM and normalize CRLF → LF so Windows files match LF-only search strings
+                    fileContents.set(filePath, normalizeContent(raw));
                 } catch (err) {
                     errors.push(`edit[${i}]: cannot read ${filePath}: ${err.message}`);
                     continue;
@@ -116,11 +97,20 @@ export const MultiEditTool = {
             const content = fileContents.get(filePath);
             // Normalize the search string too (model may have received CRLF content)
             const normalizedOld = normalizeLineEndings(edit.old_string);
-            if (!content.includes(normalizedOld)) {
-                errors.push(`edit[${i}]: old_string not found in ${edit.file_path}${findSimilarLinesHint(content, normalizedOld, filePath)}`);
-            } else {
+            if (content.includes(normalizedOld)) {
                 // Store normalized old_string back so Phase 2 uses it consistently
                 edit._normalizedOld = normalizedOld;
+            } else {
+                // Fallback: try trailing-whitespace-insensitive line matching so that
+                // minor indentation/trailing-space differences don't block the edit.
+                const actualOld = tryWhitespaceNormalizedMatch(content, normalizedOld);
+                if (actualOld !== null) {
+                    // Store the file's actual substring (with its real trailing whitespace)
+                    // so Phase 2 can replace it precisely.
+                    edit._wsNormalizedOld = actualOld;
+                } else {
+                    errors.push(`edit[${i}]: old_string not found in ${edit.file_path}${findSimilarLinesHint(content, normalizedOld, filePath)}`);
+                }
             }
         }
 
@@ -132,7 +122,9 @@ export const MultiEditTool = {
         for (const edit of input.edits) {
             const filePath = path.resolve(edit.file_path);
             let content = fileContents.get(filePath);
-            const searchStr = edit._normalizedOld ?? normalizeLineEndings(edit.old_string);
+            // Prefer the whitespace-normalized actual substring (_wsNormalizedOld), then the
+            // exact normalized string (_normalizedOld), then fall back to re-normalizing inline.
+            const searchStr = edit._wsNormalizedOld ?? edit._normalizedOld ?? normalizeLineEndings(edit.old_string);
             const replaceStr = normalizeLineEndings(edit.new_string);
             content = content.replace(searchStr, replaceStr);
             fileContents.set(filePath, content);
@@ -142,6 +134,8 @@ export const MultiEditTool = {
         const applied = [];
         for (const [filePath, content] of fileContents) {
             fs.writeFileSync(filePath, content);
+            // Keep the file tracked as read so subsequent Edit calls work without re-reading
+            markRead(filePath);
             applied.push(filePath);
         }
 

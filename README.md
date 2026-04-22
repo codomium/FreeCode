@@ -17,9 +17,169 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
-## What's New in v2.9 — infrastructure-level loop detection 🛡️
+## What's New in v3.1 — Edit & Bash validation recovery 🛡️
 
-These changes land in the **agent loop** (`v2/src/core/`) and are shared automatically by the VS Code extension, the Electron app, and the CLI.
+### 🔧 Edit Tool — Parameter Name Normalization
+
+The `Edit` tool now accepts the alternative parameter names that models sometimes use instead of the canonical ones, mirroring the behaviour already present in `Bash` and `MultiEdit`:
+
+| Canonical | Accepted alternatives |
+|---|---|
+| `file_path` | `filename`, `path`, `file` |
+| `old_string` | `old_content`, `original_string`, `original`, `search` |
+| `new_string` | `new_content`, `replacement_string`, `replacement`, `replace` |
+
+Previously, using any of these alternates produced `Validation error: file_path required, old_string required` and the edit was silently dropped.
+
+### 🔧 Bash Tool — Additional Parameter Name Aliases
+
+Three more aliases recognised for the `command` parameter: `bash`, `shell`, `code`. These join the existing set (`cmd`, `bash_command`, `shell_command`, `script`, `run`, `execute`).
+
+### ♻️ Clearer Validation Error Messages
+
+All tool validation errors now end with **"Please correct the parameters and retry the tool call."** This makes it unambiguous to the model that it should fix and resubmit the call rather than responding with an explanation and stopping.
+
+### 🔄 Agent Loop — Auto-Nudge on All-Validation-Error Batches
+
+When every tool call in a single response batch fails with a validation error, the agent loop now appends a system text block to the tool-result message:
+
+> *"All tool call(s) above failed input validation. Review the required parameter names for each tool and retry the tool call(s) immediately. Do not stop or summarise — keep going."*
+
+This prevents the model from giving up with a summary message when it should be retrying the failed calls.
+
+---
+
+## What's New in v3.0 — MultiEdit & Edit reliability on Windows 🪟🔧
+
+### 🔁 `MultiEdit` "old_string not found" Fixed in All Modes
+
+`MultiEdit` would always fail validation with *"old_string not found"* on Windows projects, even when the `Edit` tool succeeded on the same file.  Three root causes were fixed:
+
+| Root cause | Fix |
+|---|---|
+| **CRLF leak in `Read` output** | The `Read` tool now normalises `\r\n` → `\n` before returning content to the model. The model was building `old_string` values containing `\r` from Windows files, which never matched even though `MultiEdit` also normalised internally. |
+| **`MultiEdit` skipped the read-first gate** | `Edit` has always required the target file to be `Read` before it can be edited, forcing the model to work from real file content rather than memory. `MultiEdit` had no such check. It now enforces the same contract — if the file wasn't read first, the agent receives an explicit `"You must Read … before editing it. Use the Read tool first."` message. |
+| **`MultiEdit` didn't call `markRead` after writing** | After a successful `MultiEdit`, any follow-up `Edit` call on the same file would fail with *"You must Read first"* because the write was not tracked. `MultiEdit` now calls `markRead` for every file it writes, keeping the read-tracking state consistent for the rest of the session. |
+
+Together these changes make `MultiEdit` behave reliably in **every permission mode** — `default`, `acceptEdits`, `dontAsk`, and `plan` — and on both Windows (CRLF) and Unix (LF) projects.
+
+---
+
+## What's New in v2.9 — UX polish, reliability & permission improvements 🛡️✨🔐
+
+### 🔗 Clickable File Paths in Plain Chat Text (both apps)
+
+File paths mentioned in plain prose — not just in backtick code spans — are now automatically detected and rendered as **clickable links**.
+
+- Patterns like `Found in lib/core/utils/content_validation.dart` become one-click navigation
+- Extended file-extension coverage: `.dart`, `.vue`, `.svelte`, `.graphql`, `.proto`, `.tf`, and more
+- In the Electron app the file opens directly in the built-in editor panel; in VS Code the file opens in the editor
+- If the agent just edited that file, the click jumps straight to the **diff tab**
+
+### 🎭 AI Persona Quick-Select (both apps)
+
+A compact **🎭 persona selector** now lives in the header toolbar alongside the Model and Mode dropdowns, letting you switch agent personality in one click without opening Settings.
+
+| Persona | Behaviour |
+|---------|-----------|
+| **auto** | Let the AI decide the most appropriate style |
+| **expert-engineer** | Precise, production-ready code with full context |
+| **pair-programmer** | Conversational, step-by-step guidance |
+| **code-reviewer** | Focused on correctness, edge cases, and style |
+| **architect** | High-level design and system thinking |
+| **debugger** | Root-cause analysis and targeted fixes |
+| **devops** | CI/CD, infra-as-code, deployment pipelines |
+| **security** | Threat modelling, secure coding, vulnerability analysis |
+
+The selector syncs with the Settings panel and persists across sessions.
+
+### 🔐 Inline Cursor-Style Permission Cards + "Allow for Session" (both apps)
+
+Permission prompts no longer interrupt the entire UI with a modal overlay.  They are now rendered as **inline cards directly in the chat stream**, exactly like Cursor's approach:
+
+```
+┌──────────────────────────────────────────────────────┐
+│ 🔐 Permission Required                               │
+│  The agent wants to run: Edit                        │
+│  File: src/auth/middleware.ts                        │
+│  [✗ Deny]  [✓ Allow for Session]  [✓ Allow Once]    │
+└──────────────────────────────────────────────────────┘
+```
+
+- **Allow Once** — approves this single request
+- **Allow for Session** — adds the tool to an in-memory approved set; all future requests for that tool in this session are auto-approved without showing the card again
+- **Deny** — blocks the action and informs the agent
+
+### 🖥️ Bash Command UI — Syntax Colors + Copy (both apps)
+
+Terminal output from the agent now looks like a real terminal:
+
+- Lines are colour-coded: **commands** (accent blue), **errors** (red), **warnings** (yellow), **success messages** (green)
+- Font size increased to `12px` with `1.5×` line-height for comfortable reading
+- A **📋 Copy** button in the tool card header lets you copy the full output to the clipboard in one click
+- Works for both live-streamed output and instant results
+
+### 🔧 Edit Tool — Fuzzy Whitespace Recovery
+
+The `Edit` tool no longer fails with `"old_string not found"` when trailing whitespace on a line differs between what the agent sent and what is on disk:
+
+1. If an exact match fails, the tool retries with **trailing whitespace stripped** from each line
+2. If a line-trimmed match is found, the replacement is applied against the **actual file content** — preserving the real indentation
+3. The result message indicates `(matched after whitespace normalization)` for transparency
+
+This eliminates the most common agent self-correction loop.
+
+### ⚡ Editor Diff Auto-Reveal + In-Chat Notification (Electron)
+
+When the agent edits a file the diff is now impossible to miss:
+
+- The **Editor panel expands automatically** (removes `panel-collapsed`) — you no longer have to manually click to reveal it
+- An **inline notification card** appears in the chat stream:
+  ```
+  ⚡ Diff opened for middleware.ts   [View Diff →]
+  ```
+  Clicking **View Diff →** focuses the editor panel on that file's diff tab
+
+### ▶ Agent Continuation — Never Stops Unexpectedly (both apps)
+
+Two complementary improvements prevent the agent from silently abandoning tasks:
+
+1. **Higher continuation budget** — the internal `maxContinuationTurns` limit is raised from 50 to **100**, giving complex multi-file tasks enough headroom to complete
+2. **Inline Continue button** — when the turn limit is reached, instead of a silent stop an **inline card** appears in chat:
+   ```
+   ⏸ Max turns reached — the agent paused before finishing.   [▶ Continue]
+   ```
+   Clicking **▶ Continue** sends a resumption prompt so the agent picks up exactly where it left off — no copy-pasting, no rephrasing
+
+### 💾 CLAUDE.md Offer as Inline Chat Card (both apps)
+
+The session-summary prompt is now a **first-class chat message** rather than a small toast banner that's easy to miss:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ 💾 Session Summary                                       │
+│  Update CLAUDE.md with a summary of this session?        │
+│  This helps the agent remember context in future sessions│
+│  [Not now]  [💾 Yes, update]                             │
+└──────────────────────────────────────────────────────────┘
+```
+
+Clicking **Yes, update** triggers the agent to write (or update) `CLAUDE.md` with decisions made, files changed, architectural patterns, and conventions for future sessions.
+
+### ✏️ Edit Allowed in Plan Mode
+
+`Edit`, `Write`, `Bash`, and all other tools are now fully allowed when the agent runs in **plan mode**. Previously plan mode used a narrow read-only allowlist (`Read`, `Glob`, `Grep`, `LS`, `TodoWrite`) that prevented the agent from performing actions the user explicitly requested while planning. The mode now returns `true` for every tool, matching the intent of letting the agent plan and prototype freely.
+
+### 🌐 Web Search Allowed in Every Permission Mode
+
+`WebSearch` and `WebFetch` are now **unconditionally allowed in all permission modes**, including `dontAsk` (which previously blocked every tool call).
+
+| What changed | Detail |
+|---|---|
+| `checker.mjs` early-return | `WebSearch` / `WebFetch` bypass the mode switch entirely — no mode can block them |
+| `SAFE_TOOLS` in `prompt.mjs` | Both tools added to the safe set so `default` mode never shows an interactive permission prompt |
+
+This means you can always ask the agent to look something up on the web, regardless of which permission mode the project is in.
 
 ### 🔁 StuckDetector — three stuck-loop conditions
 
@@ -238,7 +398,7 @@ Additional guardrails prevent the agent from silently claiming success, retrying
 - **`default` mode hung indefinitely** — the Allow/Deny permission card appeared in the UI but the agent never received the answer because `resolvePermission` was missing from the bridge. The agent now correctly waits for your approval and resumes or is blocked based on your choice.
 - **`plan` mode blocked `TodoWrite`** — `TodoWrite` is a read-only task-tracking tool and is now correctly allowed in plan mode alongside `Read`, `Glob`, `Grep`, and `LS`.
 - **All modes: informative denial messages** — instead of a bare `"Permission denied"` result, the agent now receives a mode-specific explanation:
-  - Plan mode → *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+  - dontAsk mode → *"Edit is not allowed in dontAsk mode."*
   - Other blocked modes → *"Permission denied for Edit."*
 
 ### 🗂️ Session Context Leak — Fixed

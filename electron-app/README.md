@@ -8,6 +8,73 @@ Built with [Electron](https://www.electronjs.org/), it reuses the same agent loo
 
 ---
 
+## What's New in v3.1 — Edit & Bash validation recovery 🛡️
+
+### 🔧 Edit Tool — Parameter Name Normalization
+
+The `Edit` tool now accepts the alternative parameter names that models sometimes use instead of the canonical ones, mirroring the behaviour already present in `Bash` and `MultiEdit`:
+
+| Canonical | Accepted alternatives |
+|---|---|
+| `file_path` | `filename`, `path`, `file` |
+| `old_string` | `old_content`, `original_string`, `original`, `search` |
+| `new_string` | `new_content`, `replacement_string`, `replacement`, `replace` |
+
+Previously, using any of these alternates produced `Validation error: file_path required, old_string required` and the edit was silently dropped.
+
+### 🔧 Bash Tool — Additional Parameter Name Aliases
+
+Three more aliases recognised for the `command` parameter: `bash`, `shell`, `code`. These join the existing set (`cmd`, `bash_command`, `shell_command`, `script`, `run`, `execute`).
+
+### ♻️ Clearer Validation Error Messages
+
+All tool validation errors now end with **"Please correct the parameters and retry the tool call."** This makes it unambiguous to the model that it should fix and resubmit the call rather than responding with an explanation and stopping.
+
+### 🔄 Agent Loop — Auto-Nudge on All-Validation-Error Batches
+
+When every tool call in a single response batch fails with a validation error, the agent loop now appends a system text block to the tool-result message:
+
+> *"All tool call(s) above failed input validation. Review the required parameter names for each tool and retry the tool call(s) immediately. Do not stop or summarise — keep going."*
+
+This prevents the model from giving up with a summary message when it should be retrying the failed calls.
+
+---
+
+## What's New in v3.0 — MultiEdit & Edit reliability on Windows 🪟🔧
+
+### 🔁 `MultiEdit` "old_string not found" Fixed in All Modes
+
+`MultiEdit` would always fail validation with *"old_string not found"* on Windows projects, even when the `Edit` tool succeeded on the same file.  Three root causes were fixed:
+
+| Root cause | Fix |
+|---|---|
+| **CRLF leak in `Read` output** | The `Read` tool now normalises `\r\n` → `\n` before returning content to the model. The model was building `old_string` values containing `\r` from Windows files, which never matched even when `MultiEdit` also normalised internally. |
+| **`MultiEdit` skipped the read-first gate** | `Edit` has always required the target file to be `Read` before it can be edited, forcing the model to work from real file content rather than memory. `MultiEdit` had no such check. It now enforces the same contract — if the file wasn't read first, the agent receives an explicit `"You must Read … before editing it. Use the Read tool first."` message. |
+| **`MultiEdit` didn't call `markRead` after writing** | After a successful `MultiEdit`, any follow-up `Edit` call on the same file would fail with *"You must Read first"* because the write was not tracked. `MultiEdit` now calls `markRead` for every file it writes, keeping the read-tracking state consistent for the rest of the session. |
+
+Together these changes make `MultiEdit` behave reliably in **every permission mode** — `default`, `acceptEdits`, `dontAsk`, and `plan` — and on both Windows (CRLF) and Unix (LF) projects.
+
+---
+
+## What's New in v2.9 — permission improvements 🔐
+
+### ✏️ Edit Allowed in Plan Mode
+
+`Edit`, `Write`, `Bash`, and all other tools are now fully allowed when the agent runs in **plan mode**. Previously plan mode used a narrow read-only allowlist that blocked edits even when the user explicitly asked for them. The mode now allows every tool so the agent can prototype and apply changes freely while planning.
+
+### 🌐 Web Search Allowed in Every Permission Mode
+
+`WebSearch` and `WebFetch` are now **always allowed in every permission mode**, including `dontAsk` (which previously blocked them along with everything else).
+
+| What changed | Detail |
+|---|---|
+| Bypass guard in `checker.mjs` | `WebSearch` / `WebFetch` skip the mode switch — no mode can block them |
+| `SAFE_TOOLS` in `prompt.mjs` | Both tools added so `default` mode never shows an interactive permission prompt for web lookups |
+
+You can now ask the agent to search the web regardless of which permission mode is active.
+
+---
+
 ## What's New in v2.5 — session memory & permissions 🧠🔧
 
 ### 🎯 Session Goal Memory
@@ -49,7 +116,7 @@ Extra guardrails cap retries at 3 attempts per fix, detect and break infinite lo
 - **`default` mode hung indefinitely** — the Allow/Deny card appeared but the agent never received the answer because `resolvePermission` was missing from the bridge. It now correctly waits for and receives your approval or denial.
 - **`plan` mode blocked `TodoWrite`** — `TodoWrite` is read-only task tracking and is now correctly allowed in plan mode.
 - **Informative denial messages** — instead of `"Permission denied"` the agent receives a mode-aware explanation, e.g.:  
-  *"Edit is not allowed in plan mode (read-only). Switch to a different mode to make changes."*
+  *"Edit is not allowed in dontAsk mode."*
 
 ### 🗂️ Session Context Leak — Fixed
 

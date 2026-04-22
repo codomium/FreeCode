@@ -35,6 +35,11 @@ export function createPermissionChecker(config = {}) {
                 }
             }
 
+            // WebSearch and WebFetch are always allowed in every mode, including dontAsk.
+            // SAFE_TOOLS in prompt.mjs covers default mode (no prompt); this guard covers
+            // dontAsk mode which would otherwise block all tools unconditionally.
+            if (['WebSearch', 'WebFetch'].includes(toolName)) return true;
+
             switch (mode) {
                 case 'bypassPermissions': return true;
                 case 'acceptEdits':
@@ -42,7 +47,7 @@ export function createPermissionChecker(config = {}) {
                     return true;
                 case 'auto': return true; // AI decides
                 case 'dontAsk': return false; // deny everything not pre-approved
-                case 'plan': return ['Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'ToolSearch', 'TodoWrite'].includes(toolName);
+                case 'plan': return true; // All tools are allowed in plan mode
                 case 'default':
                 default:
                     // In default mode, safe read-only tools pass through without asking

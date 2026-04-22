@@ -10,37 +10,12 @@
 import fs from 'fs';
 import path from 'path';
 import { hasBeenRead, markRead } from './read.mjs';
-
-/** Minimum length for a trimmed line to be used as a similarity search needle */
-const MIN_SEARCH_LINE_LENGTH = 4;
-
-/**
- * When old_string is not found verbatim, find lines in the file that contain
- * the first non-empty trimmed line of old_string. Returns a formatted hint
- * string (or '' when nothing useful is found) to help the model self-correct.
- *
- * @param {string} content - full file content
- * @param {string} oldString - the old_string that was not found
- * @param {string} filePath - absolute file path (for display only)
- * @returns {string}
- */
-function findSimilarLinesHint(content, oldString, filePath) {
-    // Find the first non-empty, non-whitespace line of old_string as the needle
-    const needle = (oldString || '').split('\n').map(l => l.trim()).find(l => l.length >= MIN_SEARCH_LINE_LENGTH);
-    if (!needle) return '';
-
-    const lines = content.split('\n');
-    const matches = [];
-    for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes(needle)) {
-            matches.push(`  line ${i + 1}: ${lines[i]}`);
-            if (matches.length >= 5) break;
-        }
-    }
-
-    if (matches.length === 0) return '';
-    return `\nClosest match(es) in ${path.basename(filePath)}:\n${matches.join('\n')}`;
-}
+import {
+    normalizeContent,
+    normalizeLineEndings,
+    findSimilarLinesHint,
+    tryWhitespaceNormalizedMatch,
+} from './edit-utils.mjs';
 
 export const EditTool = {
     name: 'Edit',
@@ -56,6 +31,16 @@ export const EditTool = {
         required: ['file_path', 'old_string', 'new_string'],
     },
     validateInput(input) {
+        // Normalize common alternative parameter names the model may use
+        if (!input.file_path) {
+            input.file_path = input.filename ?? input.path ?? input.file ?? null;
+        }
+        if (input.old_string === undefined || input.old_string === null) {
+            input.old_string = input.old_content ?? input.original_string ?? input.original ?? input.search ?? null;
+        }
+        if (input.new_string === undefined || input.new_string === null) {
+            input.new_string = input.new_content ?? input.replacement_string ?? input.replacement ?? input.replace ?? null;
+        }
         const errors = [];
         if (!input.file_path) errors.push('file_path required');
         if (!input.old_string && input.old_string !== '') errors.push('old_string required');
@@ -77,28 +62,51 @@ export const EditTool = {
 
         let content;
         try {
-            content = fs.readFileSync(filePath, 'utf-8');
+            // Normalize BOM + CRLF → LF so Windows files match LF-only search strings from the model
+            content = normalizeContent(fs.readFileSync(filePath, 'utf-8'));
         } catch (e) {
             return `Error: ${e.message}`;
         }
 
-        if (!content.includes(input.old_string)) {
-            return `Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.${findSimilarLinesHint(content, input.old_string, filePath)}`;
+        const oldString = normalizeLineEndings(input.old_string);
+        const newString = normalizeLineEndings(input.new_string);
+
+        if (!content.includes(oldString)) {
+            // Fallback: trailing-whitespace-insensitive line matching.
+            // tryWhitespaceNormalizedMatch uses indexOf on the trimmed-end content so it
+            // correctly handles old_string values that begin with empty lines.
+            const actualOld = tryWhitespaceNormalizedMatch(content, oldString);
+            if (actualOld !== null) {
+                if (input.replace_all) {
+                    const escaped = actualOld.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    content = content.replace(new RegExp(escaped, 'g'), newString);
+                } else {
+                    content = content.replace(actualOld, newString);
+                }
+                try {
+                    fs.writeFileSync(filePath, content);
+                    markRead(filePath);
+                    return `File updated: ${filePath} (matched after whitespace normalization)`;
+                } catch (e) {
+                    return `Error writing file: ${e.message}`;
+                }
+            }
+            return `Error: old_string not found in file. Make sure the string matches exactly, including whitespace and indentation.${findSimilarLinesHint(content, oldString, filePath)}`;
         }
 
         if (input.replace_all) {
             // Replace all occurrences
-            const escaped = input.old_string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            content = content.replace(new RegExp(escaped, 'g'), input.new_string);
+            const escaped = oldString.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            content = content.replace(new RegExp(escaped, 'g'), newString);
         } else {
             // Check uniqueness: old_string must appear exactly once
-            const firstIdx = content.indexOf(input.old_string);
-            const secondIdx = content.indexOf(input.old_string, firstIdx + 1);
+            const firstIdx = content.indexOf(oldString);
+            const secondIdx = content.indexOf(oldString, firstIdx + 1);
             if (secondIdx !== -1) {
-                const count = content.split(input.old_string).length - 1;
+                const count = content.split(oldString).length - 1;
                 return `Error: old_string is not unique in the file (found ${count} occurrences). Provide more context to make it unique, or use replace_all to replace all occurrences.`;
             }
-            content = content.replace(input.old_string, input.new_string);
+            content = content.replace(oldString, newString);
         }
 
         try {

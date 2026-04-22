@@ -1,5 +1,17 @@
 # open-claude-code v2 — Technical Guide
 
+## What's New in v2.9 — permission improvements 🔐
+
+### ✏️ Edit Allowed in Plan Mode
+
+`plan` mode now returns `true` for every tool call. Previously it used a narrow read-only allowlist, silently blocking `Edit`, `Write`, and `Bash` even when the user explicitly requested changes.
+
+### 🌐 Web Search Allowed in Every Permission Mode
+
+`WebSearch` and `WebFetch` now bypass the permission mode switch entirely via an early-return guard in `checker.mjs`. They are also added to `SAFE_TOOLS` in `prompt.mjs` so `default` mode never shows an interactive permission prompt for web lookups. Both tools work in all modes, including `dontAsk`.
+
+---
+
 ## What's New in v2.6 — agent reliability & tool improvements
 
 ### Mandatory Agent Reliability Rules (`system-prompt.mjs`)

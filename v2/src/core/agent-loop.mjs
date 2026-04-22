@@ -76,7 +76,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         } else if (options.continuation) {
             // Guard against infinite tool-call loops
             state.continuationDepth++;
-            const maxContinuation = settings.maxContinuationTurns || 50;
+            const maxContinuation = settings.maxContinuationTurns || 100;
             if (state.continuationDepth >= maxContinuation) {
                 yield {
                     type: 'error',
@@ -240,9 +240,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 if (!allowed) {
                     yield { type: 'hookPermissionResult', tool: block.name, allowed: false };
                     const mode = permissions.mode;
-                    const modeReason = mode === 'plan'
-                        ? `${block.name} is not allowed in plan mode (read-only). Switch to a different mode to make changes.`
-                        : mode === 'dontAsk'
+                    const modeReason = mode === 'dontAsk'
                         ? `${block.name} is not allowed in dontAsk mode.`
                         : `Permission denied for ${block.name}.`;
                     toolResults.push({
@@ -354,6 +352,18 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     type: 'tool_result',
                     tool_use_id: block.id,
                     content: typeof result === 'string' ? result : JSON.stringify(result),
+                });
+            }
+
+            // If every tool call in this batch failed with a validation error, append a
+            // text nudge so the model retries rather than giving up with a summary message.
+            // (A text block is valid inside a user content array for all supported providers.)
+            const validationErrorCount = toolResults.filter(r =>
+                typeof r.content === 'string' && r.content.startsWith('Validation error:')).length;
+            if (validationErrorCount > 0 && validationErrorCount === toolResults.length) {
+                toolResults.push({
+                    type: 'text',
+                    text: '[System: All tool call(s) above failed input validation. Review the required parameter names for each tool and retry the tool call(s) immediately. Do not stop or summarise — keep going.]',
                 });
             }
 

@@ -248,6 +248,7 @@
     const settingMode          = document.getElementById('setting-mode');
     const settingPersona       = document.getElementById('setting-persona');
     const settingMaxTurns      = document.getElementById('setting-max-turns');
+    const personaQuickSelect   = document.getElementById('persona-quick-select');
     const settingShowToolOutput = document.getElementById('setting-show-tool-output');
     const settingDefaultShell  = document.getElementById('setting-default-shell');
     const settingShellAvailability = document.getElementById('setting-shell-availability');
@@ -315,6 +316,10 @@
     // ── File explorer / viewer state ─────────────────────────────────────────
     let currentWorkspacePath  = '';   // kept in sync with settings
     let fileViewerCurrentPath = null; // path of file currently shown in viewer
+
+    // ── Session-level tool approvals (allow for session) ─────────────────────
+    /** Tool names the user has approved for the entire session — skips re-asking */
+    const sessionAllowedTools = new Set();
 
     /** Tool names that perform file writes — used to trigger diff capture. */
     const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'str_replace_based_edit_tool', 'create_file', 'write_file', 'edit_file']);
@@ -522,6 +527,12 @@
             return `<code>${escapeHtml(raw)}</code>`;
         });
 
+        // Linkify file paths in plain text (outside of code/inline-code blocks)
+        md = md.replace(PLAIN_FILE_PATH_RE, (match) => {
+            // Don't double-wrap if already inside an HTML tag
+            return `<span class="chat-file-link" data-path="${escapeHtml(match)}" title="Open ${escapeHtml(match)}"><code>${escapeHtml(match)}</code></span>`;
+        });
+
         // Restore code blocks — rendered as interactive elements
         md = md.replace(/\x00CODE(\d+)\x00/g, (_, i) => {
             const { lang, code } = codeBlocks[+i];
@@ -533,7 +544,7 @@
 
     // ── File-path detection (for clickable links in chat) ─────────────────────
 
-    const FILE_PATH_EXT_RE = /\.(js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|scala|sh|bash|zsh|fish|ps1|css|scss|less|html|htm|xml|svg|json|yaml|yml|toml|ini|env|md|txt|log|lock|dockerfile|makefile|gitignore)$/i;
+    const FILE_PATH_EXT_RE = /\.(js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|dart|scala|sh|bash|zsh|fish|ps1|css|scss|less|html|htm|xml|svg|json|yaml|yml|toml|ini|env|md|txt|log|lock|dockerfile|makefile|gitignore|gradle|tf|vue|svelte|ex|exs|elm|clj|hs|lua|r|jl|m|mm|pl|proto|graphql)$/i;
 
     /**
      * Returns true if `text` looks like a file path that the agent may have
@@ -552,6 +563,13 @@
         if (/^[a-zA-Z0-9_.-]+$/.test(text) && FILE_PATH_EXT_RE.test(text)) return true;
         return false;
     }
+
+    /**
+     * Regex for finding file paths in plain (non-code) paragraph text.
+     * Matches patterns like: lib/core/utils/foo.dart, src/main.ts, ./config.json
+     * Used to linkify paths the agent mentions in prose, not just in backticks.
+     */
+    const PLAIN_FILE_PATH_RE = /(?<![='"#`\w/\\])((?:\.{1,2}\/|(?:[a-zA-Z0-9_-]+\/)+)[a-zA-Z0-9_./\\-]+\.(?:js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|php|swift|kt|dart|scala|sh|bash|zsh|css|scss|less|html|json|yaml|yml|toml|md|txt|log|env|vue|svelte|graphql|proto|gradle|tf|ex|exs|elm|lua|r|jl|m|pl))(?![a-zA-Z0-9_])/g;
 
     // ── Syntax Highlighter ────────────────────────────────────────────────────
 
@@ -1273,6 +1291,24 @@
         return (filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
     }
 
+    /**
+     * Classify a bash output line for syntax coloring.
+     * Returns a CSS class name based on the line's content.
+     */
+    function classifyBashLine(line) {
+        const trimmed = line.trim();
+        // Prompt/command lines: lines starting with $ or > or echo back of sent input
+        if (/^[$>❯➜#]\s/.test(trimmed) || /^\u276f/.test(trimmed)) return 'bash-line-cmd';
+        // Errors and failures
+        if (/\b(error|Error|ERROR|FAILED|failed|fatal|Fatal|FATAL|exception|Exception|EXCEPTION|Traceback|not found|No such file)\b/.test(trimmed)) return 'bash-line-error';
+        // Warnings
+        if (/\b(warn|warning|Warning|WARN|WARNING|deprecated|Deprecated)\b/.test(trimmed)) return 'bash-line-warn';
+        // Success indicators
+        if (/\b(success|Success|SUCCESS|ok|OK|done|Done|DONE|passed|PASSED|✓|✔|complete|Complete|installed|built|compiled)\b/.test(trimmed)) return 'bash-line-success';
+        // Default output
+        return 'bash-line-out';
+    }
+
     function addToolCard(toolName, input) {
         hideWelcome();
         const id = `tool-${++toolCardCounter}`;
@@ -1352,8 +1388,25 @@
         resultDiv.appendChild(em);
         body.appendChild(resultDiv);
 
-        // Bash: add live output container + interactive stdin bar
+        // Bash: add live output container + interactive stdin bar + copy button
         if (toolName === 'Bash') {
+            // Copy button in the header for bash output
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'bash-copy-btn';
+            copyBtn.title = 'Copy output';
+            copyBtn.textContent = '📋 Copy';
+            copyBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const pre = card.querySelector('.bash-live-output');
+                const text = pre ? pre.textContent : (input && input.command ? input.command : '');
+                if (text) {
+                    vscode.postMessage({ type: 'copyToClipboard', text });
+                    copyBtn.textContent = '✓ Copied';
+                    setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500);
+                }
+            });
+            header.insertBefore(copyBtn, statusSpan);
+
             const stdinBar = document.createElement('div');
             stdinBar.className = 'bash-stdin-bar';
             stdinBar.id = `${id}-stdin`;
@@ -1444,7 +1497,14 @@
                 if (!resultEl.querySelector('.bash-live-output') && result) {
                     const pre = document.createElement('pre');
                     pre.className = 'bash-live-output';
-                    pre.textContent = result;
+                    // Apply line coloring to static result
+                    result.split('\n').forEach((line, i, arr) => {
+                        const span = document.createElement('span');
+                        span.className = classifyBashLine(line);
+                        span.textContent = line;
+                        pre.appendChild(span);
+                        if (i < arr.length - 1) pre.appendChild(document.createTextNode('\n'));
+                    });
                     resultEl.appendChild(pre);
                 }
             } else {
@@ -1500,7 +1560,7 @@
         // Remove placeholder <em> if present
         const em = resultEl.querySelector('em');
         if (em) em.remove();
-        // Find or create the live output <pre>
+        // Find or create the live output container
         let pre = resultEl.querySelector('.bash-live-output');
         if (!pre) {
             pre = document.createElement('pre');
@@ -1523,21 +1583,32 @@
                 if (!b) return;
                 b.rafId = null;
                 if (b.pending) {
-                    b.pre.textContent += b.pending;
+                    // Render lines with syntax coloring
+                    const lines = b.pending.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i];
+                        // Don't create a span for the final empty segment (trailing newline)
+                        if (i === lines.length - 1 && line === '') break;
+                        const span = document.createElement('span');
+                        span.className = classifyBashLine(line);
+                        span.textContent = line;
+                        b.pre.appendChild(span);
+                        if (i < lines.length - 1) b.pre.appendChild(document.createTextNode('\n'));
+                    }
                     b.pending = '';
                     // Keep the output DOM node from growing without bound — trim
                     // to the last RETAINED_BASH_OUTPUT_LENGTH chars so very
                     // long-running commands don't cause excessive memory use.
                     const text = b.pre.textContent;
                     if (text.length > MAX_BASH_OUTPUT_LENGTH) {
-                        // Find the first newline at or after the retention boundary
-                        // so we cut on a whole-line boundary. Fall back to a raw
-                        // char-boundary cut if no newline exists in that region.
-                        const boundary = text.length - RETAINED_BASH_OUTPUT_LENGTH;
-                        const cutAt = text.indexOf('\n', boundary);
-                        b.pre.textContent = cutAt !== -1
-                            ? text.slice(cutAt + 1)
-                            : text.slice(boundary);
+                        // Remove leading child nodes until we're within the retention limit.
+                        // Calculate how many characters to remove first.
+                        const excess = text.length - RETAINED_BASH_OUTPUT_LENGTH;
+                        let removed = 0;
+                        while (removed < excess && b.pre.firstChild) {
+                            removed += (b.pre.firstChild.textContent || '').length;
+                            b.pre.removeChild(b.pre.firstChild);
+                        }
                     }
                 }
                 if (autoScroll) scrollToBottom();
@@ -2069,12 +2140,28 @@
                 finalizeAssistantMessage(null);
                 setLoading(false);
                 setSending(false);
-                // When the agent loop hits its turn limit, nudge the user to
-                // click the ▶ Continue button so the task can keep going.
-                if (msg.reason === 'max_turns') {
-                    addSystemMessage(
-                        '⚙ Max tool-use turns reached. Use ▶ Continue on the last reply to keep going.'
-                    );
+                // When the agent loop hits its turn limit, show a Continue button
+                if (msg.reason === 'max_turns' || msg.reason === 'loop_limit') {
+                    const continueDiv = document.createElement('div');
+                    continueDiv.className = 'msg msg-continue-prompt';
+                    continueDiv.innerHTML = `
+                        <div class="continue-card">
+                            <span class="continue-icon">⏸</span>
+                            <span class="continue-msg">${msg.reason === 'max_turns'
+                                ? 'Max turns reached — the agent paused before finishing.'
+                                : 'Agent loop limit reached — the agent paused before finishing.'
+                            }</span>
+                            <button class="modal-btn primary continue-btn">▶ Continue</button>
+                        </div>
+                    `;
+                    continueDiv.querySelector('.continue-btn').addEventListener('click', () => {
+                        continueDiv.remove();
+                        setSending(true);
+                        setLoading(true, 'Continuing…');
+                        vscode.postMessage({ type: 'send', message: 'Please continue where you left off and complete the remaining task.', contextFiles: [], fileRefs: [] });
+                    });
+                    messagesEl.appendChild(continueDiv);
+                    scrollToBottom();
                 }
                 // Auto-save current session after every response so VS Code restarts
                 // don't lose the conversation (Cursor/Claude-style session memory).
@@ -3724,8 +3811,44 @@
 
     function showClaudemdBanner(msgs) {
         claudemdPendingMessages = msgs;
-        if (!claudemdBanner) return;
-        claudemdBanner.style.display = 'flex';
+        // Show the floating banner (legacy)
+        if (claudemdBanner) claudemdBanner.style.display = 'flex';
+
+        // Also render an inline chatbot message card so the user sees it in context
+        const card = document.createElement('div');
+        card.className = 'msg msg-claudemd-offer';
+        card.innerHTML = `
+            <div class="msg-header">
+                <div class="msg-avatar" style="background:var(--accent-dim);font-size:14px;">💾</div>
+                <span class="msg-name">Session Summary</span>
+            </div>
+            <div class="claudemd-offer-body">
+                <p>Update <code>CLAUDE.md</code> with a summary of this session?</p>
+                <p class="claudemd-offer-hint">This helps the agent remember context in future sessions.</p>
+            </div>
+            <div class="claudemd-offer-actions">
+                <button class="modal-btn primary claudemd-yes-inline">💾 Yes, update</button>
+                <button class="modal-btn claudemd-no-inline">Not now</button>
+            </div>
+        `;
+        card.querySelector('.claudemd-yes-inline').addEventListener('click', () => {
+            dismissClaudemdBanner();
+            card.remove();
+            const summaryPrompt =
+                'Please update (or create) the `CLAUDE.md` file in the current workspace root with a concise summary of what we accomplished in this session: decisions made, architectural patterns established, files changed, and any conventions to remember for future sessions. Keep it brief and developer-focused.';
+            if (!isLoading) {
+                setSending(true);
+                setLoading(true, 'Updating CLAUDE.md…');
+                vscode.postMessage({ type: 'send', message: summaryPrompt, contextFiles: [], fileRefs: [] });
+            }
+        });
+        card.querySelector('.claudemd-no-inline').addEventListener('click', () => {
+            dismissClaudemdBanner();
+            card.remove();
+        });
+
+        messagesEl.appendChild(card);
+        scrollToBottom();
     }
     function dismissClaudemdBanner() {
         if (claudemdBanner) claudemdBanner.style.display = 'none';
@@ -3991,6 +4114,7 @@
         if (settingShowToolOutput) settingShowToolOutput.checked = msg.showToolOutput !== false;
         if (settingDefaultShell)   settingDefaultShell.value = msg.defaultShell || 'auto';
         if (settingPersona)        settingPersona.value = msg.systemPromptPreset || 'expert-engineer';
+        if (personaQuickSelect)    personaQuickSelect.value = msg.systemPromptPreset || 'auto';
         if (settingNvidiaKey)      settingNvidiaKey.placeholder = msg.hasNvidiaKey ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
         multiAgentEnabled = !!msg.multiAgentEnabled;
         multiAgentStrategy = msg.multiAgentStrategy || 'parallel';
@@ -4208,7 +4332,19 @@
     }
     if (settingPersona) {
         settingPersona.addEventListener('change', () => {
-            vscode.postMessage({ type: 'saveSettings', key: 'systemPromptPreset', value: settingPersona.value || 'expert-engineer' });
+            const val = settingPersona.value || 'auto';
+            vscode.postMessage({ type: 'saveSettings', key: 'systemPromptPreset', value: val });
+            // Sync quick persona selector in header
+            if (personaQuickSelect) personaQuickSelect.value = val;
+        });
+    }
+
+    if (personaQuickSelect) {
+        personaQuickSelect.addEventListener('change', () => {
+            const val = personaQuickSelect.value || 'auto';
+            vscode.postMessage({ type: 'saveSettings', key: 'systemPromptPreset', value: val });
+            // Sync settings panel
+            if (settingPersona) settingPersona.value = val;
         });
     }
 
@@ -4505,29 +4641,95 @@
 
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // PERMISSION MODAL — default-mode interactive allow/deny
+    // PERMISSION MODAL — default-mode interactive allow/deny (inline Cursor-style)
     // ═══════════════════════════════════════════════════════════════════════════
 
     let pendingPermReqId = null;
+    let permCardEl = null; // reference to the currently shown inline permission card
 
     function showPermissionModal(msg) {
-        if (!permModalEl) return;
         pendingPermReqId = msg.reqId;
         const toolLabel = msg.tool || 'unknown tool';
-        if (permModalDesc) {
-            permModalDesc.textContent = `The agent wants to run: ${toolLabel}`;
+
+        // If this tool was already session-approved (and tool name is known), auto-allow without showing UI
+        if (msg.tool && sessionAllowedTools.has(msg.tool)) {
+            if (pendingPermReqId) {
+                vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: true });
+            }
+            pendingPermReqId = null;
+            return;
         }
-        if (permModalDetail) {
-            const detail = msg.file ? `File: ${msg.file}` : (msg.command ? `Command: ${msg.command}` : '');
-            permModalDetail.textContent = detail;
-            permModalDetail.style.display = detail ? '' : 'none';
+
+        // Remove any previous permission card
+        if (permCardEl && permCardEl.parentNode) permCardEl.remove();
+
+        const detail = msg.file
+            ? `File: ${msg.file}`
+            : (msg.command ? `Command: ${msg.command}` : '');
+
+        // Build an inline card in the messages stream (Cursor-style)
+        const card = document.createElement('div');
+        card.className = 'msg msg-permission-card';
+        card.innerHTML = `
+            <div class="msg-header">
+                <div class="msg-avatar perm-avatar">🔐</div>
+                <span class="msg-name">Permission Required</span>
+            </div>
+            <div class="perm-card-body">
+                <div class="perm-card-desc"></div>
+                ${detail ? `<pre class="perm-card-detail"></pre>` : ''}
+            </div>
+            <div class="perm-card-actions">
+                <button class="modal-btn perm-deny-btn">✗ Deny</button>
+                <button class="modal-btn primary perm-allow-session-btn">✓ Allow for Session</button>
+                <button class="modal-btn primary perm-allow-btn">✓ Allow Once</button>
+            </div>
+        `;
+        // Safe text injection
+        card.querySelector('.perm-card-desc').textContent = `The agent wants to run: ${toolLabel}`;
+        if (detail) {
+            card.querySelector('.perm-card-detail').textContent = detail;
         }
-        permModalEl.style.display = '';
+
+        card.querySelector('.perm-deny-btn').addEventListener('click', () => {
+            if (pendingPermReqId) {
+                vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: false });
+            }
+            closePermissionCard();
+        });
+        card.querySelector('.perm-allow-btn').addEventListener('click', () => {
+            if (pendingPermReqId) {
+                vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: true });
+            }
+            closePermissionCard();
+        });
+        card.querySelector('.perm-allow-session-btn').addEventListener('click', () => {
+            // Only store to session-allowed if we have a valid tool name
+            if (msg.tool) {
+                sessionAllowedTools.add(msg.tool);
+            }
+            if (pendingPermReqId) {
+                vscode.postMessage({ type: 'permissionResponse', reqId: pendingPermReqId, allowed: true });
+            }
+            closePermissionCard();
+            addSystemMessage(`🔓 "${toolLabel}" allowed for the rest of this session.`);
+        });
+
+        permCardEl = card;
+        messagesEl.appendChild(card);
+        scrollToBottom();
+    }
+
+    function closePermissionCard() {
+        if (permCardEl && permCardEl.parentNode) permCardEl.remove();
+        permCardEl = null;
+        pendingPermReqId = null;
     }
 
     function closePermissionModal() {
+        closePermissionCard();
+        // Also hide legacy overlay if it exists
         if (permModalEl) permModalEl.style.display = 'none';
-        pendingPermReqId = null;
     }
 
     if (permAllowBtn) {
@@ -4923,9 +5125,28 @@
         activateTab(filePath);
 
         // Auto-show the editor panel so diffs are immediately visible
-        if (panelEditorEl && panelEditorEl.classList.contains('panel-collapsed')) {
+        if (panelEditorEl) {
             panelEditorEl.classList.remove('panel-collapsed');
+            panelEditorEl.style.display = '';
         }
+
+        // Show diff-open notification in the chat so users know to look at the editor
+        const noteDiv = document.createElement('div');
+        noteDiv.className = 'msg msg-diff-notification';
+        noteDiv.innerHTML = `
+            <div class="diff-notify-card">
+                <span class="diff-notify-icon">⚡</span>
+                <span class="diff-notify-text">Diff opened for <code></code></span>
+                <button class="modal-btn diff-notify-view-btn">View Diff →</button>
+            </div>
+        `;
+        noteDiv.querySelector('code').textContent = name;
+        noteDiv.querySelector('.diff-notify-view-btn').addEventListener('click', () => {
+            if (panelEditorEl) panelEditorEl.classList.remove('panel-collapsed');
+            activateTab(filePath);
+        });
+        messagesEl.appendChild(noteDiv);
+        scrollToBottom();
     }
 
     /** Make a tab active and render its content. */
