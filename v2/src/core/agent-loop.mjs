@@ -8,6 +8,7 @@ import { buildSystemPrompt, buildWorkspaceSnapshot, buildWorkspaceContent, build
 import { verifyWrite, verifyEdit } from './verify-write.mjs';
 import { isNvidiaModel } from './providers.mjs';
 import { RateLimiter } from './rate-limiter.mjs';
+import { StuckDetector } from './stuck-detector.mjs';
 import fs from 'fs';
 import path from 'path';
 
@@ -48,7 +49,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         model,
         tools,
         _contextManager: contextManager,
-        _recentToolCalls: [], // loop-detection: [{callKey, resultKey}]
+        _stuckDetector: new StuckDetector(), // loop-detection
         sessionGoal: settings.sessionGoal || null,  // sticky goal that survives compaction
         sessionId: settings.sessionId || null,       // opaque ID for cross-session summary persistence
     };
@@ -71,7 +72,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
             }, state.sessionGoal);
             state.turnCount++;
             state.continuationDepth = 0; // reset per new user message
-            state._recentToolCalls = []; // reset loop-detection on new user message
+            state._stuckDetector.resetTurn(); // reset loop-detection on new user message
         } else if (options.continuation) {
             // Guard against infinite tool-call loops
             state.continuationDepth++;
@@ -332,27 +333,17 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     }
                 }
 
-                // Loop-detection guard: if the same tool is called with identical arguments
-                // and produces the identical result 3 times in a row, the agent is stuck.
-                // We use a simple string key (no crypto needed — we only need equality).
-                const callKey = block.name + ':' + JSON.stringify(block.input);
-                const resultKey = typeof result === 'string' ? result : JSON.stringify(result);
-                state._recentToolCalls.push({ callKey, resultKey });
-                if (state._recentToolCalls.length > 3) state._recentToolCalls.shift();
-                if (state._recentToolCalls.length === 3) {
-                    const [a, b, c] = state._recentToolCalls;
-                    if (a.callKey === b.callKey && b.callKey === c.callKey &&
-                        a.resultKey === b.resultKey && b.resultKey === c.resultKey) {
-                        yield {
-                            type: 'stuck',
-                            tool: block.name,
-                            input: block.input,
-                            result,
-                            message: `Agent stuck: "${block.name}" called 3 times in a row with identical arguments and identical result. Stopping to prevent an infinite loop.`,
-                        };
-                        yield { type: 'stop', reason: 'stuck' };
-                        return;
-                    }
+                // Loop-detection: record this tool call and check for stuck conditions.
+                state._stuckDetector.record(block.name, block.input, result, isToolError);
+                const stuckCondition = state._stuckDetector.check();
+                if (stuckCondition) {
+                    yield {
+                        type: 'stuck',
+                        reason: stuckCondition.reason,
+                        summary: stuckCondition.summary,
+                    };
+                    yield { type: 'stop', reason: 'stuck' };
+                    return;
                 }
 
                 yield { type: 'result', tool: block.name, result, input: block.input, isError: !!isToolError };

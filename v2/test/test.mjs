@@ -21,7 +21,8 @@ import { parseAgentDefinition } from '../src/agents/parser.mjs';
 import { SkillsLoader } from '../src/skills/loader.mjs';
 import { SkillRunner } from '../src/skills/runner.mjs';
 import { COMMANDS, executeCommand, getCompletions } from '../src/ui/commands.mjs';
-import { Spinner, highlightCode, renderToolProgress, renderStatusBar, renderError } from '../src/ui/ink-app.mjs';
+import { Spinner, highlightCode, renderToolProgress, renderStatusBar, renderError, renderStuckPanel } from '../src/ui/ink-app.mjs';
+import { StuckDetector } from '../src/core/stuck-detector.mjs';
 import { loadSettings, SETTINGS_SCHEMA } from '../src/config/settings.mjs';
 import { readEnv, getEnv, listEnvVars, ENV_SCHEMA } from '../src/config/env.mjs';
 import { parseArgs } from '../src/config/cli-args.mjs';
@@ -1862,6 +1863,159 @@ for (const [key, schema] of Object.entries(ENV_SCHEMA)) {
     assert(['string', 'number', 'boolean'].includes(schema.type),
         `Env var ${key} has valid type`);
 }
+
+// ---------- StuckDetector Tests ----------
+
+section('StuckDetector');
+
+// ── SAME_CALL_LOOP ───────────────────────────────────────────────────────────
+
+// Fresh detector: no trigger after 2 identical calls
+{
+    const d = new StuckDetector();
+    d.record('Edit', { file_path: 'foo.js' }, 'Error: not found', true);
+    d.record('Edit', { file_path: 'foo.js' }, 'Error: not found', true);
+    assert(d.check() === null, 'SAME_CALL_LOOP: no trigger after only 2 identical calls');
+}
+
+// Triggers after 3 identical failing calls
+{
+    const d = new StuckDetector();
+    d.record('Edit', { file_path: 'foo.js' }, 'Error: not found', true);
+    d.record('Edit', { file_path: 'foo.js' }, 'Error: not found', true);
+    d.record('Edit', { file_path: 'foo.js' }, 'Error: not found', true);
+    const stuck = d.check();
+    assert(stuck !== null, 'SAME_CALL_LOOP: triggers after 3 identical failing calls');
+    assertEqual(stuck.reason, 'SAME_CALL_LOOP', 'SAME_CALL_LOOP: reason correct');
+    assertIncludes(stuck.summary, 'Edit', 'SAME_CALL_LOOP: summary mentions tool name');
+    assertIncludes(stuck.summary, '3', 'SAME_CALL_LOOP: summary mentions attempt count');
+    assertIncludes(stuck.summary, 'Error: not found', 'SAME_CALL_LOOP: summary includes last error');
+}
+
+// Different args between calls → no trigger (progress detected)
+{
+    const d = new StuckDetector();
+    d.record('Edit', { file_path: 'foo.js', old_string: 'a' }, 'Error: not found', true);
+    d.record('Edit', { file_path: 'foo.js', old_string: 'b' }, 'Error: not found', true);
+    d.record('Edit', { file_path: 'foo.js', old_string: 'c' }, 'Error: not found', true);
+    assert(d.check() === null, 'SAME_CALL_LOOP: different args do not trigger');
+}
+
+// Triggers after 3 identical calls even when not error (same result = no progress)
+{
+    const d = new StuckDetector();
+    const inp = { file_path: 'bar.js' };
+    d.record('Read', inp, 'some content', false);
+    d.record('Read', inp, 'some content', false);
+    d.record('Read', inp, 'some content', false);
+    const stuck = d.check();
+    assert(stuck !== null, 'SAME_CALL_LOOP: triggers on identical success results');
+    assertEqual(stuck.reason, 'SAME_CALL_LOOP', 'SAME_CALL_LOOP: reason on identical success');
+}
+
+// resetTurn clears history
+{
+    const d = new StuckDetector();
+    d.record('Edit', { file_path: 'x.js' }, 'err', true);
+    d.record('Edit', { file_path: 'x.js' }, 'err', true);
+    d.record('Edit', { file_path: 'x.js' }, 'err', true);
+    d.resetTurn();
+    assert(d.check() === null, 'SAME_CALL_LOOP: resetTurn clears detection state');
+}
+
+// ── THRASHING_LOOP ───────────────────────────────────────────────────────────
+
+// Triggers when 3+ different tools fail on the same file within last 10 calls
+{
+    const d = new StuckDetector();
+    d.record('Edit',      { file_path: 'lib/dash.dart' }, 'Error: edit failed', true);
+    d.record('MultiEdit', { file_path: 'lib/dash.dart' }, 'Error: multi failed', true);
+    d.record('Write',     { file_path: 'lib/dash.dart' }, 'Error: write failed', true);
+    const stuck = d.check();
+    assert(stuck !== null, 'THRASHING_LOOP: triggers after 3 different failing tools on same file');
+    assertEqual(stuck.reason, 'THRASHING_LOOP', 'THRASHING_LOOP: reason correct');
+    assertIncludes(stuck.summary, 'lib/dash.dart', 'THRASHING_LOOP: summary mentions target file');
+    assertIncludes(stuck.summary, 'Edit', 'THRASHING_LOOP: summary lists Edit');
+    assertIncludes(stuck.summary, 'Write', 'THRASHING_LOOP: summary lists Write');
+}
+
+// Only 2 different failing tools → no trigger
+{
+    const d = new StuckDetector();
+    d.record('Edit',  { file_path: 'a.dart' }, 'Error: edit failed', true);
+    d.record('Write', { file_path: 'a.dart' }, 'Error: write failed', true);
+    assert(d.check() === null, 'THRASHING_LOOP: 2 tools not enough to trigger');
+}
+
+// Successful calls on same file do not count toward thrashing
+{
+    const d = new StuckDetector();
+    d.record('Edit',  { file_path: 'a.dart' }, 'File updated', false);
+    d.record('Write', { file_path: 'a.dart' }, 'File written', false);
+    d.record('Bash',  { file_path: 'a.dart' }, 'ok', false);
+    assert(d.check() === null, 'THRASHING_LOOP: successful calls do not trigger');
+}
+
+// Failures on different files do not trigger
+{
+    const d = new StuckDetector();
+    d.record('Edit',  { file_path: 'a.dart' }, 'Error', true);
+    d.record('Write', { file_path: 'b.dart' }, 'Error', true);
+    d.record('Bash',  { file_path: 'c.dart' }, 'Error', true);
+    assert(d.check() === null, 'THRASHING_LOOP: failures on different files do not trigger');
+}
+
+// ── VOLUME_LIMIT ─────────────────────────────────────────────────────────────
+
+// Triggers when more than 20 calls made in one turn
+{
+    const d = new StuckDetector();
+    for (let i = 0; i <= 20; i++) {
+        d.record('Read', { file_path: `file${i}.js` }, 'content', false);
+    }
+    const stuck = d.check();
+    assert(stuck !== null, 'VOLUME_LIMIT: triggers after 21st call');
+    assertEqual(stuck.reason, 'VOLUME_LIMIT', 'VOLUME_LIMIT: reason correct');
+    assertIncludes(stuck.summary, '20', 'VOLUME_LIMIT: summary mentions 20');
+}
+
+// 20 calls exactly → no trigger (limit is > 20)
+{
+    const d = new StuckDetector();
+    for (let i = 0; i < 20; i++) {
+        d.record('Read', { file_path: `f${i}.js` }, 'c', false);
+    }
+    assert(d.check() === null, 'VOLUME_LIMIT: exactly 20 calls does not trigger');
+}
+
+// resetTurn resets call count
+{
+    const d = new StuckDetector();
+    for (let i = 0; i <= 20; i++) {
+        d.record('Read', { file_path: `f${i}.js` }, 'c', false);
+    }
+    d.resetTurn();
+    d.record('Read', { file_path: 'f.js' }, 'c', false);
+    assert(d.check() === null, 'VOLUME_LIMIT: resetTurn resets call count');
+}
+
+// ── renderStuckPanel ─────────────────────────────────────────────────────────
+
+section('StuckDetector: renderStuckPanel');
+
+const panelSame = renderStuckPanel({ reason: 'SAME_CALL_LOOP', summary: 'Edit called 3x on foo.js' });
+assertType(panelSame, 'string', 'renderStuckPanel returns string');
+assertIncludes(panelSame, 'SAME_CALL_LOOP', 'renderStuckPanel shows reason');
+assertIncludes(panelSame, 'Edit called 3x', 'renderStuckPanel shows summary');
+assertIncludes(panelSame, '[R]', 'renderStuckPanel shows Retry option');
+assertIncludes(panelSame, '[S]', 'renderStuckPanel shows Skip option');
+
+const panelVolume = renderStuckPanel({ reason: 'VOLUME_LIMIT', summary: 'Too many calls' });
+assertIncludes(panelVolume, 'VOLUME_LIMIT', 'renderStuckPanel VOLUME_LIMIT reason');
+
+const panelThrash = renderStuckPanel({ reason: 'THRASHING_LOOP', summary: 'lib/dash.dart failed' });
+assertIncludes(panelThrash, 'THRASHING_LOOP', 'renderStuckPanel THRASHING_LOOP reason');
+assertIncludes(panelThrash, 'lib/dash.dart', 'renderStuckPanel thrash summary');
 
 // ---------- Summary ----------
 
