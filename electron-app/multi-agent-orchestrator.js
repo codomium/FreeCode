@@ -1,5 +1,8 @@
 'use strict';
 
+const CODE_BLOCK_BONUS = 500;
+const ERROR_PENALTY = 3000;
+
 class MultiAgentOrchestrator {
     constructor({ providers, strategy, createBridge }) {
         this.providers = Array.isArray(providers) ? providers : [];
@@ -30,12 +33,11 @@ class MultiAgentOrchestrator {
         if (!results.length) return null;
         // Fix: avoid picking verbose error responses just because they are longer.
         const errorPattern = /\b(error:|failed:|exception:|traceback:|cannot|undefined is not)\b/i;
-        const codeBlockBonus = 500;
-        const errorPenalty = 3000;
+        // ERROR_PENALTY is intentionally much larger than CODE_BLOCK_BONUS to counter common 2k-4k char error dumps.
         const score = (r) => {
             let s = (r.text || '').length;
-            if (errorPattern.test(r.text || '')) s -= errorPenalty;
-            if (/```/.test(r.text || '')) s += codeBlockBonus;
+            if (errorPattern.test(r.text || '')) s -= ERROR_PENALTY;
+            if (/```/.test(r.text || '')) s += CODE_BLOCK_BONUS;
             return s;
         };
         return results.slice().sort((a, b) => score(b) - score(a))[0];

@@ -17,13 +17,17 @@ import {
     tryWhitespaceNormalizedMatch,
 } from './edit-utils.mjs';
 
+const MAX_PREVIEW_LENGTH = 300;
+
 function formatEditSuccess(filePath, oldString, newString, note = '') {
     // Fix: include compact replacement preview so models don't need an immediate Read re-check.
     const oldLineCount = oldString.split('\n').length;
     const newLineCount = newString.split('\n').length;
-    const preview = newString.slice(0, 300);
+    const preview = newString.length > MAX_PREVIEW_LENGTH
+        ? `${newString.slice(0, MAX_PREVIEW_LENGTH)}...`
+        : newString;
     const noteSuffix = note ? ` (${note})` : '';
-    return `File updated: ${filePath}${noteSuffix}\nReplaced ${oldLineCount} line(s) → ${newLineCount} line(s)\nNew content preview:\n${preview}`;
+    return `File updated: ${filePath}${noteSuffix}\nReplaced ${oldLineCount} line(s) -> ${newLineCount} line(s)\nNew content preview:\n${preview}`;
 }
 
 export const EditTool = {

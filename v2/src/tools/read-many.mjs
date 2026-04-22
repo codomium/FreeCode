@@ -34,7 +34,7 @@ export const ReadManyTool = {
         for (const filePath of input.file_paths) {
             results[filePath] = await ReadTool.call({
                 file_path: filePath,
-                limit: input.limit || 2000,
+                limit: input.limit ?? 2000,
             });
         }
         return Object.entries(results)

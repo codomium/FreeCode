@@ -131,7 +131,7 @@ export const MultiEditTool = {
             const before = content;
             content = content.replace(searchStr, replaceStr);
             if (content === before) {
-                return `Error: edit[${i}] (${edit.file_path}) — old_string was invalidated by a prior edit to the same file. Reorder edits so they don't overlap, or split into separate MultiEdit calls.`;
+                return `Error: edit[${i}] (${edit.file_path}) - old_string was invalidated by a prior edit to the same file. Reorder edits so they don't overlap, or split into separate MultiEdit calls.`;
             }
             fileContents.set(filePath, content);
         }

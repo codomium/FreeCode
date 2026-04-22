@@ -23,6 +23,10 @@ const RG_EXE = IS_WINDOWS ? 'rg.exe' : 'rg';
 
 let _hasRg = null;
 
+function hasExplicitContext(input) {
+    return input['-C'] !== undefined || input.context !== undefined || input['-A'] !== undefined || input['-B'] !== undefined;
+}
+
 export const GrepTool = {
     name: 'Grep',
     description: 'Search file contents with regex (powered by ripgrep or grep).',
@@ -56,7 +60,7 @@ export const GrepTool = {
             // Fix: default to content mode so follow-up Read calls are less necessary.
             const mode = input.output_mode || 'content';
             const limit = input.head_limit ?? 250;
-            const defaultCtx = (mode === 'content' && input['-C'] == null && input.context == null && input['-A'] == null && input['-B'] == null) ? 2 : 0;
+            const defaultCtx = (mode === 'content' && !hasExplicitContext(input)) ? 2 : 0;
 
             // Build grep args array — use rg first, fall back to grep, then pure JS
             const args = [];
@@ -110,7 +114,7 @@ export const GrepTool = {
                 // This is the common case on Windows without WSL or ripgrep.
                 const fallbackResult = jsGrepFallback(input.pattern, dir, { ...input, _defaultCtx: defaultCtx }, limit);
                 // Fix: explicitly signal slower/less-accurate fallback mode.
-                const warning = '[Warning: ripgrep (rg) and system grep not found — using built-in JS fallback. Install ripgrep for faster, more accurate search.]\n';
+                const warning = '[Warning: ripgrep (rg) and system grep not found - using built-in JS fallback. Install ripgrep for faster, more accurate search.]\n';
                 return warning + fallbackResult;
             }
 

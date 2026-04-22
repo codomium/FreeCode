@@ -20,6 +20,7 @@ const STALE_TOOL_RESULT_TURNS = 5; // tool results older than this are micro-com
 const SESSIONS_DIR = path.join(os.homedir(), '.freecode', 'sessions');
 const MAX_MSG_SUMMARY = 500;   // keep more per-message context during full compaction
 const MAX_TOTAL_SUMMARY = 8000; // preserve more historical context across compaction
+const MAX_TEXT_BLOCK_SUMMARY = 300;
 
 /**
  * Persist a session summary to disk for cross-session context retention.
@@ -210,7 +211,7 @@ export class ContextManager {
             } else if (Array.isArray(msg.content)) {
                 text = msg.content
                     .map(b => {
-                        if (b.type === 'text') return b.text?.slice(0, Math.min(MAX_MSG_SUMMARY, 300));
+                        if (b.type === 'text') return b.text?.slice(0, Math.min(MAX_MSG_SUMMARY, MAX_TEXT_BLOCK_SUMMARY));
                         if (b.type === 'tool_use') return `[tool:${b.name}]`;
                         if (b.type === 'tool_result') return `[result:${String(b.content).slice(0, 250)}]`;
                         return `[${b.type}]`;
