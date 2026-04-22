@@ -9,7 +9,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { hasBeenRead, markRead } from './read.mjs';
+import { hasBeenRead, markRead, invalidateCache } from './read.mjs';
 import {
     normalizeContent,
     normalizeLineEndings,
@@ -98,6 +98,7 @@ export const EditTool = {
                 }
                 try {
                     fs.writeFileSync(filePath, content);
+                    invalidateCache(filePath); // E2: clear stale cached Read output
                     markRead(filePath);
                     return formatEditSuccess(filePath, oldString, newString, 'matched after whitespace normalization');
                 } catch (e) {
@@ -124,6 +125,7 @@ export const EditTool = {
 
         try {
             fs.writeFileSync(filePath, content);
+            invalidateCache(filePath); // E2: clear stale cached Read output
             // Keep it marked as read
             markRead(filePath);
             return formatEditSuccess(filePath, oldString, newString);

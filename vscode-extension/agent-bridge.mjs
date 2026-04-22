@@ -183,6 +183,12 @@ async function handleReset(loop) {
     loop.state.tokenUsage = { input: 0, output: 0 };
     // Fix: clear per-turn stuck detector state so reset starts clean.
     loop.state._stuckDetector?.resetTurn();
+    // E11: reset compaction counters so the new session reports correct stats.
+    if (loop.state._contextManager) {
+        loop.state._contextManager.compactionCount = 0;
+        loop.state._contextManager.lastPreCompactTokens = 0;
+        loop.state._contextManager.lastPostCompactTokens = 0;
+    }
     // Fix: clear read/edit tracking and cached Read outputs between sessions.
     clearReadTracking();
     emit({ type: 'ready' });

@@ -21,7 +21,11 @@ const IS_WINDOWS = process.platform === 'win32';
 /** Ripgrep executable name varies by platform. */
 const RG_EXE = IS_WINDOWS ? 'rg.exe' : 'rg';
 
-let _hasRg = null;
+// E12: TTL-based caches so tool availability is re-checked after 60 s,
+// allowing a user who installs rg mid-session to benefit from it.
+const RG_CACHE_TTL_MS = 60_000;
+let _rgCache = null;    // { result: boolean, expiry: number }
+let _grepCache = null;  // { result: boolean, expiry: number }
 
 function hasExplicitContext(input) {
     return input['-C'] !== undefined || input.context !== undefined || input['-A'] !== undefined || input['-B'] !== undefined;
@@ -144,30 +148,39 @@ export const GrepTool = {
 };
 
 function hasRipgrep() {
-    if (_hasRg !== null) return _hasRg;
+    const now = Date.now();
+    if (_rgCache && now < _rgCache.expiry) return _rgCache.result;
+    let result = false;
     try {
         // 'where' on Windows, 'which' on Unix — check for the platform-correct exe name
         const checkExe = IS_WINDOWS ? 'where' : 'which';
-        const result = spawnSync(checkExe, [RG_EXE], { encoding: 'utf-8', timeout: 5000 });
-        _hasRg = result.status === 0;
+        const res = spawnSync(checkExe, [RG_EXE], { encoding: 'utf-8', timeout: 5000 });
+        result = res.status === 0;
     } catch {
-        _hasRg = false;
+        result = false;
     }
-    return _hasRg;
+    _rgCache = { result, expiry: now + RG_CACHE_TTL_MS };
+    return result;
 }
 
 let _hasNativeGrep = null;
 /** Check whether the system `grep` binary is available (not available on Windows without WSL/tools). */
 function hasNativeGrep() {
-    if (_hasNativeGrep !== null) return _hasNativeGrep;
-    if (IS_WINDOWS) { _hasNativeGrep = false; return false; }
-    try {
-        const result = spawnSync('which', ['grep'], { encoding: 'utf-8', timeout: 5000 });
-        _hasNativeGrep = result.status === 0;
-    } catch {
-        _hasNativeGrep = false;
+    const now = Date.now();
+    if (_grepCache && now < _grepCache.expiry) return _grepCache.result;
+    if (IS_WINDOWS) {
+        _grepCache = { result: false, expiry: now + RG_CACHE_TTL_MS };
+        return false;
     }
-    return _hasNativeGrep;
+    let result = false;
+    try {
+        const res = spawnSync('which', ['grep'], { encoding: 'utf-8', timeout: 5000 });
+        result = res.status === 0;
+    } catch {
+        result = false;
+    }
+    _grepCache = { result, expiry: now + RG_CACHE_TTL_MS };
+    return result;
 }
 
 /**
@@ -207,6 +220,10 @@ function jsGrepFallback(pattern, searchPath, options, limit) {
             const defaultCtx = Number(options._defaultCtx || 0);
             const contextBefore = Number(options['-B'] ?? options['-C'] ?? options.context ?? defaultCtx);
             const contextAfter  = Number(options['-A'] ?? options['-C'] ?? options.context ?? defaultCtx);
+            // E13: track emitted line indices per-file to prevent double-emitting context
+            // lines that fall within both the "after" range of one match and the "before"
+            // range of the next match (mirrors the deduplication done by rg/grep with '--').
+            const emittedLines = new Set();
 
             for (let i = 0; i < lines.length; i++) {
                 if (regex.test(lines[i])) {
@@ -215,12 +232,21 @@ function jsGrepFallback(pattern, searchPath, options, limit) {
                     if (mode === 'content') {
                         // Emit context-before lines
                         for (let b = Math.max(0, i - contextBefore); b < i; b++) {
-                            if (results.length < limit) results.push(`${filePath}:${b + 1}-${lines[b]}`);
+                            if (!emittedLines.has(b) && results.length < limit) {
+                                results.push(`${filePath}:${b + 1}-${lines[b]}`);
+                                emittedLines.add(b);
+                            }
                         }
-                        if (results.length < limit) results.push(`${filePath}:${i + 1}:${lines[i]}`);
+                        if (!emittedLines.has(i) && results.length < limit) {
+                            results.push(`${filePath}:${i + 1}:${lines[i]}`);
+                            emittedLines.add(i);
+                        }
                         // Emit context-after lines
                         for (let a = i + 1; a <= Math.min(lines.length - 1, i + contextAfter); a++) {
-                            if (results.length < limit) results.push(`${filePath}:${a + 1}-${lines[a]}`);
+                            if (!emittedLines.has(a) && results.length < limit) {
+                                results.push(`${filePath}:${a + 1}-${lines[a]}`);
+                                emittedLines.add(a);
+                            }
                         }
                     }
                     if (results.length >= limit) return;

@@ -14,10 +14,13 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 
 const DEFAULT_LIMIT = 2000;
+const MAX_CACHE_ENTRIES = 500; // E9: cap unbounded growth in long sessions
 
 // Track which files have been read (used by Edit and Write tools)
 const readFiles = new Set();
 // Cache last rendered output by path+mtime to avoid re-reading unchanged files every turn.
+// Key: resolved filePath. Only cached for default (full-file) reads — partial reads (offset/limit)
+// are not cached so they never pollute the entry for the full-file view (E1).
 const contentCache = new Map();
 
 export function hasBeenRead(filePath) {
@@ -32,6 +35,30 @@ export function clearReadTracking() {
     // Fix: reset stale read/edit state and cached outputs between sessions.
     readFiles.clear();
     contentCache.clear();
+}
+
+/**
+ * Invalidate the cached output for a single file (E2).
+ * Called by Edit, Write, and MultiEdit after a successful write so that a
+ * subsequent Read always re-reads from disk rather than returning stale content.
+ * @param {string} filePath - resolved absolute path
+ */
+export function invalidateCache(filePath) {
+    contentCache.delete(path.resolve(filePath));
+}
+
+/**
+ * Write a new entry into contentCache, evicting the oldest entry first if the
+ * cache has grown too large (E9 — prevents unbounded growth in long sessions).
+ * @param {string} key  - resolved file path (cache key)
+ * @param {object} value - { mtime, output }
+ */
+function setCacheEntry(key, value) {
+    if (contentCache.size >= MAX_CACHE_ENTRIES) {
+        // Map preserves insertion order; the first key is the oldest entry.
+        contentCache.delete(contentCache.keys().next().value);
+    }
+    contentCache.set(key, value);
 }
 
 // Binary detection: check for null bytes in first 8KB
@@ -75,17 +102,23 @@ export const ReadTool = {
             return `Error: ${filePath} is a directory, not a file. Use Bash with ls to list directory contents.`;
         }
         const mtime = stat.mtimeMs;
-        const cached = contentCache.get(filePath);
-        if (cached && cached.mtime === mtime) {
-            readFiles.add(filePath);
-            return cached.output;
+        // E1: only use the mtime cache for full-file (default) reads.
+        // Partial reads (offset/limit specified) are not cached to avoid polluting
+        // the full-file cache entry with a truncated view.
+        const isDefaultRead = !input.offset && !input.limit;
+        if (isDefaultRead) {
+            const cached = contentCache.get(filePath);
+            if (cached && cached.mtime === mtime) {
+                readFiles.add(filePath);
+                return cached.output;
+            }
         }
 
         // PDF handling
         if (filePath.endsWith('.pdf')) {
             const output = readPdf(filePath, input.pages);
             readFiles.add(filePath);
-            contentCache.set(filePath, { mtime, output });
+            if (isDefaultRead) setCacheEntry(filePath, { mtime, output });
             return output;
         }
 
@@ -118,7 +151,7 @@ export const ReadTool = {
             // Handle empty files
             if (content === '' || (content.length === 0)) {
                 const output = '[File exists but is empty]';
-                contentCache.set(filePath, { mtime, output });
+                if (isDefaultRead) setCacheEntry(filePath, { mtime, output });
                 return output;
             }
 
@@ -129,11 +162,11 @@ export const ReadTool = {
 
             if (end < lines.length) {
                 const truncatedOutput = output + `\n\n[File has ${lines.length} lines total. Showing lines ${start + 1}-${end}. Use offset/limit for more.]`;
-                contentCache.set(filePath, { mtime, output: truncatedOutput });
+                if (isDefaultRead) setCacheEntry(filePath, { mtime, output: truncatedOutput });
                 return truncatedOutput;
             }
 
-            contentCache.set(filePath, { mtime, output });
+            if (isDefaultRead) setCacheEntry(filePath, { mtime, output });
             return output;
         } catch (e) {
             return `Error: ${e.message}`;

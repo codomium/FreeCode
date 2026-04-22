@@ -62,11 +62,18 @@ function callKey(name, input) {
 }
 
 export class StuckDetector {
-    constructor() {
+    /**
+     * @param {object} [options]
+     * @param {number} [options.volumeLimit] - Max tool calls per turn before VOLUME_LIMIT fires (default 20).
+     *   Raise this for workflows that legitimately make many sequential tool calls (e.g. bulk file renames).
+     */
+    constructor(options = {}) {
         /** @type {Array<{name: string, input: object|null, result: string, isError: boolean}>} */
         this._history = [];
         /** @type {number} Total tool calls since last resetTurn() */
         this._turnCallCount = 0;
+        /** @type {number} Configurable per-turn call limit (E10) */
+        this._volumeLimit = options.volumeLimit ?? 20;
     }
 
     /**
@@ -98,12 +105,12 @@ export class StuckDetector {
      */
     check() {
         // ── 1. VOLUME_LIMIT ─────────────────────────────────────────────────
-        if (this._turnCallCount > 20) {
+        if (this._turnCallCount > this._volumeLimit) {
             const last = this._history[this._history.length - 1];
             return {
                 reason: 'VOLUME_LIMIT',
                 summary:
-                    `More than 20 tool calls were made in a single response turn without ` +
+                    `More than ${this._volumeLimit} tool calls were made in a single response turn without ` +
                     `a user message. Last tool attempted: "${last?.name}". ` +
                     `Last result: ${last?.result?.slice(0, 200) || '(none)'}`,
             };

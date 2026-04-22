@@ -49,7 +49,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         model,
         tools,
         _contextManager: contextManager,
-        _stuckDetector: new StuckDetector(), // loop-detection
+        _stuckDetector: new StuckDetector({ volumeLimit: settings.volumeLimit }), // loop-detection (E10: configurable limit)
         sessionGoal: settings.sessionGoal || null,  // sticky goal that survives compaction
         sessionId: settings.sessionId || null,       // opaque ID for cross-session summary persistence
     };

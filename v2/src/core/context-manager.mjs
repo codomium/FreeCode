@@ -274,7 +274,7 @@ export class ContextManager {
         for (const msg of messages) {
             if (typeof msg.content === 'string') {
                 if (msg.role === 'user' && msg.content.length > 20 && !msg.content.startsWith('[Context compacted')) {
-                    keyDecisions.push(msg.content.slice(0, 150));
+                    keyDecisions.push(msg.content.slice(0, MAX_MSG_SUMMARY));
                 }
             } else if (Array.isArray(msg.content)) {
                 for (const b of msg.content) {
@@ -282,21 +282,28 @@ export class ContextManager {
                         toolsUsed.push(b.name);
                         if (b.name === 'Edit' && b.input?.file_path) {
                             filesEdited.add(b.input.file_path);
-                            editSummaries.push(`- Edit: ${b.input.file_path} (${String(b.input.old_string || '').length}→${String(b.input.new_string || '').length} chars)`);
+                            // E14: report line counts (more useful than raw char counts)
+                            const oldLines = String(b.input.old_string || '').split('\n').length;
+                            const newLines = String(b.input.new_string || '').split('\n').length;
+                            editSummaries.push(`- Edit: ${b.input.file_path} (${oldLines}→${newLines} lines)`);
                         } else if (b.name === 'Write' && b.input?.file_path) {
                             filesEdited.add(b.input.file_path);
-                            editSummaries.push(`- Write: ${b.input.file_path} (${String(b.input.content || '').length} chars)`);
+                            const lineCount = String(b.input.content || '').split('\n').length;
+                            editSummaries.push(`- Write: ${b.input.file_path} (${lineCount} lines)`);
                         } else if (b.name === 'MultiEdit' && Array.isArray(b.input?.edits)) {
                             for (const e of b.input.edits) {
                                 if (e.file_path) {
                                     filesEdited.add(e.file_path);
-                                    editSummaries.push(`- MultiEdit: ${e.file_path} (${String(e.old_string || '').length}→${String(e.new_string || '').length} chars)`);
+                                    const oldLines = String(e.old_string || '').split('\n').length;
+                                    const newLines = String(e.new_string || '').split('\n').length;
+                                    editSummaries.push(`- MultiEdit: ${e.file_path} (${oldLines}→${newLines} lines)`);
                                 }
                             }
                         }
                     }
+                    // E15: use the same MAX_TEXT_BLOCK_SUMMARY constant as compact()
                     if (b.type === 'text' && msg.role === 'assistant' && b.text?.length > 50) {
-                        keyDecisions.push('[assistant] ' + b.text.slice(0, 150));
+                        keyDecisions.push('[assistant] ' + b.text.slice(0, MAX_TEXT_BLOCK_SUMMARY));
                     }
                 }
             }
