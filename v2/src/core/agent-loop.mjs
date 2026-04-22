@@ -12,6 +12,10 @@ import { StuckDetector } from './stuck-detector.mjs';
 import fs from 'fs';
 import path from 'path';
 
+// Monotonic counter for generating unique IDs within this process (e.g. Gemini tool-call IDs).
+let _idCounter = 0;
+function nextId() { return ++_idCounter; }
+
 /**
  * NVIDIA NIM models that CAN use chat_template_kwargs.thinking=true for
  * extended reasoning — but only when NVIDIA_THINKING_MODE=true is set.
@@ -49,7 +53,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         model,
         tools,
         _contextManager: contextManager,
-        _stuckDetector: new StuckDetector(), // loop-detection
+        _stuckDetector: new StuckDetector({ volumeLimit: settings.volumeLimit }), // loop-detection (E10: configurable limit)
         sessionGoal: settings.sessionGoal || null,  // sticky goal that survives compaction
         sessionId: settings.sessionId || null,       // opaque ID for cross-session summary persistence
     };
@@ -293,7 +297,9 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 
                 // Verify write: after a successful Write call, read the file back and
                 // diff it against the intended content.  Emit a warning if they diverge.
-                if (block.name === 'Write' && !isToolError && typeof result === 'string' && result.startsWith('File written:')) {
+                // F2: gated behind settings.verifyWrites (default false) to avoid
+                //     redundant fs reads — the tool result already includes a preview.
+                if (settings.verifyWrites && block.name === 'Write' && !isToolError && typeof result === 'string' && result.startsWith('File written:')) {
                     const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
                     if (filePath && typeof block.input?.content === 'string') {
                         const { match, diff } = verifyWrite(filePath, block.input.content);
@@ -309,7 +315,8 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 
                 // Verify edit: after a successful Edit call, read the file back and
                 // confirm new_string is present and old_string is gone.
-                if (block.name === 'Edit' && !isToolError && typeof result === 'string' && result.startsWith('File updated:')) {
+                // F2: gated behind settings.verifyWrites (default false).
+                if (settings.verifyWrites && block.name === 'Edit' && !isToolError && typeof result === 'string' && result.startsWith('File updated:')) {
                     const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
                     if (filePath && typeof block.input?.new_string === 'string') {
                         const { match, message } = verifyEdit(filePath, block.input.old_string || '', block.input.new_string);
@@ -321,7 +328,8 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 
                 // Verify multi-edit: after a successful MultiEdit call, verify each
                 // edit's new_string is present in the corresponding file.
-                if (block.name === 'MultiEdit' && !isToolError && typeof result === 'string' && result.startsWith('Applied')) {
+                // F2: gated behind settings.verifyWrites (default false).
+                if (settings.verifyWrites && block.name === 'MultiEdit' && !isToolError && typeof result === 'string' && result.startsWith('Applied')) {
                     const edits = Array.isArray(block.input?.edits) ? block.input.edits : [];
                     for (const edit of edits) {
                         if (!edit.file_path || typeof edit.new_string !== 'string') continue;
@@ -571,19 +579,56 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
     const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('GOOGLE_API_KEY or GEMINI_API_KEY not set');
 
+    // F4: convert all message types including tool_use / tool_result
     const contents = [];
     for (const msg of state.messages) {
         const role = msg.role === 'assistant' ? 'model' : 'user';
         if (typeof msg.content === 'string') {
             contents.push({ role, parts: [{ text: msg.content }] });
+        } else if (Array.isArray(msg.content)) {
+            const parts = [];
+            for (const block of msg.content) {
+                if (block.type === 'text') {
+                    parts.push({ text: block.text || '' });
+                } else if (block.type === 'tool_use') {
+                    // assistant called a tool → Gemini functionCall part
+                    parts.push({ functionCall: { name: block.name, args: block.input ?? {} } });
+                } else if (block.type === 'tool_result') {
+                    // user returned tool result → Gemini functionResponse part
+                    const responseContent = typeof block.content === 'string'
+                        ? block.content
+                        : JSON.stringify(block.content);
+                    parts.push({
+                        functionResponse: {
+                            name: block.tool_use_id || '',
+                            response: { output: responseContent },
+                        },
+                    });
+                }
+            }
+            if (parts.length > 0) {
+                contents.push({ role, parts });
+            }
         }
     }
+
+    // F4: pass tool definitions as Gemini function declarations
+    const googleTools = toolDefs.length > 0
+        ? [{
+            functionDeclarations: toolDefs.map(t => ({
+                name: t.name,
+                description: t.description || '',
+                parameters: t.input_schema || { type: 'object', properties: {} },
+            })),
+        }]
+        : undefined;
 
     const body = {
         contents,
         ...(state.systemPrompt && {
             systemInstruction: { parts: [{ text: state.systemPrompt }] },
         }),
+        ...(googleTools && { tools: googleTools }),
     };
 
     const res = await fetch(
@@ -814,7 +859,12 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
 
 /**
  * Build an OpenAI-style messages array from agent loop state.
- * Handles system prompt, plain-text turns, and tool_result turns.
+ *
+ * F3: assistant content arrays that contain tool_use blocks now emit a proper
+ *     { role:'assistant', tool_calls:[...] } message so that OpenAI-compatible
+ *     APIs can correctly correlate assistant tool calls with their results.
+ * F7: all text blocks in the same assistant message are merged into a single
+ *     content string to avoid exploding the turn count.
  */
 function buildOpenAIMessages(state) {
     const messages = [];
@@ -825,17 +875,52 @@ function buildOpenAIMessages(state) {
         if (typeof msg.content === 'string') {
             messages.push({ role: msg.role, content: msg.content });
         } else if (Array.isArray(msg.content)) {
-            for (const block of msg.content) {
-                if (block.type === 'tool_result') {
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: block.tool_use_id,
-                        content: typeof block.content === 'string'
-                            ? block.content
-                            : JSON.stringify(block.content),
-                    });
-                } else if (block.type === 'text') {
-                    messages.push({ role: msg.role, content: block.text });
+            if (msg.role === 'assistant') {
+                // F3 + F7: merge text blocks; emit tool_calls list for tool_use blocks
+                const textParts = [];
+                const toolCalls = [];
+                for (const block of msg.content) {
+                    if (block.type === 'text') {
+                        textParts.push(block.text || '');
+                    } else if (block.type === 'tool_use') {
+                        toolCalls.push({
+                            id: block.id,
+                            type: 'function',
+                            function: {
+                                name: block.name,
+                                arguments: JSON.stringify(block.input ?? {}),
+                            },
+                        });
+                    }
+                    // thinking blocks are not forwarded to OpenAI-style providers
+                }
+                if (textParts.length > 0 || toolCalls.length > 0) {
+                    const assistantMsg = { role: 'assistant' };
+                    if (textParts.length > 0) assistantMsg.content = textParts.join('');
+                    if (toolCalls.length > 0) assistantMsg.tool_calls = toolCalls;
+                    messages.push(assistantMsg);
+                }
+            } else {
+                // user role: emit tool_result blocks as 'tool' role messages,
+                // then any text blocks as a regular user message
+                const toolResults = [];
+                const textParts = [];
+                for (const block of msg.content) {
+                    if (block.type === 'tool_result') {
+                        toolResults.push({
+                            role: 'tool',
+                            tool_call_id: block.tool_use_id,
+                            content: typeof block.content === 'string'
+                                ? block.content
+                                : JSON.stringify(block.content),
+                        });
+                    } else if (block.type === 'text') {
+                        textParts.push(block.text || '');
+                    }
+                }
+                for (const tr of toolResults) messages.push(tr);
+                if (textParts.length > 0) {
+                    messages.push({ role: 'user', content: textParts.join('') });
                 }
             }
         }
@@ -1093,11 +1178,22 @@ function convertGoogleResponse(data) {
     const content = [];
     for (const part of candidate.content?.parts || []) {
         if (part.text) content.push({ type: 'text', text: part.text });
+        // F4: surface function calls (tool_use) from Gemini responses
+        if (part.functionCall) {
+            content.push({
+                type: 'tool_use',
+                // Gemini doesn't provide stable call IDs; use a monotonic process-scoped
+                // counter to guarantee uniqueness even for same-millisecond parallel calls.
+                id: `${part.functionCall.name}_${nextId()}`,
+                name: part.functionCall.name,
+                input: part.functionCall.args ?? {},
+            });
+        }
     }
 
     return {
         content,
-        stop_reason: 'end_turn',
+        stop_reason: candidate.finishReason === 'STOP' ? 'end_turn' : (candidate.finishReason || 'end_turn'),
         usage: {
             input_tokens: data.usageMetadata?.promptTokenCount || 0,
             output_tokens: data.usageMetadata?.candidatesTokenCount || 0,
@@ -1155,12 +1251,14 @@ function accumulateFromCollected(events) {
 /**
  * Detect repetitive output patterns in streamed text.
  *
- * Returns true when the model appears to be stuck generating repeated phrases —
- * a sign of a "stuck loop" condition where the model repeats the same sentence
- * or paragraph hundreds of times without making progress.
+ * Returns true when the model appears to be stuck generating repeated phrases.
  *
- * Algorithm: look for any phrase of length 20–300 chars that appears ≥5 times
- * in the most recent 800 characters of accumulated output.
+ * Two detection passes:
+ *  1. (original) Look for any phrase of length 20–300 chars that appears ≥5 times
+ *     in the most recent 800 characters — catches tight word-for-word loops.
+ *  2. (F11) Rolling-window hash pass — divide the last 4000 chars into 500-char
+ *     windows and compare their djb2 hashes. If the same hash appears ≥3 times
+ *     the model is repeating a large block (slow drift loops).
  *
  * @param {string} text - accumulated streamed text so far
  * @returns {boolean}
@@ -1168,21 +1266,47 @@ function accumulateFromCollected(events) {
 function detectRepetition(text) {
     if (text.length < 200) return false;
 
-    // Examine only the tail window to keep the check O(1) in total output size
+    // ── Pass 1: tight phrase repetition (original algorithm) ────────────────
     const tail = text.slice(-800);
-
     for (let phraseLen = 20; phraseLen <= 300; phraseLen += 10) {
         if (phraseLen >= tail.length) break;
         const phrase = tail.slice(-phraseLen);
-        // Count non-overlapping occurrences using indexOf (no regex compilation)
         let count = 0;
         let pos = 0;
         while ((pos = tail.indexOf(phrase, pos)) !== -1) {
             count++;
-            pos += phraseLen; // skip past this match (non-overlapping)
+            pos += phraseLen;
             if (count >= 5) return true;
         }
     }
 
+    // ── Pass 2: F11 — rolling-window hash for slow drift loops ──────────────
+    if (text.length >= 2000) {
+        const WINDOW = 500;
+        const STEP   = 1000;
+        const big = text.slice(-4000);
+        const hashCounts = new Map();
+        for (let i = 0; i + WINDOW <= big.length; i += STEP) {
+            const h = djb2Hash(big.slice(i, i + WINDOW));
+            const c = (hashCounts.get(h) || 0) + 1;
+            if (c >= 3) return true;
+            hashCounts.set(h, c);
+        }
+    }
+
     return false;
+}
+
+/**
+ * Fast 32-bit djb2 hash for repetition detection.
+ * @param {string} s
+ * @returns {number}
+ */
+function djb2Hash(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) + h) ^ s.charCodeAt(i);
+        h |= 0; // keep 32-bit
+    }
+    return h;
 }

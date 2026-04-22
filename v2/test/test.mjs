@@ -77,7 +77,7 @@ const toolList = registry.list();
 assert(toolList.length >= 25, `Should have at least 25 tools, got ${toolList.length}`);
 
 const expectedTools = [
-    'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'Agent',
+    'Bash', 'Read', 'ReadMany', 'Edit', 'Write', 'Glob', 'Grep', 'Agent',
     'WebFetch', 'WebSearch', 'TodoWrite', 'NotebookEdit', 'MultiEdit',
     'LS', 'ToolSearch', 'AskUser', 'EnterWorktree', 'ExitWorktree',
     'Skill', 'SendMessage', 'RemoteTrigger', 'CronCreate', 'CronDelete',
@@ -139,6 +139,11 @@ assertIncludes(lsResult, '/tmp', 'LS includes path');
 const readResult = await registry.call('Read', { file_path: import.meta.url.replace('file://', '') });
 assertType(readResult, 'string', 'Read returns string');
 assertIncludes(readResult, 'Tool Registry', 'Read returns file content');
+
+const readManyResult = await registry.call('ReadMany', { file_paths: [import.meta.url.replace('file://', '')] });
+assertType(readManyResult, 'string', 'ReadMany returns string');
+assertIncludes(readManyResult, '=== ', 'ReadMany includes file header');
+assertIncludes(readManyResult, 'Tool Registry', 'ReadMany returns file content');
 
 // TodoWrite
 const todoResult = await registry.call('TodoWrite', {
@@ -993,10 +998,20 @@ assertIncludes(readOffset, '6\t', 'Read offset starts at correct line');
 const readDir = await registry.call('Read', { file_path: '/tmp' });
 assertIncludes(readDir, 'directory', 'Read rejects directory');
 
+// Read: cache invalidates on mtime change
+const readCacheFile = path.join(os.tmpdir(), 'occ-read-cache-' + Date.now() + '.txt');
+fs.writeFileSync(readCacheFile, 'before');
+const readCacheBefore = await registry.call('Read', { file_path: readCacheFile });
+assertIncludes(readCacheBefore, 'before', 'Read cache test baseline content');
+fs.writeFileSync(readCacheFile, 'after');
+const readCacheAfter = await registry.call('Read', { file_path: readCacheFile });
+assertIncludes(readCacheAfter, 'after', 'Read cache invalidates when file mtime changes');
+fs.unlinkSync(readCacheFile);
+
 section('Phase 1: Edit Tool (replace_all, uniqueness, read-first)');
 
 // Edit: requires read first
-import { hasBeenRead, markRead } from '../src/tools/read.mjs';
+import { clearReadTracking, hasBeenRead, markRead } from '../src/tools/read.mjs';
 const editTestFile = path.join(os.tmpdir(), 'occ-edit-test-' + Date.now() + '.txt');
 fs.writeFileSync(editTestFile, 'aaa bbb aaa ccc');
 
@@ -1025,7 +1040,38 @@ const editAll = await registry.call('Edit', {
 });
 assertIncludes(editAll, 'updated', 'Edit replace_all succeeds');
 assertEqual(fs.readFileSync(editTestFile, 'utf-8'), 'xxx bbb xxx ccc', 'Edit replaced all');
+assertIncludes(editAll, 'Replaced', 'Edit success includes replacement summary');
+assertIncludes(editAll, 'New content preview', 'Edit success includes preview');
 fs.unlinkSync(editTestFile);
+
+// Clear read tracking should enforce read-first contract again
+const editResetFile = path.join(os.tmpdir(), 'occ-edit-reset-' + Date.now() + '.txt');
+fs.writeFileSync(editResetFile, 'alpha');
+markRead(editResetFile);
+assert(hasBeenRead(editResetFile), 'Read tracking marks file as read');
+clearReadTracking();
+assert(!hasBeenRead(editResetFile), 'clearReadTracking clears read tracking');
+const editAfterReset = await registry.call('Edit', {
+    file_path: editResetFile,
+    old_string: 'alpha',
+    new_string: 'beta',
+});
+assertIncludes(editAfterReset, 'must Read', 'Edit requires fresh Read after tracking reset');
+fs.unlinkSync(editResetFile);
+
+section('Phase 1: MultiEdit conflict handling');
+
+const multiEditConflictFile = path.join(os.tmpdir(), 'occ-multiedit-conflict-' + Date.now() + '.txt');
+fs.writeFileSync(multiEditConflictFile, 'hello world');
+markRead(multiEditConflictFile);
+const multiEditConflict = await registry.call('MultiEdit', {
+    edits: [
+        { file_path: multiEditConflictFile, old_string: 'hello', new_string: 'hi' },
+        { file_path: multiEditConflictFile, old_string: 'hello', new_string: 'hey' },
+    ],
+});
+assertIncludes(multiEditConflict, 'invalidated by a prior edit', 'MultiEdit reports invalidated follow-up edit');
+fs.unlinkSync(multiEditConflictFile);
 
 section('Phase 1: Write Tool (read-first for overwrite)');
 
@@ -1093,6 +1139,13 @@ const grepInsensitive = await registry.call('Grep', {
     output_mode: 'content',
 });
 assertIncludes(grepInsensitive, 'Hello', 'Grep case insensitive');
+
+const grepDefaultMode = await registry.call('Grep', {
+    pattern: 'Hello',
+    path: grepDir,
+});
+assertIncludes(grepDefaultMode, 'Hello', 'Grep defaults to content mode');
+assertIncludes(grepDefaultMode, 'foo bar', 'Grep default content mode includes context lines');
 
 fs.rmSync(grepDir, { recursive: true, force: true });
 

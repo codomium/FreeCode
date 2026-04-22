@@ -8,7 +8,17 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { hasBeenRead, markRead } from './read.mjs';
+import { hasBeenRead, markRead, invalidateCache } from './read.mjs';
+
+const MAX_WRITE_PREVIEW = 300;
+
+function formatWriteSuccess(filePath, content) {
+    const lineCount = content.split('\n').length;
+    const preview = content.length > MAX_WRITE_PREVIEW
+        ? `${content.slice(0, MAX_WRITE_PREVIEW)}...`
+        : content;
+    return `File written: ${filePath}\nWrote ${lineCount} line(s)\nContent preview:\n${preview}`;
+}
 
 export const WriteTool = {
     name: 'Write',
@@ -46,8 +56,9 @@ export const WriteTool = {
 
         try {
             fs.writeFileSync(filePath, input.content);
+            invalidateCache(filePath); // E2: clear stale cached Read output
             markRead(filePath); // Mark as read after writing
-            return `File written: ${filePath}`;
+            return formatWriteSuccess(filePath, input.content);
         } catch (e) {
             return `Error writing file: ${e.message}`;
         }

@@ -53,20 +53,50 @@ function extractTargetFile(input) {
 
 /**
  * Build a canonical key for a tool call (name + serialised input).
+ *
+ * F14: for large inputs (serialised length > 1000 chars) we use a lightweight
+ *      djb2 hash so that repeated Write/Edit calls with big file contents don't
+ *      generate huge strings on every comparison in the hot path.
+ *
  * @param {string} name
  * @param {object|null} input
  * @returns {string}
  */
 function callKey(name, input) {
-    return name + ':' + JSON.stringify(input ?? null);
+    const serialised = JSON.stringify(input ?? null);
+    if (serialised.length > 1000) {
+        return name + ':hash:' + djb2Hash(serialised);
+    }
+    return name + ':' + serialised;
+}
+
+/**
+ * Fast 32-bit djb2 hash used by callKey for large inputs.
+ * @param {string} s
+ * @returns {number}
+ */
+function djb2Hash(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) + h) ^ s.charCodeAt(i);
+        h |= 0;
+    }
+    return h;
 }
 
 export class StuckDetector {
-    constructor() {
+    /**
+     * @param {object} [options]
+     * @param {number} [options.volumeLimit] - Max tool calls per turn before VOLUME_LIMIT fires (default 20).
+     *   Raise this for workflows that legitimately make many sequential tool calls (e.g. bulk file renames).
+     */
+    constructor(options = {}) {
         /** @type {Array<{name: string, input: object|null, result: string, isError: boolean}>} */
         this._history = [];
         /** @type {number} Total tool calls since last resetTurn() */
         this._turnCallCount = 0;
+        /** @type {number} Configurable per-turn call limit (E10) */
+        this._volumeLimit = options.volumeLimit ?? 20;
     }
 
     /**
@@ -98,12 +128,12 @@ export class StuckDetector {
      */
     check() {
         // ── 1. VOLUME_LIMIT ─────────────────────────────────────────────────
-        if (this._turnCallCount > 20) {
+        if (this._turnCallCount > this._volumeLimit) {
             const last = this._history[this._history.length - 1];
             return {
                 reason: 'VOLUME_LIMIT',
                 summary:
-                    `More than 20 tool calls were made in a single response turn without ` +
+                    `More than ${this._volumeLimit} tool calls were made in a single response turn without ` +
                     `a user message. Last tool attempted: "${last?.name}". ` +
                     `Last result: ${last?.result?.slice(0, 200) || '(none)'}`,
             };

@@ -194,7 +194,10 @@ function stripAnsi(str) {
     return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 }
 
-const MAX_OUTPUT_BYTES = 1024 * 1024; // 1MB
+const MAX_OUTPUT_BYTES = 1024 * 1024; // 1MB hard cap (internal buffer)
+// F12: default cap returned to the model — keeps tool results well under context limits.
+// Callers can raise this via input.max_output_bytes (up to MAX_OUTPUT_BYTES).
+const DEFAULT_MODEL_OUTPUT_BYTES = 32 * 1024; // 32KB
 
 // Active interactive bash processes keyed by job ID (for stdin injection)
 const activeBashStdins = new Map(); // jobId -> WritableStream (proc.stdin)
@@ -223,6 +226,7 @@ export const BashTool = {
             timeout: { type: 'number', description: 'Timeout in ms (max 600000)', default: 120000 },
             description: { type: 'string', description: 'Description of what this command does' },
             run_in_background: { type: 'boolean', description: 'Run in background', default: false },
+            max_output_bytes: { type: 'number', description: 'Max output bytes returned to model (default 32768, max 1048576). Increase only if you need to process large command output.' },
         },
         required: ['command'],
     },
@@ -325,6 +329,16 @@ export const BashTool = {
                 finalResult = code !== 0
                     ? `Exit code: ${code}\n${combined}`.trim()
                     : combined || '(no output)';
+            }
+
+            // F12: cap the result returned to the model to avoid flooding the context window.
+            const modelCap = Math.min(
+                Math.max(1, input.max_output_bytes || DEFAULT_MODEL_OUTPUT_BYTES),
+                MAX_OUTPUT_BYTES,
+            );
+            if (finalResult.length > modelCap) {
+                finalResult = finalResult.slice(0, modelCap) +
+                    `\n\n[Output truncated at ${modelCap} bytes. Use head/tail/grep to narrow the output.]`;
             }
 
             push({ type: 'done' });

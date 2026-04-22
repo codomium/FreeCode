@@ -1,5 +1,24 @@
 'use strict';
 
+const CODE_BLOCK_BONUS = 500;
+const ERROR_PENALTY = 3000;
+
+/**
+ * Score a provider result for quality ranking.
+ * E8: extracted from _pickBest so the same heuristic is reused in the voting
+ * strategy tiebreaker, replacing the raw-length sort that was there before.
+ * Higher score = preferred answer.
+ * @param {{ text: string }} r
+ * @returns {number}
+ */
+function computeResponseScore(r) {
+    const errorPattern = /\b(error:|failed:|exception:|traceback:|cannot|undefined is not)\b/i;
+    let s = (r.text || '').length;
+    if (errorPattern.test(r.text || '')) s -= ERROR_PENALTY;
+    if (/```/.test(r.text || '')) s += CODE_BLOCK_BONUS;
+    return s;
+}
+
 class MultiAgentOrchestrator {
     constructor({ providers, strategy, createBridge }) {
         this.providers = Array.isArray(providers) ? providers : [];
@@ -28,7 +47,9 @@ class MultiAgentOrchestrator {
 
     _pickBest(results) {
         if (!results.length) return null;
-        return results.slice().sort((a, b) => (b.text || '').length - (a.text || '').length)[0];
+        // Fix: avoid picking verbose error responses just because they are longer.
+        // E8: delegate to the module-level computeResponseScore function.
+        return results.slice().sort((a, b) => computeResponseScore(b) - computeResponseScore(a))[0];
     }
 
     async _runProvider(provider, prompt, onEvent) {
@@ -92,11 +113,12 @@ class MultiAgentOrchestrator {
                     const k = this._normalize(r.text);
                     buckets.set(k, (buckets.get(k) || 0) + 1);
                 }
+                // E8: use computeResponseScore as the tiebreaker instead of raw length.
                 results.sort((a, b) => {
                     const av = buckets.get(this._normalize(a.text)) || 0;
                     const bv = buckets.get(this._normalize(b.text)) || 0;
                     if (bv !== av) return bv - av;
-                    return (b.text || '').length - (a.text || '').length;
+                    return computeResponseScore(b) - computeResponseScore(a);
                 });
             } else {
                 const settled = await Promise.allSettled(providers.map((p) => this._runProvider(p, message, onEvent)));

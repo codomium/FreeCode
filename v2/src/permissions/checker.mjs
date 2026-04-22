@@ -35,6 +35,16 @@ export function createPermissionChecker(config = {}) {
                 }
             }
 
+            // E3: ReadMany passes an array of paths — validate each one individually.
+            if (toolName === 'ReadMany' && Array.isArray(input?.file_paths)) {
+                for (const fp of input.file_paths) {
+                    const pathResult = validatePath(fp, { write: false });
+                    if (!pathResult.safe) {
+                        return false; // block unsafe paths
+                    }
+                }
+            }
+
             // WebSearch and WebFetch are always allowed in every mode, including dontAsk.
             // SAFE_TOOLS in prompt.mjs covers default mode (no prompt); this guard covers
             // dontAsk mode which would otherwise block all tools unconditionally.

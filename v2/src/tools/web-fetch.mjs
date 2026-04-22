@@ -111,7 +111,9 @@ export const WebFetchTool = {
                 ? text.slice(0, maxLength) + `\n...[truncated at ${maxLength} chars]`
                 : text;
 
-            return `Content-Type: ${contentType}\nLength: ${text.length}\n\n${truncated}`;
+            // F15: omit Content-Type / Length header lines — they consume tokens without
+            // value to the model; non-200 responses are already surfaced as errors above.
+            return truncated;
         } catch (err) {
             return `Fetch error: ${err.message}`;
         }

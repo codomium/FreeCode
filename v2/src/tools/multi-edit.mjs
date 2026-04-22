@@ -7,7 +7,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { hasBeenRead, markRead } from './read.mjs';
+import { hasBeenRead, markRead, invalidateCache } from './read.mjs';
 import {
     normalizeContent,
     normalizeLineEndings,
@@ -119,26 +119,42 @@ export const MultiEditTool = {
         }
 
         // Phase 2: Apply all edits (using normalized content)
-        for (const edit of input.edits) {
+        const editSummaries = []; // E5: collect per-edit preview for richer return message
+        const MAX_EDIT_PREVIEW = 200;
+        for (let i = 0; i < input.edits.length; i++) {
+            const edit = input.edits[i];
             const filePath = path.resolve(edit.file_path);
             let content = fileContents.get(filePath);
             // Prefer the whitespace-normalized actual substring (_wsNormalizedOld), then the
             // exact normalized string (_normalizedOld), then fall back to re-normalizing inline.
             const searchStr = edit._wsNormalizedOld ?? edit._normalizedOld ?? normalizeLineEndings(edit.old_string);
             const replaceStr = normalizeLineEndings(edit.new_string);
+            // Fix: detect invalidated same-file follow-up edits instead of silently dropping them.
+            const before = content;
             content = content.replace(searchStr, replaceStr);
+            if (content === before) {
+                return `Error: edit[${i}] (${edit.file_path}) - old_string was invalidated by a prior edit to the same file. Reorder edits so they don't overlap, or split into separate MultiEdit calls.`;
+            }
             fileContents.set(filePath, content);
+            // E5: record line delta and a short preview for the return message
+            const oldLines = searchStr.split('\n').length;
+            const newLines = replaceStr.split('\n').length;
+            const preview = replaceStr.length > MAX_EDIT_PREVIEW
+                ? `${replaceStr.slice(0, MAX_EDIT_PREVIEW)}...`
+                : replaceStr;
+            editSummaries.push(`  edit[${i}] ${edit.file_path}: ${oldLines} line(s) -> ${newLines} line(s)\n    Preview: ${preview}`);
         }
 
         // Phase 3: Write all files (always write with LF endings for consistency)
         const applied = [];
         for (const [filePath, content] of fileContents) {
             fs.writeFileSync(filePath, content);
+            invalidateCache(filePath); // E2: clear stale cached Read output
             // Keep the file tracked as read so subsequent Edit calls work without re-reading
             markRead(filePath);
             applied.push(filePath);
         }
 
-        return `Applied ${input.edits.length} edits to ${applied.length} file(s):\n${applied.join('\n')}`;
+        return `Applied ${input.edits.length} edits to ${applied.length} file(s):\n${applied.join('\n')}\n\n${editSummaries.join('\n')}`;
     },
 };
