@@ -211,7 +211,7 @@ export class ContextManager {
             } else if (Array.isArray(msg.content)) {
                 text = msg.content
                     .map(b => {
-                        if (b.type === 'text') return b.text?.slice(0, Math.min(MAX_MSG_SUMMARY, MAX_TEXT_BLOCK_SUMMARY));
+                        if (b.type === 'text') return b.text?.slice(0, MAX_TEXT_BLOCK_SUMMARY);
                         if (b.type === 'tool_use') return `[tool:${b.name}]`;
                         if (b.type === 'tool_result') return `[result:${String(b.content).slice(0, 250)}]`;
                         return `[${b.type}]`;

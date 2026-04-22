@@ -163,7 +163,6 @@ function hasRipgrep() {
     return result;
 }
 
-let _hasNativeGrep = null;
 /** Check whether the system `grep` binary is available (not available on Windows without WSL/tools). */
 function hasNativeGrep() {
     const now = Date.now();
