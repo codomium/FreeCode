@@ -216,6 +216,60 @@ export function formatToolResult(toolName, result, truncate = true) {
 }
 
 /**
+ * Render a stuck-agent warning panel.
+ *
+ * Displays a yellow/amber box containing the stuck reason, summary, and the
+ * two recovery options [R] and [S] that the caller should handle:
+ *   R — Retry with a hint: prompt the user for a hint, then resume the agent
+ *       with that hint injected as a system message.
+ *   S — Skip this step: mark the step as skipped and continue.
+ *
+ * @param {object} event
+ * @param {'SAME_CALL_LOOP'|'THRASHING_LOOP'|'VOLUME_LIMIT'} event.reason
+ * @param {string} event.summary
+ * @returns {string} Formatted multi-line string ready for stdout/stderr.
+ */
+export function renderStuckPanel(event) {
+    const cols = process.stdout.columns || 80;
+    const { reason = 'UNKNOWN', summary = '' } = event || {};
+
+    const border = c('yellow', '─'.repeat(Math.min(cols - 2, 78)));
+    const label = c('yellow', c('bold', `⚠  Agent stuck — ${reason}`));
+
+    // Word-wrap summary to fit within the panel
+    const maxWidth = Math.min(cols - 4, 76);
+    const words = summary.split(' ');
+    const wrappedLines = [];
+    let line = '';
+    for (const word of words) {
+        if (line && (line + ' ' + word).length > maxWidth) {
+            wrappedLines.push(line);
+            line = word;
+        } else {
+            line = line ? line + ' ' + word : word;
+        }
+    }
+    if (line) wrappedLines.push(line);
+
+    const summaryBlock = wrappedLines.map(l => `  ${c('yellow', l)}`).join('\n');
+
+    const options = [
+        `  ${c('bold', '[R]')} Retry with a hint — type a hint and resume the agent`,
+        `  ${c('bold', '[S]')} Skip this step — mark as skipped and continue`,
+    ].join('\n');
+
+    return [
+        border,
+        `  ${label}`,
+        ``,
+        summaryBlock,
+        ``,
+        options,
+        border,
+    ].join('\n');
+}
+
+/**
  * Clear the screen.
  */
 export function clearScreen() {
