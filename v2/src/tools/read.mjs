@@ -17,6 +17,8 @@ const DEFAULT_LIMIT = 2000;
 
 // Track which files have been read (used by Edit and Write tools)
 const readFiles = new Set();
+// Cache last rendered output by path+mtime to avoid re-reading unchanged files every turn.
+const contentCache = new Map();
 
 export function hasBeenRead(filePath) {
     return readFiles.has(path.resolve(filePath));
@@ -24,6 +26,12 @@ export function hasBeenRead(filePath) {
 
 export function markRead(filePath) {
     readFiles.add(path.resolve(filePath));
+}
+
+export function clearReadTracking() {
+    // Fix: reset stale read/edit state and cached outputs between sessions.
+    readFiles.clear();
+    contentCache.clear();
 }
 
 // Binary detection: check for null bytes in first 8KB
@@ -66,10 +74,19 @@ export const ReadTool = {
         if (stat.isDirectory()) {
             return `Error: ${filePath} is a directory, not a file. Use Bash with ls to list directory contents.`;
         }
+        const mtime = stat.mtimeMs;
+        const cached = contentCache.get(filePath);
+        if (cached && cached.mtime === mtime) {
+            readFiles.add(filePath);
+            return cached.output;
+        }
 
         // PDF handling
         if (filePath.endsWith('.pdf')) {
-            return readPdf(filePath, input.pages);
+            const output = readPdf(filePath, input.pages);
+            readFiles.add(filePath);
+            contentCache.set(filePath, { mtime, output });
+            return output;
         }
 
         // Binary detection
@@ -100,7 +117,9 @@ export const ReadTool = {
 
             // Handle empty files
             if (content === '' || (content.length === 0)) {
-                return '[File exists but is empty]';
+                const output = '[File exists but is empty]';
+                contentCache.set(filePath, { mtime, output });
+                return output;
             }
 
             const output = lines
@@ -109,9 +128,12 @@ export const ReadTool = {
                 .join('\n');
 
             if (end < lines.length) {
-                return output + `\n\n[File has ${lines.length} lines total. Showing lines ${start + 1}-${end}. Use offset/limit for more.]`;
+                const truncatedOutput = output + `\n\n[File has ${lines.length} lines total. Showing lines ${start + 1}-${end}. Use offset/limit for more.]`;
+                contentCache.set(filePath, { mtime, output: truncatedOutput });
+                return truncatedOutput;
             }
 
+            contentCache.set(filePath, { mtime, output });
             return output;
         } catch (e) {
             return `Error: ${e.message}`;
@@ -138,4 +160,3 @@ function readPdf(filePath, pages) {
         return `[PDF file at ${filePath} — pdftotext not available. Install poppler-utils for PDF support.]`;
     }
 }
-

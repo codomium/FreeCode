@@ -119,14 +119,20 @@ export const MultiEditTool = {
         }
 
         // Phase 2: Apply all edits (using normalized content)
-        for (const edit of input.edits) {
+        for (let i = 0; i < input.edits.length; i++) {
+            const edit = input.edits[i];
             const filePath = path.resolve(edit.file_path);
             let content = fileContents.get(filePath);
             // Prefer the whitespace-normalized actual substring (_wsNormalizedOld), then the
             // exact normalized string (_normalizedOld), then fall back to re-normalizing inline.
             const searchStr = edit._wsNormalizedOld ?? edit._normalizedOld ?? normalizeLineEndings(edit.old_string);
             const replaceStr = normalizeLineEndings(edit.new_string);
+            // Fix: detect invalidated same-file follow-up edits instead of silently dropping them.
+            const before = content;
             content = content.replace(searchStr, replaceStr);
+            if (content === before) {
+                return `Error: edit[${i}] (${edit.file_path}) — old_string was invalidated by a prior edit to the same file. Reorder edits so they don't overlap, or split into separate MultiEdit calls.`;
+            }
             fileContents.set(filePath, content);
         }
 

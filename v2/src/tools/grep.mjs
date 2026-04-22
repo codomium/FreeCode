@@ -40,7 +40,7 @@ export const GrepTool = {
             output_mode: {
                 type: 'string',
                 enum: ['content', 'files_with_matches', 'count'],
-                description: 'Output mode (default: files_with_matches)',
+                description: 'Output mode (default: content)',
             },
             glob: { type: 'string', description: 'Glob pattern to filter files' },
             type: { type: 'string', description: 'File type filter (e.g. js, py)' },
@@ -53,8 +53,10 @@ export const GrepTool = {
     async call(input) {
         try {
             const dir = path.resolve(input.path || '.');
-            const mode = input.output_mode || 'files_with_matches';
+            // Fix: default to content mode so follow-up Read calls are less necessary.
+            const mode = input.output_mode || 'content';
             const limit = input.head_limit ?? 250;
+            const defaultCtx = (mode === 'content' && input['-C'] == null && input.context == null && input['-A'] == null && input['-B'] == null) ? 2 : 0;
 
             // Build grep args array — use rg first, fall back to grep, then pure JS
             const args = [];
@@ -73,7 +75,7 @@ export const GrepTool = {
                     if (input['-n'] !== false) args.push('-n');
                 }
 
-                const ctx = input['-C'] || input.context;
+                const ctx = input['-C'] ?? input.context ?? defaultCtx;
                 if (ctx && mode === 'content') args.push('-C', String(ctx));
                 if (input['-A'] && mode === 'content') args.push('-A', String(input['-A']));
                 if (input['-B'] && mode === 'content') args.push('-B', String(input['-B']));
@@ -95,7 +97,7 @@ export const GrepTool = {
                     if (input['-n'] !== false) args.push('-n');
                 }
 
-                const ctx = input['-C'] || input.context;
+                const ctx = input['-C'] ?? input.context ?? defaultCtx;
                 if (ctx && mode === 'content') args.push('-C', String(ctx));
                 if (input['-A'] && mode === 'content') args.push('-A', String(input['-A']));
                 if (input['-B'] && mode === 'content') args.push('-B', String(input['-B']));
@@ -106,7 +108,10 @@ export const GrepTool = {
             } else {
                 // No native grep or rg available — use pure-JS implementation.
                 // This is the common case on Windows without WSL or ripgrep.
-                return jsGrepFallback(input.pattern, dir, input, limit);
+                const fallbackResult = jsGrepFallback(input.pattern, dir, { ...input, _defaultCtx: defaultCtx }, limit);
+                // Fix: explicitly signal slower/less-accurate fallback mode.
+                const warning = '[Warning: ripgrep (rg) and system grep not found — using built-in JS fallback. Install ripgrep for faster, more accurate search.]\n';
+                return warning + fallbackResult;
             }
 
             // Use spawnSync with an argument array to avoid shell injection.
@@ -167,7 +172,7 @@ function hasNativeGrep() {
  * Walks the target path recursively, matching each line against the pattern.
  */
 function jsGrepFallback(pattern, searchPath, options, limit) {
-    const mode = options.output_mode || 'files_with_matches';
+    const mode = options.output_mode || 'content';
     const caseFlag = options['-i'] ? 'i' : '';
     let regex;
     try {
@@ -195,8 +200,9 @@ function jsGrepFallback(pattern, searchPath, options, limit) {
             const lines = content.split('\n');
             let matchCount = 0;
             let fileHasMatch = false;
-            const contextBefore = Number(options['-B'] || options['-C'] || options.context || 0);
-            const contextAfter  = Number(options['-A'] || options['-C'] || options.context || 0);
+            const defaultCtx = Number(options._defaultCtx || 0);
+            const contextBefore = Number(options['-B'] ?? options['-C'] ?? options.context ?? defaultCtx);
+            const contextAfter  = Number(options['-A'] ?? options['-C'] ?? options.context ?? defaultCtx);
 
             for (let i = 0; i < lines.length; i++) {
                 if (regex.test(lines[i])) {

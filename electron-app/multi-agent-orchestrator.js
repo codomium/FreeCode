@@ -28,7 +28,17 @@ class MultiAgentOrchestrator {
 
     _pickBest(results) {
         if (!results.length) return null;
-        return results.slice().sort((a, b) => (b.text || '').length - (a.text || '').length)[0];
+        // Fix: avoid picking verbose error responses just because they are longer.
+        const errorPattern = /\b(error:|failed:|exception:|traceback:|cannot|undefined is not)\b/i;
+        const codeBlockBonus = 500;
+        const errorPenalty = 3000;
+        const score = (r) => {
+            let s = (r.text || '').length;
+            if (errorPattern.test(r.text || '')) s -= errorPenalty;
+            if (/```/.test(r.text || '')) s += codeBlockBonus;
+            return s;
+        };
+        return results.slice().sort((a, b) => score(b) - score(a))[0];
     }
 
     async _runProvider(provider, prompt, onEvent) {

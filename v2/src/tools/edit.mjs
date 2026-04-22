@@ -17,6 +17,15 @@ import {
     tryWhitespaceNormalizedMatch,
 } from './edit-utils.mjs';
 
+function formatEditSuccess(filePath, oldString, newString, note = '') {
+    // Fix: include compact replacement preview so models don't need an immediate Read re-check.
+    const oldLineCount = oldString.split('\n').length;
+    const newLineCount = newString.split('\n').length;
+    const preview = newString.slice(0, 300);
+    const noteSuffix = note ? ` (${note})` : '';
+    return `File updated: ${filePath}${noteSuffix}\nReplaced ${oldLineCount} line(s) → ${newLineCount} line(s)\nNew content preview:\n${preview}`;
+}
+
 export const EditTool = {
     name: 'Edit',
     description: 'Performs exact string replacements in files.',
@@ -86,7 +95,7 @@ export const EditTool = {
                 try {
                     fs.writeFileSync(filePath, content);
                     markRead(filePath);
-                    return `File updated: ${filePath} (matched after whitespace normalization)`;
+                    return formatEditSuccess(filePath, oldString, newString, 'matched after whitespace normalization');
                 } catch (e) {
                     return `Error writing file: ${e.message}`;
                 }
@@ -113,7 +122,7 @@ export const EditTool = {
             fs.writeFileSync(filePath, content);
             // Keep it marked as read
             markRead(filePath);
-            return `File updated: ${filePath}`;
+            return formatEditSuccess(filePath, oldString, newString);
         } catch (e) {
             return `Error writing file: ${e.message}`;
         }

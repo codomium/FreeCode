@@ -18,6 +18,8 @@ const COMPACT_THRESHOLD = 0.80;
 const CHARS_PER_TOKEN = 4; // rough estimate for English text
 const STALE_TOOL_RESULT_TURNS = 5; // tool results older than this are micro-compacted
 const SESSIONS_DIR = path.join(os.homedir(), '.freecode', 'sessions');
+const MAX_MSG_SUMMARY = 500;   // keep more per-message context during full compaction
+const MAX_TOTAL_SUMMARY = 8000; // preserve more historical context across compaction
 
 /**
  * Persist a session summary to disk for cross-session context retention.
@@ -204,13 +206,13 @@ export class ContextManager {
             const role = msg.role;
             let text = '';
             if (typeof msg.content === 'string') {
-                text = msg.content.slice(0, 200);
+                text = msg.content.slice(0, MAX_MSG_SUMMARY);
             } else if (Array.isArray(msg.content)) {
                 text = msg.content
                     .map(b => {
-                        if (b.type === 'text') return b.text?.slice(0, 100);
+                        if (b.type === 'text') return b.text?.slice(0, Math.min(MAX_MSG_SUMMARY, 300));
                         if (b.type === 'tool_use') return `[tool:${b.name}]`;
-                        if (b.type === 'tool_result') return `[result:${String(b.content).slice(0, 80)}]`;
+                        if (b.type === 'tool_result') return `[result:${String(b.content).slice(0, 250)}]`;
                         return `[${b.type}]`;
                     })
                     .filter(Boolean)
@@ -219,7 +221,7 @@ export class ContextManager {
             if (text) summaryParts.push(`${role}: ${text}`);
         }
 
-        const summaryText = summaryParts.join('\n').slice(0, 2000);
+        const summaryText = summaryParts.join('\n').slice(0, MAX_TOTAL_SUMMARY);
 
         const goalPrefix = sessionGoal ? `[Session Goal]: ${sessionGoal}\n\n` : '';
         const summary = {
@@ -264,6 +266,7 @@ export class ContextManager {
         parts.push(`Total messages: ${messages.length}`);
 
         const filesEdited = new Set();
+        const editSummaries = [];
         const toolsUsed = [];
         const keyDecisions = [];
 
@@ -276,12 +279,18 @@ export class ContextManager {
                 for (const b of msg.content) {
                     if (b.type === 'tool_use') {
                         toolsUsed.push(b.name);
-                        if ((b.name === 'Edit' || b.name === 'Write' || b.name === 'MultiEdit') && b.input?.file_path) {
+                        if (b.name === 'Edit' && b.input?.file_path) {
                             filesEdited.add(b.input.file_path);
-                        }
-                        if (b.name === 'MultiEdit' && Array.isArray(b.input?.edits)) {
+                            editSummaries.push(`- Edit: ${b.input.file_path} (${String(b.input.old_string || '').length}→${String(b.input.new_string || '').length} chars)`);
+                        } else if (b.name === 'Write' && b.input?.file_path) {
+                            filesEdited.add(b.input.file_path);
+                            editSummaries.push(`- Write: ${b.input.file_path} (${String(b.input.content || '').length} chars)`);
+                        } else if (b.name === 'MultiEdit' && Array.isArray(b.input?.edits)) {
                             for (const e of b.input.edits) {
-                                if (e.file_path) filesEdited.add(e.file_path);
+                                if (e.file_path) {
+                                    filesEdited.add(e.file_path);
+                                    editSummaries.push(`- MultiEdit: ${e.file_path} (${String(e.old_string || '').length}→${String(e.new_string || '').length} chars)`);
+                                }
                             }
                         }
                     }
@@ -294,6 +303,10 @@ export class ContextManager {
 
         if (filesEdited.size > 0) {
             parts.push('\n## Files edited\n' + [...filesEdited].map(f => `- ${f}`).join('\n'));
+        }
+        if (editSummaries.length > 0) {
+            // Fix: preserve concise edit intent details so resumed sessions retain practical context.
+            parts.push('\n## Edit summaries\n' + editSummaries.join('\n'));
         }
         if (toolsUsed.length > 0) {
             const counts = {};

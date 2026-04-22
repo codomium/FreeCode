@@ -6,6 +6,7 @@
 
 import { BashTool } from './bash.mjs';
 import { ReadTool } from './read.mjs';
+import { ReadManyTool } from './read-many.mjs';
 import { EditTool } from './edit.mjs';
 import { WriteTool } from './write.mjs';
 import { GlobTool } from './glob.mjs';
@@ -33,6 +34,7 @@ import { ReadMcpResourceTool } from './read-mcp-resource.mjs';
 const BUILTIN_TOOLS = [
     BashTool,
     ReadTool,
+    ReadManyTool,
     EditTool,
     WriteTool,
     GlobTool,

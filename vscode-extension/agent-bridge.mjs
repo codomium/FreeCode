@@ -75,6 +75,7 @@ const { HookEngine }           = await import(v2url('hooks/engine.mjs'));
 const { AgentLoader }          = await import(v2url('agents/loader.mjs'));
 const { SkillsLoader }         = await import(v2url('skills/loader.mjs'));
 const { sendBashStdin }        = await import(v2url('tools/bash.mjs'));
+const { clearReadTracking }    = await import(v2url('tools/read.mjs'));
 
 // Redirect console.error/warn to stderr so we don't pollute the ndjson stream.
 // (It already goes to stderr by default, but belt-and-suspenders.)
@@ -180,6 +181,10 @@ async function handleReset(loop) {
     loop.state.messages = [];
     loop.state.turnCount = 0;
     loop.state.tokenUsage = { input: 0, output: 0 };
+    // Fix: clear per-turn stuck detector state so reset starts clean.
+    loop.state._stuckDetector?.resetTurn();
+    // Fix: clear read/edit tracking and cached Read outputs between sessions.
+    clearReadTracking();
     emit({ type: 'ready' });
 }
 
