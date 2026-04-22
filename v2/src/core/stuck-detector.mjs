@@ -53,12 +53,35 @@ function extractTargetFile(input) {
 
 /**
  * Build a canonical key for a tool call (name + serialised input).
+ *
+ * F14: for large inputs (serialised length > 1000 chars) we use a lightweight
+ *      djb2 hash so that repeated Write/Edit calls with big file contents don't
+ *      generate huge strings on every comparison in the hot path.
+ *
  * @param {string} name
  * @param {object|null} input
  * @returns {string}
  */
 function callKey(name, input) {
-    return name + ':' + JSON.stringify(input ?? null);
+    const serialised = JSON.stringify(input ?? null);
+    if (serialised.length > 1000) {
+        return name + ':hash:' + _djb2(serialised);
+    }
+    return name + ':' + serialised;
+}
+
+/**
+ * Fast 32-bit djb2 hash.
+ * @param {string} s
+ * @returns {number}
+ */
+function _djb2(s) {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) + h) ^ s.charCodeAt(i);
+        h |= 0;
+    }
+    return h;
 }
 
 export class StuckDetector {

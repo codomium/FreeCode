@@ -394,10 +394,12 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         ``,
         `For every file creation or modification:`,
         `1. ACT  — call Write, Edit, or MultiEdit to make the change.`,
-        `2. VERIFY — immediately call Read on the same file to confirm the content is correct.`,
+        `2. VERIFY — the tool result already includes a line-count and content preview.`,
+        `   Only call Read again if the preview shows something unexpected,`,
+        `   or if a linter/test must be run immediately after.`,
         `3. CHECK — if a linter, type-checker, or test suite covers this file, run it with Bash.`,
         ``,
-        `Never assume a write succeeded. Always read back to verify.`,
+        `Never assume a write succeeded. Check the tool result preview first.`,
         ``,
         `### Rule 3 — Loop budget: max 3 attempts per fix`,
         ``,
@@ -434,14 +436,17 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `1. **EXPLORE** — Read every relevant file before touching anything.`,
         `2. **PLAN** — State in ≤5 bullet points exactly what you will change and why.`,
         `3. **ACT** — Execute the changes using tools. Never describe what you would do — do it.`,
-        `4. **VERIFY** — Immediately confirm the change took effect: re-read the file, run the`,
-        `   linter, run the build. Never claim success without evidence.`,
+        `4. **VERIFY** — Immediately confirm the change took effect: check the tool result`,
+        `   preview (Write/Edit/MultiEdit all return a line-count and content preview), run the`,
+        `   linter, run the build. Only call Read if the preview is insufficient.`,
+        `   Never claim success without evidence.`,
         `5. **REPORT** — State the final result with actual output, not assertions`,
         `   (e.g. "eslint: 0 errors ✓", not "the errors are now fixed").`,
         ``,
         `## Tool usage rules`,
         ``,
-        `- After every file write, immediately read it back to confirm the content is correct.`,
+        `- After every file write, check the tool result preview to confirm the content is correct.`,
+        `  Only call Read if the preview is truncated or shows something unexpected.`,
         `- After every code change, run the compiler/linter to check for errors.`,
         `- If a tool call fails or produces unexpected output, analyze WHY before retrying.`,
         `- You have a maximum of **3 attempts** per fix. If you fail 3 times, STOP and report`,
@@ -461,7 +466,7 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `When editing code files:`,
         `1. Read the FULL relevant section of the file first.`,
         `2. Make the smallest correct edit — surgical, not wholesale rewrites unless necessary.`,
-        `3. Immediately read back the changed section to verify.`,
+        `3. Check the tool result preview; call Read only if you need to see more context.`,
         `4. Run diagnostics (lint/build/test) to confirm no regressions.`,
         ``,
         `If file writes are not persisting:`,
@@ -493,7 +498,7 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         ``,
         `## Forbidden behaviors`,
         ``,
-        `- ❌ Claiming a file was written without verifying its contents.`,
+        `- ❌ Claiming a file was written without checking the tool result preview or running a linter/test.`,
         `- ❌ Running the same failing command more than 3 times.`,
         `- ❌ Writing "I'll fix this" without immediately using a tool to do so.`,
         `- ❌ Saying "the issue seems to be X" without reading the actual file to confirm.`,
@@ -545,19 +550,16 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
     // The static prefix is the base prompt + CLAUDE.md content (cacheable)
     const staticPrefix = parts.join('\n\n');
 
-    // Dynamic suffix includes tool schemas (changes per-request)
-    let dynamicSuffix = '';
-    if (tools && tools.length > 0) {
-        const toolSummary = tools.map(t =>
-            `- ${t.name}: ${(t.description || '').slice(0, 100)}`
-        ).join('\n');
-        dynamicSuffix = `\n\nAvailable tools:\n${toolSummary}`;
-    }
+    // F10: the dynamic tool-list suffix duplicated information already present in
+    // both the static tool catalogue table above AND the provider's native `tools`
+    // field (Anthropic, OpenAI, etc. all inject descriptions from the schema).
+    // Removing it saves ~300 input tokens per request with no information loss.
+    const dynamicSuffix = '';
 
     return {
         staticPrefix,
         dynamicSuffix,
-        full: staticPrefix + dynamicSuffix,
+        full: staticPrefix,
     };
 }
 

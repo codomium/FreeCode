@@ -88,6 +88,7 @@ export const GlobTool = {
         properties: {
             pattern: { type: 'string', description: 'Glob pattern (e.g. "**/*.js")' },
             path: { type: 'string', description: 'Directory to search in' },
+            head_limit: { type: 'number', description: 'Max results to return (default 500, max 2000)' },
         },
         required: ['pattern'],
     },
@@ -109,14 +110,22 @@ export const GlobTool = {
 
             if (matches.length === 0) return 'No matches found.';
 
-            // Sort by modification time (newest first)
-            matches.sort((a, b) => {
-                try {
-                    return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
-                } catch { return 0; }
+            // F6: pre-compute mtimes in O(N) before sorting — avoids O(N log N) stat calls
+            const withMtime = matches.map(f => {
+                try { return { f, mtime: fs.statSync(f).mtimeMs }; }
+                catch { return { f, mtime: 0 }; }
             });
+            withMtime.sort((a, b) => b.mtime - a.mtime);
+            const sorted = withMtime.map(e => e.f);
 
-            return matches.join('\n');
+            // F5: cap output to prevent context flooding
+            const limit = Math.min(Math.max(1, input.head_limit || 500), 2000);
+            const truncated = sorted.length > limit;
+            const output = sorted.slice(0, limit).join('\n');
+            if (truncated) {
+                return output + `\n\n[Showing first ${limit} of ${sorted.length} matches. Use a more specific pattern or path to narrow results.]`;
+            }
+            return output;
         } catch (e) {
             return `Error: ${e.message}`;
         }

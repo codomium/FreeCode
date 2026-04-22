@@ -16,11 +16,16 @@ import os from 'os';
 const DEFAULT_MAX_TOKENS = 180000; // ~200k model limit with buffer
 const COMPACT_THRESHOLD = 0.80;
 const CHARS_PER_TOKEN = 4; // rough estimate for English text
-const STALE_TOOL_RESULT_TURNS = 5; // tool results older than this are micro-compacted
+// F13: raised from 5 → 10 so early Read results survive longer multi-step workflows
+const STALE_TOOL_RESULT_TURNS = 10;
+// F18: error results are compacted more aggressively after fewer turns
+const STALE_ERROR_RESULT_TURNS = 2;
 const SESSIONS_DIR = path.join(os.homedir(), '.freecode', 'sessions');
 const MAX_MSG_SUMMARY = 500;   // keep more per-message context during full compaction
 const MAX_TOTAL_SUMMARY = 8000; // preserve more historical context across compaction
 const MAX_TEXT_BLOCK_SUMMARY = 300;
+// F8: align micro-compact truncation with MAX_TEXT_BLOCK_SUMMARY (was 100)
+const MICRO_COMPACT_KEEP_CHARS = 300;
 
 /**
  * Persist a session summary to disk for cross-session context retention.
@@ -127,6 +132,12 @@ export class ContextManager {
     /**
      * Micro-compact: remove verbose tool results from messages older than N turns.
      * Keeps the tool call reference but truncates result content.
+     *
+     * F13: only truncates Read results (the largest/most redundant) in the normal
+     *      stale window; error results are truncated more aggressively.
+     * F18: error tool results are truncated to 50 chars after STALE_ERROR_RESULT_TURNS.
+     * F8:  success results are truncated to MICRO_COMPACT_KEEP_CHARS (300) instead of 100.
+     *
      * @param {Array} messages
      * @param {number} recentTurns - number of recent user/assistant pairs to preserve
      * @returns {Array}
@@ -138,33 +149,47 @@ export class ContextManager {
             if (messages[i].role === 'user') turnCount++;
         }
 
-        if (turnCount <= recentTurns) return messages;
+        // We need at least STALE_ERROR_RESULT_TURNS turns to do anything
+        if (turnCount <= STALE_ERROR_RESULT_TURNS) return messages;
 
-        // Mark the boundary: keep last recentTurns user messages intact
-        let usersSeen = 0;
-        let boundary = messages.length;
-        for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'user') {
-                usersSeen++;
-                if (usersSeen >= recentTurns) {
-                    boundary = i;
-                    break;
+        // Compute both boundaries:
+        //   errorBoundary: messages before which error results are aggressively compacted
+        //   readBoundary:  messages before which Read results are compacted
+        const computeBoundary = (targetTurns) => {
+            if (turnCount <= targetTurns) return -1; // no boundary needed
+            let usersSeen = 0;
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'user') {
+                    usersSeen++;
+                    if (usersSeen >= targetTurns) return i;
                 }
             }
-        }
+            return 0;
+        };
 
-        // Truncate tool results before the boundary
+        const errorBoundary = computeBoundary(STALE_ERROR_RESULT_TURNS);
+        const readBoundary = turnCount > recentTurns ? computeBoundary(recentTurns) : -1;
+
         const result = messages.map((msg, idx) => {
-            if (idx >= boundary) return msg;
             if (!Array.isArray(msg.content)) return msg;
 
             const newContent = msg.content.map(block => {
-                if (block.type === 'tool_result' && typeof block.content === 'string' && block.content.length > 200) {
-                    return {
-                        ...block,
-                        content: block.content.slice(0, 100) + '...[truncated]',
-                    };
+                if (block.type !== 'tool_result' || typeof block.content !== 'string') return block;
+
+                const isError = block.content.startsWith('Error:') ||
+                                block.content.startsWith('Validation error:') ||
+                                block.content.startsWith('Tool error:');
+
+                // F18: aggressively compact error results after STALE_ERROR_RESULT_TURNS
+                if (isError && errorBoundary >= 0 && idx < errorBoundary && block.content.length > 50) {
+                    return { ...block, content: block.content.slice(0, 50) + '...[error truncated]' };
                 }
+
+                // F13: only compact Read/large tool results in the broader stale window
+                if (readBoundary >= 0 && idx < readBoundary && block.content.length > MICRO_COMPACT_KEEP_CHARS) {
+                    return { ...block, content: block.content.slice(0, MICRO_COMPACT_KEEP_CHARS) + '...[truncated]' };
+                }
+
                 return block;
             });
 
@@ -179,8 +204,12 @@ export class ContextManager {
      * Keeps the most recent N messages intact and replaces older ones
      * with a summary message.
      *
+     * F9: keepRecent is now adaptive — starts at the given value and shrinks by 2
+     *     until the retained slice fits within 50% of the token budget, ensuring
+     *     compaction is always effective regardless of individual message sizes.
+     *
      * @param {Array} messages - current conversation messages
-     * @param {number} keepRecent - number of recent messages to preserve (default 6 = ~3 turns)
+     * @param {number} keepRecent - initial number of recent messages to preserve (default 6 = ~3 turns)
      * @param {string} [sessionGoal] - session goal to re-inject in the compaction summary
      * @returns {Array} compacted message array
      */
@@ -197,9 +226,18 @@ export class ContextManager {
             return working;
         }
 
+        // F9: adaptive keepRecent — reduce until recent slice fits in 50% of budget
+        const halfBudget = this.maxTokens * 0.5;
+        let actualKeep = Math.max(2, keepRecent);
+        while (actualKeep > 2) {
+            const recentSlice = working.slice(-actualKeep);
+            if (this.getTokenCount(recentSlice) <= halfBudget) break;
+            actualKeep -= 2;
+        }
+
         // Full compaction
-        const oldMessages = messages.slice(0, -keepRecent);
-        const recentMessages = messages.slice(-keepRecent);
+        const oldMessages = working.slice(0, -actualKeep);
+        const recentMessages = working.slice(-actualKeep);
 
         // Build a summary of old messages
         const summaryParts = [];
@@ -322,7 +360,16 @@ export class ContextManager {
             parts.push('\n## Tools used\n' + Object.entries(counts).map(([t, n]) => `- ${t}: ${n}x`).join('\n'));
         }
         if (keyDecisions.length > 0) {
-            parts.push('\n## Key exchanges (truncated)\n' + keyDecisions.slice(-10).map(d => `- ${d}`).join('\n'));
+            // F16: always preserve original intent (first 2) + most-recent context (last 8)
+            const first2 = keyDecisions.slice(0, 2);
+            const last8  = keyDecisions.slice(-8);
+            // Deduplicate in case the session is short enough that they overlap
+            const seen = new Set();
+            const merged = [];
+            for (const d of [...first2, ...last8]) {
+                if (!seen.has(d)) { seen.add(d); merged.push(d); }
+            }
+            parts.push('\n## Key exchanges (truncated)\n' + merged.map(d => `- ${d}`).join('\n'));
         }
 
         return parts.join('\n');

@@ -31,11 +31,14 @@ export const LsTool = {
 
                 const fullPath = path.join(dirPath, entry.name);
                 let size = '';
-                try {
-                    const stat = fs.statSync(fullPath);
-                    size = entry.isDirectory() ? '' : formatSize(stat.size);
-                } catch {
-                    size = '?';
+                // F17: only stat files — directories show no size and statSync on each
+                //      entry in a large directory causes unnecessary syscalls.
+                if (!entry.isDirectory()) {
+                    try {
+                        size = formatSize(fs.statSync(fullPath).size);
+                    } catch {
+                        size = '?';
+                    }
                 }
 
                 const type = entry.isDirectory() ? 'd' : entry.isSymbolicLink() ? 'l' : '-';
