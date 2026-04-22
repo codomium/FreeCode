@@ -65,17 +65,17 @@ function extractTargetFile(input) {
 function callKey(name, input) {
     const serialised = JSON.stringify(input ?? null);
     if (serialised.length > 1000) {
-        return name + ':hash:' + _djb2(serialised);
+        return name + ':hash:' + djb2Hash(serialised);
     }
     return name + ':' + serialised;
 }
 
 /**
- * Fast 32-bit djb2 hash.
+ * Fast 32-bit djb2 hash used by callKey for large inputs.
  * @param {string} s
  * @returns {number}
  */
-function _djb2(s) {
+function djb2Hash(s) {
     let h = 5381;
     for (let i = 0; i < s.length; i++) {
         h = ((h << 5) + h) ^ s.charCodeAt(i);

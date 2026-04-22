@@ -20,6 +20,8 @@ const CHARS_PER_TOKEN = 4; // rough estimate for English text
 const STALE_TOOL_RESULT_TURNS = 10;
 // F18: error results are compacted more aggressively after fewer turns
 const STALE_ERROR_RESULT_TURNS = 2;
+// F18: max chars kept for error tool results after STALE_ERROR_RESULT_TURNS
+const MICRO_COMPACT_ERROR_CHARS = 50;
 const SESSIONS_DIR = path.join(os.homedir(), '.freecode', 'sessions');
 const MAX_MSG_SUMMARY = 500;   // keep more per-message context during full compaction
 const MAX_TOTAL_SUMMARY = 8000; // preserve more historical context across compaction
@@ -181,8 +183,8 @@ export class ContextManager {
                                 block.content.startsWith('Tool error:');
 
                 // F18: aggressively compact error results after STALE_ERROR_RESULT_TURNS
-                if (isError && errorBoundary >= 0 && idx < errorBoundary && block.content.length > 50) {
-                    return { ...block, content: block.content.slice(0, 50) + '...[error truncated]' };
+                if (isError && errorBoundary >= 0 && idx < errorBoundary && block.content.length > MICRO_COMPACT_ERROR_CHARS) {
+                    return { ...block, content: block.content.slice(0, MICRO_COMPACT_ERROR_CHARS) + '...[error truncated]' };
                 }
 
                 // F13: only compact Read/large tool results in the broader stale window

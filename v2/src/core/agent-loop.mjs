@@ -12,6 +12,10 @@ import { StuckDetector } from './stuck-detector.mjs';
 import fs from 'fs';
 import path from 'path';
 
+// Monotonic counter for generating unique IDs within this process (e.g. Gemini tool-call IDs).
+let _idCounter = 0;
+function nextId() { return ++_idCounter; }
+
 /**
  * NVIDIA NIM models that CAN use chat_template_kwargs.thinking=true for
  * extended reasoning — but only when NVIDIA_THINKING_MODE=true is set.
@@ -1178,8 +1182,9 @@ function convertGoogleResponse(data) {
         if (part.functionCall) {
             content.push({
                 type: 'tool_use',
-                // Gemini doesn't provide stable call IDs; generate one from name+timestamp
-                id: `${part.functionCall.name}_${Date.now()}`,
+                // Gemini doesn't provide stable call IDs; use a monotonic process-scoped
+                // counter to guarantee uniqueness even for same-millisecond parallel calls.
+                id: `${part.functionCall.name}_${nextId()}`,
                 name: part.functionCall.name,
                 input: part.functionCall.args ?? {},
             });
@@ -1282,7 +1287,7 @@ function detectRepetition(text) {
         const big = text.slice(-4000);
         const hashCounts = new Map();
         for (let i = 0; i + WINDOW <= big.length; i += STEP) {
-            const h = djb2(big.slice(i, i + WINDOW));
+            const h = djb2Hash(big.slice(i, i + WINDOW));
             const c = (hashCounts.get(h) || 0) + 1;
             if (c >= 3) return true;
             hashCounts.set(h, c);
@@ -1297,7 +1302,7 @@ function detectRepetition(text) {
  * @param {string} s
  * @returns {number}
  */
-function djb2(s) {
+function djb2Hash(s) {
     let h = 5381;
     for (let i = 0; i < s.length; i++) {
         h = ((h << 5) + h) ^ s.charCodeAt(i);
