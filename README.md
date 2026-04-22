@@ -17,6 +17,71 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.9 — infrastructure-level loop detection 🛡️
+
+These changes land in the **agent loop** (`v2/src/core/`) and are shared automatically by the VS Code extension, the Electron app, and the CLI.
+
+### 🔁 StuckDetector — three stuck-loop conditions
+
+Previous versions tracked only one failure mode (identical tool call three times in a row). v2.9 replaces the ad-hoc check with a dedicated `StuckDetector` class that recognises **three distinct failure modes**:
+
+| Condition | When it fires |
+|-----------|--------------|
+| **`SAME_CALL_LOOP`** | The same tool is called with identical arguments 3+ consecutive times and makes no progress (result is unchanged or an error is returned every time) |
+| **`THRASHING_LOOP`** | 3+ *different* tools all fail on the **same target file** within the last 10 tool calls — e.g. `Edit → MultiEdit → Write → Bash` each failing on `lib/dashboard.dart` |
+| **`VOLUME_LIMIT`** | More than **20 tool calls** are dispatched in a single agent response turn (since the last user message) — an upper bound that prevents silent runaway loops regardless of failure mode |
+
+When any condition is detected the agent loop emits a structured event and stops immediately:
+
+```js
+{ type: 'stuck', reason: 'THRASHING_LOOP', summary: '3 different tools (Edit, MultiEdit, Write) all failed on "lib/dashboard.dart" within the last 3 tool calls. Last error: ...' }
+{ type: 'stop', reason: 'stuck' }
+```
+
+The `summary` field tells the user (and any UI) exactly what was attempted, how many times, and what the last error was — enabling one-click retry with a hint.
+
+### 🟨 `renderStuckPanel` — stuck-agent UI component
+
+A new `renderStuckPanel(event)` export in `v2/src/ui/ink-app.mjs` renders a **yellow/amber bordered terminal panel** whenever a stuck event fires:
+
+```
+──────────────────────────────────────────────────────────────────────────────
+  ⚠  Agent stuck — THRASHING_LOOP
+
+  3 different tools (Edit, MultiEdit, Write) all failed on "lib/dashboard.dart"
+  within the last 3 tool calls. Last error: old_string not found in file.
+
+  [R] Retry with a hint — type a hint and resume the agent
+  [S] Skip this step — mark as skipped and continue
+──────────────────────────────────────────────────────────────────────────────
+```
+
+The panel is **word-wrapped** to fit the terminal width and presents two recovery actions the caller should wire up:
+
+- **`[R]` Retry with a hint** — prompt the user for a clarifying hint, inject it as a system message, and resume the agent
+- **`[S]` Skip this step** — mark the step as skipped and continue with the next task
+
+### 📋 Tool Use Discipline — new system prompt section
+
+A new `## TOOL USE DISCIPLINE` section appended to the agent system prompt enforces a **hard 3-attempt budget per goal**:
+
+```
+Attempt 1: Use the most direct tool (Edit or bash sed).
+Attempt 2: If attempt 1 fails, diagnose WHY — read the file back,
+           check permissions, check encoding — then try ONE different approach.
+Attempt 3: If attempt 2 fails, STOP and report:
+  "BLOCKED: I cannot complete [goal]. I tried [method1] and [method2].
+   The issue appears to be [diagnosis]. Please [specific ask]."
+
+NEVER cycle through all available tools hoping one works.
+NEVER retry the same approach more than once.
+NEVER spend more than 3 tool calls on a single atomic change.
+```
+
+This targets the model-level tendency to exhaust every available tool before surfacing a failure to the user.
+
+---
+
 ## What's New in v2.8 — AI power & UX supremacy 🚀
 
 These three enhancements are present in **both** the VS Code extension and the Electron desktop app (Focus Mode is Electron-only).
