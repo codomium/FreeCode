@@ -170,10 +170,10 @@ async function handleListDirectory(msg, send, defaultPath) {
 /**
  * No-op registration function — file operations are dispatched from the central
  * 'renderer-message' handler in main.js using the pure functions above.
- * @param {import('electron').IpcMain} ipcMain
+ * @param {import('electron').IpcMain} _ipcMain
  */
-function registerFileHandlers(ipcMain) {
-    void ipcMain;
+function registerFileHandlers(_ipcMain) {
+    // Reserved for future ipcMain.on/handle registrations.
 }
 
 module.exports = {

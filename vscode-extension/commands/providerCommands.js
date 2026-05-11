@@ -8,10 +8,10 @@
  *   registerProviderCommands(context, deps) → void
  *
  * Where deps:
- *   { getActiveBridge, resetBridge, logger }
+ *   { getBridgeRef, resetBridge, logger }
  *
- * Note: `getActiveBridge` is a *synchronous* getter that returns the current
- * bridge instance (or null).  It does NOT create a new bridge.
+ * Note: `getBridgeRef` is a *synchronous* getter that returns the current
+ * bridge instance reference (or null).  It does NOT create a new bridge.
  *
  * Commands registered:
  *   openClaudeCode.manageProviders   — CRUD UI for configuring AI providers
@@ -64,11 +64,11 @@ async function testProviderConnection(provider) {
 /**
  * @param {import('vscode').ExtensionContext} context
  * @param {object} deps
- * @param {() => object|null} deps.getActiveBridge  Sync getter for the current bridge instance.
+ * @param {() => object|null} deps.getBridgeRef     Sync getter for the current bridge instance reference.
  * @param {() => void} deps.resetBridge             Nulls the bridge reference after dispose.
  * @param {import('../logger').FreeCodeLogger|null} [deps.logger]
  */
-function registerProviderCommands(context, { getActiveBridge, resetBridge, logger }) {
+function registerProviderCommands(context, { getBridgeRef, resetBridge, logger }) {
     // ── Manage Providers ──────────────────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('openClaudeCode.manageProviders', async () => {
@@ -171,7 +171,7 @@ function registerProviderCommands(context, { getActiveBridge, resetBridge, logge
             await config.update('multiAgentEnabled', next, vscode.ConfigurationTarget.Global);
             vscode.window.showInformationMessage(`Multi-Agent Mode ${next ? 'enabled' : 'disabled'}.`);
 
-            const bridge = getActiveBridge();
+            const bridge = getBridgeRef();
             if (bridge) { bridge.dispose(); }
             resetBridge();
             logger && logger.info('providerCommands', `Multi-agent mode ${next ? 'on' : 'off'}`);

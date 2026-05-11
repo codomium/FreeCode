@@ -1167,8 +1167,8 @@ function activate(context) {
 
     // ── Commands (split into cohesive modules) ───────────────────────────────
     const bridgeDeps = {
-        getActiveBridge: () => bridge,
-        resetBridge:     () => { bridge = null; },
+        getBridgeRef: () => bridge,
+        resetBridge:  () => { bridge = null; },
         viewProvider,
         logger,
     };

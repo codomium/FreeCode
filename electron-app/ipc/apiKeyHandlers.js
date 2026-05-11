@@ -109,7 +109,8 @@ function showApiKeyDialog(parentWindow, appDir) {
  */
 // eslint-disable-next-line no-unused-vars
 function registerApiKeyHandlers(_ipcMain, _opts) {
-    // Reserved for future ipcMain.on/handle registrations.
+    // No-op: dialog flow is driven entirely by showApiKeyDialog above.
+    // Reserved for future ipcMain.on/handle registrations (e.g. deleteApiKey).
 }
 
 module.exports = { storeApiKey, loadApiKey, showApiKeyDialog, registerApiKeyHandlers };

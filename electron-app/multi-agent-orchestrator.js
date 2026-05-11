@@ -1,7 +1,9 @@
 'use strict';
 
-const CODE_BLOCK_BONUS = 500;
-const ERROR_PENALTY = 3000;
+const CODE_BLOCK_BONUS    = 500;
+const ERROR_PENALTY       = 3000;
+/** Per-provider hard timeout for a single request. */
+const PROVIDER_TIMEOUT_MS = 30000;
 
 /**
  * Score a provider result for quality ranking.
@@ -61,13 +63,12 @@ class MultiAgentOrchestrator {
      * Run the provider body with a 30-second timeout guard.
      */
     _runProvider(provider, prompt, onEvent) {
-        const TIMEOUT_MS = 30000;
         const key = provider.id || provider.name || 'unknown';
         let timer;
         const timeoutPromise = new Promise((_, reject) => {
             timer = setTimeout(
-                () => reject(new Error(`Provider ${key} timed out after ${TIMEOUT_MS}ms`)),
-                TIMEOUT_MS
+                () => reject(new Error(`Provider ${key} timed out after ${PROVIDER_TIMEOUT_MS}ms`)),
+                PROVIDER_TIMEOUT_MS
             );
         });
         return Promise.race([

@@ -10,12 +10,12 @@
  *   registerChatCommands(context, deps) → void
  *
  * Where deps:
- *   { getActiveBridge, resetBridge, viewProvider, logger }
+ *   { getBridgeRef, resetBridge, viewProvider, logger }
  *
- * Note: `getActiveBridge` is a *synchronous* getter that returns the
- * current bridge instance (or null).  It does NOT create a new bridge.
- * Use the async `getBridge` factory (from extension.js) when you need
- * to ensure a bridge is running before sending a message.
+ * Note: `getBridgeRef` is a *synchronous* getter that returns the
+ * current bridge instance reference (or null).  It does NOT create a
+ * new bridge. Use the async `getBridge` factory (from extension.js)
+ * when you need to ensure a bridge is running before sending a message.
  */
 
 const vscode = require('vscode');
@@ -25,12 +25,12 @@ const vscode = require('vscode');
  *
  * @param {import('vscode').ExtensionContext} context
  * @param {object} deps
- * @param {() => object|null} deps.getActiveBridge  Sync getter for the current bridge instance.
+ * @param {() => object|null} deps.getBridgeRef     Sync getter for the current bridge instance reference.
  * @param {() => void} deps.resetBridge             Nulls the bridge reference after dispose.
  * @param {{ postMessage: (msg: object) => void }|null} deps.viewProvider
  * @param {import('../logger').FreeCodeLogger|null} [deps.logger]
  */
-function registerChatCommands(context, { getActiveBridge, resetBridge, viewProvider, logger }) {
+function registerChatCommands(context, { getBridgeRef, resetBridge, viewProvider, logger }) {
     // ── Set API Key ───────────────────────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('openClaudeCode.setApiKey', async () => {
@@ -45,7 +45,7 @@ function registerChatCommands(context, { getActiveBridge, resetBridge, viewProvi
             });
             if (key) {
                 await context.secrets.store('openClaudeCode.apiKey', key.trim());
-                const bridge = getActiveBridge();
+                const bridge = getBridgeRef();
                 if (bridge) { bridge.dispose(); }
                 resetBridge();
                 vscode.window.showInformationMessage('API key saved. Bridge will restart on next message.');
@@ -58,7 +58,7 @@ function registerChatCommands(context, { getActiveBridge, resetBridge, viewProvi
     // ── Clear Session ─────────────────────────────────────────────────────────
     context.subscriptions.push(
         vscode.commands.registerCommand('openClaudeCode.clearSession', async () => {
-            const bridge = getActiveBridge();
+            const bridge = getBridgeRef();
             if (bridge && bridge.isRunning) {
                 await bridge.reset();
                 if (viewProvider) viewProvider.postMessage({ type: 'sessionCleared' });
@@ -78,7 +78,7 @@ function registerChatCommands(context, { getActiveBridge, resetBridge, viewProvi
             const permissionMode = config.get('permissionMode') || 'default';
             const storedKey      = await context.secrets.get('openClaudeCode.apiKey');
             const hasKey         = !!(storedKey || process.env.ANTHROPIC_API_KEY);
-            const bridge         = getActiveBridge();
+            const bridge         = getBridgeRef();
             const status         = (bridge && bridge.isRunning) ? '🟢 running' : '⚪ idle';
             vscode.window.showInformationMessage(
                 'Open Claude Code — bridge: ' + status +
