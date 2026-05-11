@@ -34,6 +34,9 @@ const { MultiAgentOrchestrator } = require('./multi-agent-orchestrator');
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_SESSION_MESSAGES = 200;
+const WATCHER_IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage']);
+const WATCHER_DEBOUNCE_MS = 500;
+const AGENT_WRITE_GRACE_MS = 2000;
 const RETRY_DELAYS_MS = [3000, 8000, 20000];
 const MIN_MULTI_AGENT_PROVIDERS = 3;
 
@@ -1756,15 +1759,12 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 const _debounceTimers = new Map();
                 // Track files recently written by the agent (within 2 seconds)
                 if (!global._agentWrittenFiles) global._agentWrittenFiles = new Map();
-                const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage']);
-                const DEBOUNCE_MS = 500;
-                const AGENT_WRITE_GRACE_MS = 2000;
                 try {
                     global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
                         if (!filename) return;
                         // Filter out noisy directories
                         const parts = filename.split(path.sep);
-                        if (parts.some(p => IGNORE_DIRS.has(p))) return;
+                        if (parts.some(p => WATCHER_IGNORE_DIRS.has(p))) return;
                         const fullPath = path.join(watchPath, filename);
                         // Skip files recently written by the agent
                         const agentTs = global._agentWrittenFiles.get(fullPath);
@@ -1776,7 +1776,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                         _debounceTimers.set(fullPath, setTimeout(() => {
                             _debounceTimers.delete(fullPath);
                             send({ type: 'fileWatchEvent', event, filename, path: fullPath });
-                        }, DEBOUNCE_MS));
+                        }, WATCHER_DEBOUNCE_MS));
                     });
                 } catch (watchErr) {
                     console.warn('watchWorkspace: fs.watch failed for', watchPath, ':', watchErr.message);

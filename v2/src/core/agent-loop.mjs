@@ -420,13 +420,16 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     }
                     // v4.4-A: Emit diff annotation for file edits
                     for (const fp of filePaths) {
-                        const fileContent = (() => { try { return require('fs').readFileSync(fp, 'utf8'); } catch { return ''; } })();
-                        const linesChanged = fileContent ? fileContent.split('\n').length : 0;
+                        let linesChanged = 0;
+                        try {
+                            const fileContent = fs.readFileSync(fp, 'utf8');
+                            linesChanged = fileContent.split('\n').length;
+                        } catch { /* file may not exist yet */ }
                         yield {
                             type: 'diff_annotation',
                             file: fp,
                             linesChanged,
-                            summary: `+${linesChanged} lines to ${require('path').basename(fp)}`,
+                            summary: `+${linesChanged} lines to ${path.basename(fp)}`,
                         };
                     }
                 }
