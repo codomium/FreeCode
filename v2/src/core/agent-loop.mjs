@@ -4,7 +4,7 @@
  */
 import { streamResponse, accumulateStream } from './streaming.mjs';
 import { ContextManager } from './context-manager.mjs';
-import { buildSystemPrompt, buildWorkspaceSnapshot, buildWorkspaceContent, buildThinkingModelSystemPrompt } from './system-prompt.mjs';
+import { buildSystemPrompt, buildWorkspaceSnapshot, buildWorkspaceContent, buildThinkingModelSystemPrompt, toCacheBlocks } from './system-prompt.mjs';
 import { verifyWrite, verifyEdit } from './verify-write.mjs';
 import { isNvidiaModel } from './providers.mjs';
 import { RateLimiter } from './rate-limiter.mjs';
@@ -31,9 +31,10 @@ const NVIDIA_THINKING_CAPABLE_MODELS = new Set([
     'moonshotai/kimi-k2.5',
     'deepseek-ai/deepseek-r1',
 ]);
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 export function createAgentLoop({ model, tools, permissions, settings, hooks }) {
-    const contextManager = new ContextManager(settings.maxContextTokens || 180000);
+    const contextManager = new ContextManager(settings.maxContextTokens || 160000);
 
     // Build system prompt using the new builder
     const promptResult = buildSystemPrompt({
@@ -469,9 +470,11 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
 
     const body = {
         model,
-        max_tokens: settings.maxTokens || 16384,
+        max_tokens: resolveMaxOutputTokens(settings),
         messages: state.messages,
-        ...(state.systemPrompt && { system: state.systemPrompt }),
+        ...(state.systemPrompt && {
+            system: toCacheBlocks(state.systemPromptStatic || state.systemPrompt, state.systemPromptDynamic || ''),
+        }),
         ...(toolDefs.length > 0 && { tools: toolDefs }),
         ...(stream && { stream: true }),
     };
@@ -698,7 +701,7 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
     const body = {
         model,
         messages,
-        max_tokens: settings.maxTokens || 16384,
+        max_tokens: resolveMaxOutputTokens(settings),
         temperature: 1.00,
         top_p: 1.00,
         stream: !!stream,
@@ -786,18 +789,11 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
     const body = {
         model,
         messages,
-        max_tokens: settings.maxTokens || 16384,
+        max_tokens: resolveMaxOutputTokens(settings),
         temperature: 1.00,
         top_p: 1.00,
         stream: !!stream,
-        ...(!stream && toolDefs.length > 0 && {
-            tools: toolDefs.map(t => ({
-                type: 'function',
-                function: { name: t.name, description: t.description, parameters: t.input_schema },
-            })),
-        }),
-        // streaming + tool_call_delta requires tools in body too
-        ...(stream && toolDefs.length > 0 && {
+        ...(toolDefs.length > 0 && {
             tools: toolDefs.map(t => ({
                 type: 'function',
                 function: { name: t.name, description: t.description, parameters: t.input_schema },
@@ -1254,7 +1250,7 @@ function accumulateFromCollected(events) {
  * Returns true when the model appears to be stuck generating repeated phrases.
  *
  * Two detection passes:
- *  1. (original) Look for any phrase of length 20–300 chars that appears ≥5 times
+ *  1. (tuned) Look for any phrase of length 40–300 chars that appears ≥6 times
  *     in the most recent 800 characters — catches tight word-for-word loops.
  *  2. (F11) Rolling-window hash pass — divide the last 4000 chars into 500-char
  *     windows and compare their djb2 hashes. If the same hash appears ≥3 times
@@ -1268,7 +1264,7 @@ function detectRepetition(text) {
 
     // ── Pass 1: tight phrase repetition (original algorithm) ────────────────
     const tail = text.slice(-800);
-    for (let phraseLen = 20; phraseLen <= 300; phraseLen += 10) {
+    for (let phraseLen = 40; phraseLen <= 300; phraseLen += 10) {
         if (phraseLen >= tail.length) break;
         const phrase = tail.slice(-phraseLen);
         let count = 0;
@@ -1276,7 +1272,7 @@ function detectRepetition(text) {
         while ((pos = tail.indexOf(phrase, pos)) !== -1) {
             count++;
             pos += phraseLen;
-            if (count >= 5) return true;
+            if (count >= 6) return true;
         }
     }
 
@@ -1295,6 +1291,14 @@ function detectRepetition(text) {
     }
 
     return false;
+}
+
+function resolveMaxOutputTokens(settings) {
+    // Precedence: maxOutputTokens (new) -> maxTokens (legacy alias) -> default.
+    // Keep maxTokens as a backward-compatible fallback for older configs.
+    const configured = Number(settings?.maxOutputTokens ?? settings?.maxTokens);
+    if (Number.isFinite(configured) && configured > 0) return configured;
+    return DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 /**

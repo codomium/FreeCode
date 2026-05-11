@@ -10,7 +10,7 @@ import { createToolRegistry } from '../src/tools/registry.mjs';
 import { createPermissionChecker } from '../src/permissions/checker.mjs';
 import { ContextManager } from '../src/core/context-manager.mjs';
 import { HookEngine } from '../src/hooks/engine.mjs';
-import { accumulateStream } from '../src/core/streaming.mjs';
+import { streamResponse, accumulateStream } from '../src/core/streaming.mjs';
 import { createAgentLoop } from '../src/core/agent-loop.mjs';
 import { McpClient } from '../src/mcp/client.mjs';
 import { SessionManager } from '../src/core/session.mjs';
@@ -390,6 +390,25 @@ assertEqual(thinkingAccumulated.content.length, 2, 'Two blocks (thinking + text)
 assertEqual(thinkingAccumulated.content[0].type, 'thinking', 'First is thinking');
 assertEqual(thinkingAccumulated.content[0].thinking, 'Let me think...', 'Thinking text');
 assertEqual(thinkingAccumulated.content[1].text, 'Answer.', 'Text after thinking');
+
+const errorEncoder = new TextEncoder();
+const errorResponse = {
+    body: new ReadableStream({
+        start(controller) {
+            controller.enqueue(errorEncoder.encode('event: error\ndata: {"type":"error","error":{"message":"overloaded"}}\n\n'));
+            controller.close();
+        },
+    }),
+};
+let streamErr = null;
+try {
+    for await (const _event of streamResponse(errorResponse)) {
+        // no-op
+    }
+} catch (err) {
+    streamErr = err;
+}
+assertIncludes(streamErr?.message || '', 'Stream error: overloaded', 'streamResponse surfaces SSE error events');
 
 // ---------- Agent Loop Tests (mock) ----------
 
@@ -810,7 +829,8 @@ assertIncludes(errorMsg, 'test error', 'Error message content');
 section('Settings');
 
 assert(SETTINGS_SCHEMA.model === 'claude-sonnet-4-6', 'Default model in schema');
-assert(SETTINGS_SCHEMA.maxContextTokens === 180000, 'Default max context');
+assert(SETTINGS_SCHEMA.maxContextTokens === 160000, 'Default max context');
+assert(SETTINGS_SCHEMA.maxOutputTokens === 32768, 'Default max output tokens');
 assert(SETTINGS_SCHEMA.stream === true, 'Default streaming on');
 assert(typeof SETTINGS_SCHEMA.permissions === 'object', 'Permissions in schema');
 assert(typeof SETTINGS_SCHEMA.hooks === 'object', 'Hooks in schema');

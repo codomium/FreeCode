@@ -125,6 +125,9 @@ class MultiAgentOrchestrator {
                 const failed = settled.filter((r) => r.status === 'rejected');
                 if (failed.length > 0) {
                     onEvent({ type: 'info', message: `⚠ ${failed.length} provider(s) failed. Continuing with remaining providers.` });
+                    for (const r of failed) {
+                        onEvent({ type: 'info', message: `Provider failed: ${r.reason?.message || r.reason}` });
+                    }
                 }
                 results = settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
             }

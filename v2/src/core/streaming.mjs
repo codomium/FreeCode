@@ -37,6 +37,9 @@ export async function* streamResponse(response) {
                 buffer = buffer.slice(idx + 2);
 
                 const event = parseSSEChunk(chunk);
+                if (event && event.type === 'error') {
+                    throw new Error(`Stream error: ${event.error?.message || JSON.stringify(event)}`);
+                }
                 if (event) yield event;
             }
         }
@@ -44,6 +47,9 @@ export async function* streamResponse(response) {
         // Handle remaining buffer
         if (buffer.trim()) {
             const event = parseSSEChunk(buffer.trim());
+            if (event && event.type === 'error') {
+                throw new Error(`Stream error: ${event.error?.message || JSON.stringify(event)}`);
+            }
             if (event) yield event;
         }
     } finally {

@@ -13,7 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const DEFAULT_MAX_TOKENS = 180000; // ~200k model limit with buffer
+const DEFAULT_MAX_TOKENS = 160000; // safer buffer below ~200k model context limits
 const COMPACT_THRESHOLD = 0.80;
 const CHARS_PER_TOKEN = 4; // rough estimate for English text
 // F13: raised from 5 → 10 so early Read results survive longer multi-step workflows
@@ -23,8 +23,8 @@ const STALE_ERROR_RESULT_TURNS = 2;
 // F18: max chars kept for error tool results after STALE_ERROR_RESULT_TURNS
 const MICRO_COMPACT_ERROR_CHARS = 50;
 const SESSIONS_DIR = path.join(os.homedir(), '.freecode', 'sessions');
-const MAX_MSG_SUMMARY = 500;   // keep more per-message context during full compaction
-const MAX_TOTAL_SUMMARY = 8000; // preserve more historical context across compaction
+const MAX_MSG_SUMMARY = 800;    // keep more per-message context during full compaction
+const MAX_TOTAL_SUMMARY = 12000; // preserve more historical context across compaction
 const MAX_TEXT_BLOCK_SUMMARY = 300;
 // F8: align micro-compact truncation with MAX_TEXT_BLOCK_SUMMARY (was 100)
 const MICRO_COMPACT_KEEP_CHARS = 300;
