@@ -1,6 +1,9 @@
 /**
- * Agent Loop — async generator yielding 13 event types.
+ * Agent Loop — async generator yielding 13+ event types.
  * Handles streaming, tool calls, thinking, auto-compaction, hooks, multi-provider.
+ *
+ * v4.0: PlanGraph integration, turn-classifier, smart routing, reasoning log.
+ * v5.0: MemoryGraph integration.
  */
 import { streamResponse, accumulateStream } from './streaming.mjs';
 import { ContextManager } from './context-manager.mjs';
@@ -9,6 +12,9 @@ import { verifyWrite, verifyEdit } from './verify-write.mjs';
 import { isNvidiaModel } from './providers.mjs';
 import { RateLimiter } from './rate-limiter.mjs';
 import { StuckDetector } from './stuck-detector.mjs';
+import { PlanGraph } from './plan-graph.mjs';
+import { TurnClassifier } from './turn-classifier.mjs';
+import { Router } from './router.mjs';
 import fs from 'fs';
 import path from 'path';
 
@@ -44,6 +50,11 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         addDirs: settings.addDirs,
     });
 
+    // v4.0: PlanGraph, TurnClassifier, Router
+    const planGraph     = new PlanGraph();
+    const turnClassifier = new TurnClassifier();
+    const router        = new Router(settings.routerConfig ? { config: settings.routerConfig } : {});
+
     const state = {
         messages: [],
         systemPrompt: promptResult.full,
@@ -57,6 +68,8 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         _stuckDetector: new StuckDetector({ volumeLimit: settings.volumeLimit }), // loop-detection (E10: configurable limit)
         sessionGoal: settings.sessionGoal || null,  // sticky goal that survives compaction
         sessionId: settings.sessionId || null,       // opaque ID for cross-session summary persistence
+        planGraph,           // v4.0-A: structured task execution graph
+        _reasoningLog: [],   // v4.0-C: per-turn reasoning log
     };
 
     async function* run(userMessage, options = {}) {
@@ -92,8 +105,16 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
             }
         }
 
-        // Check max turns
+        // Check max turns — emit pre_pause_summary before stopping (v4.4-C)
         if (settings.maxTurns && state.turnCount > settings.maxTurns) {
+            const currentNode = state.planGraph.getCurrentNode();
+            yield {
+                type: 'pre_pause_summary',
+                completedNodes: state.planGraph.getNodes().filter(n => n.status === 'done').map(n => n.title),
+                inProgressNode: currentNode ? currentNode.title : null,
+                pendingNode: state.planGraph.getReadyNodes()[0]?.title || null,
+                planGraph: state.planGraph.serialize(),
+            };
             yield { type: 'error', message: `Max turns (${settings.maxTurns}) reached.` };
             yield { type: 'stop', reason: 'max_turns' };
             return;
@@ -107,9 +128,19 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 
         yield { type: 'stream_request_start', turn: state.turnCount };
 
+        // v4.2-A: Classify turn type and resolve best model/provider
+        const turnClassification = turnClassifier.classify(state.messages, state.turnCount);
+        const routeTarget = router.resolve(turnClassification.type);
+        // Only switch model if smart routing is enabled in settings
+        const currentModel = settings.smartRouting
+            ? routeTarget.model
+            : state.model;
+        if (settings.smartRouting && currentModel !== state.model) {
+            yield { type: 'model_selected', turnType: turnClassification.type, provider: routeTarget.provider, model: currentModel };
+        }
+
         // Detect provider and call API — read state.model so that model
         // switches (via handleModelSwitch) take effect on the next turn.
-        const currentModel = state.model;
         const provider = detectProvider(currentModel);
         let response;
 
@@ -355,6 +386,41 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     return;
                 }
 
+                // v4.0-A: PlanGraph sync
+                if (block.name === 'TodoWrite' && !isToolError && Array.isArray(block.input?.todos)) {
+                    state.planGraph.syncFromTodos(block.input.todos);
+                    yield { type: 'plan_graph', graph: state.planGraph.serialize() };
+                }
+
+                // v4.0-A: Complete plan node on successful file write/edit
+                if (!isToolError && ['Edit', 'Write', 'MultiEdit'].includes(block.name)) {
+                    const filePaths = block.name === 'MultiEdit'
+                        ? (block.input?.edits || []).map(e => e.file_path).filter(Boolean)
+                        : [block.input?.file_path].filter(Boolean);
+                    const currentNode = state.planGraph.getCurrentNode();
+                    if (currentNode) {
+                        currentNode.filesTouched.push(...filePaths);
+                        state.planGraph.complete(currentNode.id, { filesChanged: filePaths });
+                        yield { type: 'node_completed', nodeId: currentNode.id, evidence: { filesChanged: filePaths } };
+                    }
+                    // v4.4-A: Emit diff annotation for file edits
+                    for (const fp of filePaths) {
+                        yield { type: 'diff_annotation', filePath: fp, annotation: { rationale: `${block.name} applied`, confidence: 0.9, risk: 'low' } };
+                    }
+                }
+
+                // v4.0-C: Record reasoning log entry
+                state._reasoningLog.push({
+                    turn: state.turnCount,
+                    decision: block.name,
+                    filesInvolved: block.name === 'MultiEdit'
+                        ? (block.input?.edits || []).map(e => e.file_path)
+                        : [block.input?.file_path || block.input?.path || null].filter(Boolean),
+                    outcomeType: isToolError ? 'error' : 'success',
+                });
+                // Keep only last 20 entries
+                if (state._reasoningLog.length > 20) state._reasoningLog.shift();
+
                 yield { type: 'result', tool: block.name, result, input: block.input, isError: !!isToolError };
 
                 toolResults.push({
@@ -410,6 +476,19 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 '',
                 state.sessionGoal || '',
             );
+
+            // v5.0-B: Record completed session events in memory graph (if enabled)
+            if (settings.memoryGraph) {
+                try {
+                    const events = state.messages.flatMap(m => {
+                        if (m.role === 'assistant') return [{ type: 'assistant', content: typeof m.content === 'string' ? m.content : '' }];
+                        return [];
+                    });
+                    settings.memoryGraph.record(state.sessionId, events);
+                } catch {
+                    // Best-effort memory recording
+                }
+            }
         }
     }
 

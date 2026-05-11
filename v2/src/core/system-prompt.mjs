@@ -526,6 +526,9 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
         `After reporting a blocker, move on to the next task if there is one.`,
     ].filter(Boolean).join('\n');
 
+    // v4.4-B: Behavioral persona additions
+    const personaInstructions = buildPersonaInstructions(settings?.persona);
+
     const parts = [basePreamble];
 
     // Load CLAUDE.md files
