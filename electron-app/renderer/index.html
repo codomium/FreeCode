@@ -32,6 +32,7 @@
       </optgroup>
       <optgroup label="NVIDIA NIM">
         <option value="moonshotai/kimi-k2.5">Kimi K2.5 ✦</option>
+        <option value="moonshotai/kimi-k2.6">Kimi K2.6 ✦</option>
         <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
         <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B</option>
         <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
@@ -45,6 +46,10 @@
       <option value="default">default</option>
       <option value="auto">auto</option>
       <option value="plan">plan</option>
+      <option value="agent">agent</option>
+      <option value="debug">debug</option>
+      <option value="ask">ask</option>
+      <option value="multitask">multitask</option>
       <option value="acceptEdits">acceptEdits</option>
       <option value="bypassPermissions">bypass</option>
     </select>
@@ -114,6 +119,14 @@
         <polyline points="4,7 7,9 4,11"/><line x1="9" y1="11" x2="12" y2="11"/>
       </svg>
       Terminal
+    </button>
+    <button class="header-btn" id="plugins-btn" title="Plugin Manager">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="2" width="5" height="5" rx="1"/>
+        <rect x="9" y="2" width="5" height="5" rx="1"/>
+        <rect x="2" y="9" width="5" height="5" rx="1"/>
+        <rect x="9" y="9" width="5" height="5" rx="1"/>
+      </svg>
     </button>
   </div>
 
@@ -631,6 +644,7 @@
           </optgroup>
           <optgroup label="NVIDIA NIM">
             <option value="moonshotai/kimi-k2.5">Kimi K2.5</option>
+            <option value="moonshotai/kimi-k2.6">Kimi K2.6</option>
             <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
             <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B</option>
             <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
@@ -646,6 +660,10 @@
           <option value="default">default — ask before edits/commands</option>
           <option value="auto">auto — approve safe reads</option>
           <option value="plan">plan — read-only, no changes</option>
+          <option value="agent">agent — full autonomy, execute everything</option>
+          <option value="debug">debug — auto-approve, debugging focus</option>
+          <option value="ask">ask — Q&amp;A only, no writes or commands</option>
+          <option value="multitask">multitask — parallel task coordination</option>
           <option value="acceptEdits">acceptEdits — auto-apply file edits</option>
           <option value="bypassPermissions">bypass — skip all checks</option>
         </select>
@@ -870,6 +888,10 @@
   </div>
 </div>
 
+<!-- Plugins panel -->
+<div id="plugins-panel" style="display:none; position:fixed; top:0; right:0; width:360px; height:100vh; background:var(--bg-secondary,#1e1e1e); border-left:1px solid var(--border,#444); z-index:200; flex-direction:column; overflow:hidden;"></div>
+
 <script src="chat.js"></script>
+<script src="plugins-panel.js"></script>
 </body>
 </html>

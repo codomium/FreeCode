@@ -10,10 +10,16 @@ import { CheckpointManager } from '../core/checkpoints.mjs';
 import { PromptCache } from '../core/cache.mjs';
 import { readEnv, listEnvVars } from '../config/env.mjs';
 import * as telemetry from '../telemetry/index.mjs';
+import { WorkspaceIndexer } from '../indexer/workspace-indexer.mjs';
 
 const checkpoints = new CheckpointManager();
 const promptCache = new PromptCache();
 let sessionManager = null;
+
+// Lazy workspace indexer for /codebase command
+let _codebaseIndexer = null;
+let _codebaseIndexerReady = false;
+let _lastCodebaseResults = null;
 
 function getSession() {
     if (!sessionManager) sessionManager = new SessionManager();
@@ -471,6 +477,44 @@ export const COMMANDS = {
             return 'Release creation requires gh CLI. Run: gh release create <tag>';
         },
     },
+
+    '/codebase': {
+        description: 'Search the workspace index: /codebase <query>',
+        handler(args, state) {
+            if (!args) {
+                return 'Usage: /codebase <query>  — search the indexed workspace for relevant code';
+            }
+            const cwd = process.cwd();
+            if (!_codebaseIndexer) {
+                _codebaseIndexer = new WorkspaceIndexer();
+                _codebaseIndexerReady = false;
+                _codebaseIndexer.index(cwd).then(() => {
+                    _codebaseIndexerReady = true;
+                }).catch(() => {
+                    _codebaseIndexerReady = false;
+                });
+                return 'Building workspace index… try again in a moment.';
+            }
+            if (!_codebaseIndexerReady) {
+                return 'Workspace index is still building… try again in a moment.';
+            }
+            // Kick off async search and return a placeholder; results arrive via state if caller supports it
+            _codebaseIndexer.search(args, 10).then(results => {
+                if (!Array.isArray(results) || results.length === 0) return;
+                const lines = results.map(r =>
+                    `${r.filePath}:${r.startLine}-${r.endLine}  (score: ${r.score.toFixed(3)})\n${r.text.slice(0, 120).replace(/\n/g, ' ')}`
+                );
+                // Store for next display tick
+                _lastCodebaseResults = lines.join('\n\n');
+            }).catch(() => {});
+            if (_lastCodebaseResults) {
+                const out = _lastCodebaseResults;
+                _lastCodebaseResults = null;
+                return `Codebase search results for "${args}":\n\n${out}`;
+            }
+            return `Searching workspace for "${args}"…`;
+        },
+    },
 };
 
 /**
@@ -481,6 +525,10 @@ export const COMMANDS = {
  */
 export function executeCommand(input, state) {
     const parts = input.split(/\s+/);
+    // Handle @codebase prefix as alias for /codebase
+    if (parts[0].toLowerCase() === '@codebase') {
+        parts[0] = '/codebase';
+    }
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1).join(' ');
 

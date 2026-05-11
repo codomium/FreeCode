@@ -28,11 +28,15 @@ const os     = require('os');
 const crypto = require('crypto');
 const { execFile, spawnSync } = require('child_process');
 const { pathToFileURL } = require('url');
+const { Worker } = require('worker_threads');
 const { MultiAgentOrchestrator } = require('./multi-agent-orchestrator');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_SESSION_MESSAGES = 200;
+const WATCHER_IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage']);
+const WATCHER_DEBOUNCE_MS = 500;
+const AGENT_WRITE_GRACE_MS = 2000;
 const RETRY_DELAYS_MS = [3000, 8000, 20000];
 const MIN_MULTI_AGENT_PROVIDERS = 3;
 
@@ -178,7 +182,135 @@ function hasApiKey() {
  * Mirrors the message protocol of agent-bridge.mjs but uses IPC instead of
  * stdin/stdout to communicate with the renderer.
  */
-class InProcessAgentBridge {
+// ── WorkerAgentBridge ─────────────────────────────────────────────────────────
+/**
+ * Runs the agent loop in a worker thread (agent-worker.js) so heavy AI work
+ * doesn't block the main process event loop.
+ *
+ * Protocol:
+ *   main → worker: { type: 'run', userMessage, settings }
+ *   main → worker: { type: 'abort' }
+ *   worker → main: agent event objects (same shape as InProcessAgentBridge)
+ */
+class WorkerAgentBridge {
+    constructor() {
+        this._worker = null;
+        this._onEvent = null;
+        this._model = null;
+        this._activeSessionId = null;
+        this._activeSessionGoal = null;
+        this._isCancelled = false;
+        this._permPending = new Map();
+        this._questionPending = new Map();
+    }
+
+    _spawnWorker() {
+        const workerPath = path.join(__dirname, 'agent-worker.js');
+        this._worker = new Worker(workerPath, {
+            workerData: { model: this._model || getSettings().model || 'claude-sonnet-4-6' },
+        });
+        this._worker.on('message', (event) => {
+            if (!this._onEvent) return;
+            if (event.type === 'permissionRequest') {
+                const { reqId, toolName, input } = event;
+                this._permPending.set(reqId, (allowed) => {
+                    this._worker && this._worker.postMessage({ type: 'permissionResponse', reqId, allowed });
+                });
+                this._onEvent(event);
+                return;
+            }
+            if (event.type === 'questionRequest') {
+                const { reqId } = event;
+                this._questionPending.set(reqId, (answer) => {
+                    this._worker && this._worker.postMessage({ type: 'questionResponse', reqId, answer });
+                });
+                this._onEvent(event);
+                return;
+            }
+            this._onEvent(event);
+        });
+        this._worker.on('error', (err) => {
+            if (this._onEvent) this._onEvent({ type: 'error', message: err.message });
+        });
+        this._worker.on('exit', (code) => {
+            // Auto-restart on unexpected crash (not a normal 0 exit)
+            if (code !== 0 && this._onEvent) {
+                this._onEvent({ type: 'error', message: `Agent worker exited unexpectedly (code ${code}). Restarting…` });
+                this._worker = null;
+                this._spawnWorker();
+            }
+        });
+    }
+
+    resolvePermission(reqId, allowed) {
+        const cb = this._permPending.get(reqId);
+        if (cb) { this._permPending.delete(reqId); cb(!!allowed); }
+    }
+
+    resolveQuestion(reqId, answer) {
+        const cb = this._questionPending.get(reqId);
+        if (cb) { this._questionPending.delete(reqId); cb(answer); }
+    }
+
+    async run(message, onEvent) {
+        this._isCancelled = false;
+        this._onEvent = onEvent;
+        if (!this._worker) this._spawnWorker();
+        const s = getSettings();
+        this._worker.postMessage({
+            type: 'run',
+            userMessage: message,
+            settings: {
+                model: this._model || s.model || 'claude-sonnet-4-6',
+                ...s,
+            },
+        });
+    }
+
+    cancel() {
+        this._isCancelled = true;
+        if (this._worker) this._worker.postMessage({ type: 'abort' });
+    }
+
+    reset() {
+        if (this._worker) this._worker.postMessage({ type: 'reset' });
+    }
+
+    switchModel(model) {
+        this._model = model;
+        if (this._worker) this._worker.postMessage({ type: 'switchModel', model });
+    }
+
+    resume(messages, sessionGoal, sessionId) {
+        if (!this._worker) this._spawnWorker();
+        this._activeSessionGoal = sessionGoal;
+        this._activeSessionId = sessionId;
+        this._worker.postMessage({ type: 'resume', messages, sessionGoal, sessionId });
+    }
+
+    setGoal(goal, sessionId) {
+        this._activeSessionGoal = goal;
+        this._activeSessionId = sessionId;
+        if (this._worker) this._worker.postMessage({ type: 'setGoal', goal, sessionId });
+    }
+
+    reinit() {
+        for (const cb of this._permPending.values()) cb(false);
+        this._permPending.clear();
+        if (this._worker) {
+            this._worker.terminate();
+            this._worker = null;
+        }
+    }
+
+    // Stub to satisfy call-sites that dereference ._loop.state
+    get _loop() {
+        return { state: { messages: [] } };
+    }
+}
+
+// ── InProcessAgentBridge ──────────────────────────────────────────────────────
+
     constructor() {
         this._loop        = null;
         this._isCancelled = false;
@@ -482,6 +614,8 @@ function getBridge() {
                 strategy: s.multiAgentStrategy || 'parallel',
                 createBridge: () => new InProcessAgentBridge(),
             });
+        } else if (s.useWorkerAgent) {
+            agentBridge = new WorkerAgentBridge();
         } else {
             agentBridge = new InProcessAgentBridge();
         }
@@ -1621,11 +1755,33 @@ ipcMain.on('renderer-message', async (event, msg) => {
             }
             const watchPath = msg.path || currentWorkspacePath;
             if (watchPath && fs.existsSync(watchPath)) {
+                // Debounce state: pending timer per file
+                const _debounceTimers = new Map();
+                // Track files recently written by the agent (within 2 seconds)
+                if (!global._agentWrittenFiles) global._agentWrittenFiles = new Map();
                 try {
                     global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
-                        // Include full path so the renderer can match it against open tabs
-                        const fullPath = filename ? path.join(watchPath, filename) : '';
-                        send({ type: 'fileWatchEvent', event, filename: filename || '', path: fullPath });
+                        if (!filename) return;
+                        // Purge stale agent-written entries to prevent unbounded growth
+                        const now = Date.now();
+                        for (const [p, ts] of global._agentWrittenFiles) {
+                            if (now - ts > AGENT_WRITE_GRACE_MS) global._agentWrittenFiles.delete(p);
+                        }
+                        // Filter out noisy directories
+                        const parts = filename.split(path.sep);
+                        if (parts.some(p => WATCHER_IGNORE_DIRS.has(p))) return;
+                        const fullPath = path.join(watchPath, filename);
+                        // Skip files recently written by the agent
+                        const agentTs = global._agentWrittenFiles.get(fullPath);
+                        if (agentTs && (Date.now() - agentTs) < AGENT_WRITE_GRACE_MS) return;
+                        // Debounce rapid fire events for the same path
+                        if (_debounceTimers.has(fullPath)) {
+                            clearTimeout(_debounceTimers.get(fullPath));
+                        }
+                        _debounceTimers.set(fullPath, setTimeout(() => {
+                            _debounceTimers.delete(fullPath);
+                            send({ type: 'fileWatchEvent', event, filename, path: fullPath });
+                        }, WATCHER_DEBOUNCE_MS));
                     });
                 } catch (watchErr) {
                     console.warn('watchWorkspace: fs.watch failed for', watchPath, ':', watchErr.message);
@@ -1904,6 +2060,11 @@ async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
             if (event.type === 'error' && isRateLimitError(event.message)) {
                 retryErrorMsg = event.message;
                 return;
+            }
+            // Track files written by the agent to suppress false watcher events
+            if (event.type === 'diff_annotation' && event.file) {
+                if (!global._agentWrittenFiles) global._agentWrittenFiles = new Map();
+                global._agentWrittenFiles.set(path.resolve(event.file), Date.now());
             }
             send(event);
         });

@@ -16,6 +16,7 @@ import {
     findSimilarLinesHint,
     tryWhitespaceNormalizedMatch,
 } from './edit-utils.mjs';
+import { WriteTransaction } from '../core/write-transaction.mjs';
 
 const MAX_PREVIEW_LENGTH = 300;
 
@@ -97,7 +98,14 @@ export const EditTool = {
                     content = content.replace(actualOld, newString);
                 }
                 try {
-                    fs.writeFileSync(filePath, content);
+                    const snapshotId = WriteTransaction.begin([filePath]);
+                    try {
+                        fs.writeFileSync(filePath, content);
+                        WriteTransaction.commit(snapshotId);
+                    } catch (e) {
+                        WriteTransaction.rollback(snapshotId);
+                        throw e;
+                    }
                     invalidateCache(filePath); // E2: clear stale cached Read output
                     markRead(filePath);
                     return formatEditSuccess(filePath, oldString, newString, 'matched after whitespace normalization');
@@ -124,7 +132,14 @@ export const EditTool = {
         }
 
         try {
-            fs.writeFileSync(filePath, content);
+            const snapshotId = WriteTransaction.begin([filePath]);
+            try {
+                fs.writeFileSync(filePath, content);
+                WriteTransaction.commit(snapshotId);
+            } catch (e) {
+                WriteTransaction.rollback(snapshotId);
+                throw e;
+            }
             invalidateCache(filePath); // E2: clear stale cached Read output
             // Keep it marked as read
             markRead(filePath);

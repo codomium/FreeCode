@@ -138,6 +138,10 @@
         default:           'Asks permission before making file edits or running commands — safest choice',
         auto:              'Approves safe read operations automatically; asks for writes and commands',
         plan:              'Read-only planning mode: analyzes code without making any changes',
+        agent:             '🤖 Agent mode: full autonomy — executes tasks end-to-end without asking',
+        debug:             '🐛 Debug mode: auto-approves tools, focuses on diagnosing and fixing issues',
+        ask:               '💬 Ask mode: Q&A only — answers questions, no file writes or command execution',
+        multitask:         '⚡ MultiTask mode: coordinates multiple parallel tasks simultaneously',
         acceptEdits:       'Automatically applies all file edits without asking — fast but careful',
         bypassPermissions: '⚠ Skips all permission checks — full automation, use with care',
     };
@@ -327,6 +331,7 @@
     /** Models that support NVIDIA thinking mode toggle */
     const THINKING_CAPABLE_MODELS = new Set([
         'moonshotai/kimi-k2.5',
+        'moonshotai/kimi-k2.6',
         'deepseek-ai/deepseek-r1',
     ]);
 
@@ -339,6 +344,7 @@
         'gpt-4o-mini':                                 128000,
         'gemini-2.0-flash':                           1000000,
         'moonshotai/kimi-k2.5':                        128000,
+        'moonshotai/kimi-k2.6':                        128000,
         'deepseek-ai/deepseek-r1':                      64000,
         'nvidia/llama-3.1-nemotron-70b-instruct':      128000,
         'meta/llama-3.1-405b-instruct':                128000,
@@ -1159,7 +1165,7 @@
         div._regenPrompt = lastUserMessage;    // capture for regenerate
         const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         // Whitelist known mode values for safe CSS class construction
-        const safeModes = new Set(['default', 'auto', 'plan', 'acceptEdits', 'bypassPermissions']);
+        const safeModes = new Set(['default', 'auto', 'plan', 'agent', 'debug', 'ask', 'multitask', 'acceptEdits', 'bypassPermissions']);
         const safeMode  = safeModes.has(currentMode) ? currentMode : 'default';
         const modeBadgeHtml = `<span class="mode-badge mode-badge-${safeMode}">${escapeHtml(safeMode)}</span>`;
         div.innerHTML = `

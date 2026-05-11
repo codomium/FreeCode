@@ -123,6 +123,67 @@ export class CheckpointManager {
     }
 
     /**
+     * Snapshot all files a plan node will touch, keyed by nodeId.
+     * Call this *before* the first write for the node.
+     * @param {string} nodeId
+     * @param {string[]} filePaths - absolute paths to snapshot
+     * @returns {string} snapshotId (equals nodeId)
+     */
+    snapshotNode(nodeId, filePaths) {
+        const snapshots = [];
+        for (const filePath of filePaths) {
+            const absPath = path.resolve(filePath);
+            try {
+                const content = fs.existsSync(absPath)
+                    ? fs.readFileSync(absPath, 'utf-8')
+                    : null; // null = file didn't exist (create will need undo = delete)
+                snapshots.push({ filePath: absPath, content });
+            } catch {
+                // Skip unreadable files
+            }
+        }
+
+        // Persist node snapshot as a JSON file
+        fs.mkdirSync(this.checkpointDir, { recursive: true });
+        const snapFile = path.join(this.checkpointDir, `node_${nodeId}.json`);
+        fs.writeFileSync(snapFile, JSON.stringify({
+            nodeId,
+            snapshots,
+            timestamp: new Date().toISOString(),
+        }));
+
+        return nodeId;
+    }
+
+    /**
+     * Restore all files snapshotted for a plan node.
+     * @param {string} nodeId
+     * @returns {{ ok: boolean, filesRestored: string[], error?: string }}
+     */
+    rollbackNode(nodeId) {
+        const snapFile = path.join(this.checkpointDir, `node_${nodeId}.json`);
+        try {
+            const data = JSON.parse(fs.readFileSync(snapFile, 'utf-8'));
+            const filesRestored = [];
+            for (const { filePath, content } of data.snapshots) {
+                if (content === null) {
+                    // File didn't exist — delete it if it does now
+                    try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+                } else {
+                    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+                    fs.writeFileSync(filePath, content);
+                }
+                filesRestored.push(filePath);
+            }
+            // Clean up snapshot file
+            try { fs.unlinkSync(snapFile); } catch { /* best effort */ }
+            return { ok: true, filesRestored };
+        } catch (err) {
+            return { ok: false, filesRestored: [], error: err.message };
+        }
+    }
+
+    /**
      * Clear all checkpoints.
      */
     clear() {
