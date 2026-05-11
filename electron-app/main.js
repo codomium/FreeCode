@@ -487,6 +487,8 @@ function getBridge() {
         }
         // Restore conversation context that was saved before the last reinit
         if (savedAgentMessages && savedAgentMessages.length > 0) {
+            // Keep raw agent-loop messages on the pending path only.
+            // resume() is for renderer/UI-formatted messages ({ type, text }).
             agentBridge._pendingMessages = savedAgentMessages;
             savedAgentMessages = null;
         }
@@ -1480,12 +1482,19 @@ ipcMain.on('renderer-message', async (event, msg) => {
         case 'listDirectory': {
             const dirPath = msg.path || getSettings().workspacePath || os.homedir();
             const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
+            let readdirInFlight = 0;
+            const MAX_READDIR_CONCURRENT = 8;
             // Async recursive builder — uses fs.promises.readdir so each readdir
             // yields to the event loop, keeping the main process responsive.
             const buildTree = async (dir, depth) => {
                 if (depth > 5) return [];
+                while (readdirInFlight >= MAX_READDIR_CONCURRENT) {
+                    await new Promise((r) => setImmediate(r));
+                }
+                readdirInFlight++;
                 let entries;
                 try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
+                finally { readdirInFlight--; }
                 const items = [];
                 for (const e of entries) {
                     if (e.isDirectory()) {
@@ -1906,12 +1915,12 @@ async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
         send({ type: 'retrying', attempt: attempt + 1, delaySeconds: delaySec, maxAttempts: RETRY_DELAYS_MS.length });
 
         await new Promise((resolve) => {
-            let remaining = delaySec - 1;
+            let remaining = delaySec;
             const tick = setInterval(() => {
                 if (isCancelled) { clearInterval(tick); resolve(); return; }
+                remaining--;
                 if (remaining <= 0) { clearInterval(tick); resolve(); return; }
                 send({ type: 'retrying', attempt: attempt + 1, delaySeconds: remaining, maxAttempts: RETRY_DELAYS_MS.length });
-                remaining--;
             }, 1000);
         });
 
