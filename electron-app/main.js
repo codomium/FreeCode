@@ -1484,17 +1484,30 @@ ipcMain.on('renderer-message', async (event, msg) => {
             const SKIP_DIRS = new Set(['node_modules','.git','dist','.next','__pycache__','.cache','.idea','.vscode','build','out','.DS_Store']);
             let readdirInFlight = 0;
             const MAX_READDIR_CONCURRENT = 8;
+            const readdirWaiters = [];
+            const acquireReaddirSlot = async () => {
+                if (readdirInFlight < MAX_READDIR_CONCURRENT) {
+                    readdirInFlight++;
+                    return;
+                }
+                await new Promise((resolve) => readdirWaiters.push(resolve));
+            };
+            const releaseReaddirSlot = () => {
+                const next = readdirWaiters.shift();
+                if (next) {
+                    next();
+                    return;
+                }
+                readdirInFlight = Math.max(0, readdirInFlight - 1);
+            };
             // Async recursive builder — uses fs.promises.readdir so each readdir
             // yields to the event loop, keeping the main process responsive.
             const buildTree = async (dir, depth) => {
                 if (depth > 5) return [];
-                while (readdirInFlight >= MAX_READDIR_CONCURRENT) {
-                    await new Promise((r) => setImmediate(r));
-                }
-                readdirInFlight++;
+                await acquireReaddirSlot();
                 let entries;
                 try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
-                finally { readdirInFlight--; }
+                finally { releaseReaddirSlot(); }
                 const items = [];
                 for (const e of entries) {
                     if (e.isDirectory()) {

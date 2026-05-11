@@ -31,6 +31,7 @@ const NVIDIA_THINKING_CAPABLE_MODELS = new Set([
     'moonshotai/kimi-k2.5',
     'deepseek-ai/deepseek-r1',
 ]);
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 export function createAgentLoop({ model, tools, permissions, settings, hooks }) {
     const contextManager = new ContextManager(settings.maxContextTokens || 160000);
@@ -1295,7 +1296,7 @@ function detectRepetition(text) {
 function resolveMaxOutputTokens(settings) {
     const configured = Number(settings?.maxOutputTokens ?? settings?.maxTokens);
     if (Number.isFinite(configured) && configured > 0) return configured;
-    return 32768;
+    return DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 /**
