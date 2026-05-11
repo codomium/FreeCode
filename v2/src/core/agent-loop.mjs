@@ -1294,6 +1294,7 @@ function detectRepetition(text) {
 }
 
 function resolveMaxOutputTokens(settings) {
+    // Keep maxTokens as a backward-compatible fallback for older configs.
     const configured = Number(settings?.maxOutputTokens ?? settings?.maxTokens);
     if (Number.isFinite(configured) && configured > 0) return configured;
     return DEFAULT_MAX_OUTPUT_TOKENS;
