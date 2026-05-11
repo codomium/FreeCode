@@ -1498,7 +1498,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                     next();
                     return;
                 }
-                readdirInFlight = Math.max(0, readdirInFlight - 1);
+                readdirInFlight--;
             };
             // Async recursive builder — uses fs.promises.readdir so each readdir
             // yields to the event loop, keeping the main process responsive.

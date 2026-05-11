@@ -1250,7 +1250,7 @@ function accumulateFromCollected(events) {
  * Returns true when the model appears to be stuck generating repeated phrases.
  *
  * Two detection passes:
- *  1. (original) Look for any phrase of length 40–300 chars that appears ≥6 times
+ *  1. (tuned) Look for any phrase of length 40–300 chars that appears ≥6 times
  *     in the most recent 800 characters — catches tight word-for-word loops.
  *  2. (F11) Rolling-window hash pass — divide the last 4000 chars into 500-char
  *     windows and compare their djb2 hashes. If the same hash appears ≥3 times
