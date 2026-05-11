@@ -58,16 +58,16 @@ class MultiAgentOrchestrator {
     }
 
     /**
-     * Run the provider body with a timeout guard.
-     * Renames the original _runProvider body to _runProviderInner.
+     * Run the provider body with a 30-second timeout guard.
      */
-    _runProvider(provider, prompt, onEvent, timeoutMs = 30000) {
+    _runProvider(provider, prompt, onEvent) {
+        const TIMEOUT_MS = 30000;
         const key = provider.id || provider.name || 'unknown';
         let timer;
         const timeoutPromise = new Promise((_, reject) => {
             timer = setTimeout(
-                () => reject(new Error(`Provider ${key} timed out after ${timeoutMs}ms`)),
-                timeoutMs
+                () => reject(new Error(`Provider ${key} timed out after ${TIMEOUT_MS}ms`)),
+                TIMEOUT_MS
             );
         });
         return Promise.race([
@@ -83,7 +83,7 @@ class MultiAgentOrchestrator {
                     const next = prev + 1;
                     this._providerFailures.set(key, next);
                     if (next >= 3) {
-                        onEvent({ type: 'info', message: `⚡ Provider ${key} circuit-broken after 3 failures` });
+                        onEvent({ type: 'info', message: `⚡ Provider ${key}: circuit-breaker tripped after 3 failures` });
                     }
                     throw err;
                 }

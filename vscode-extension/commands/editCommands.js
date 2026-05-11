@@ -80,7 +80,7 @@ function registerEditCommands(context, { getBridge, viewProvider, logger }) {
                 async (_progress, token) => {
                     token.onCancellationRequested(() => { cancelled = true; });
 
-                    const bridge = getBridge ? getBridge() : null;
+                    const bridge = getBridge ? await getBridge() : null;
                     if (!bridge) {
                         vscode.window.showErrorMessage('Open Claude Code: bridge not ready.');
                         cancelled = true;

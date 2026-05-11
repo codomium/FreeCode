@@ -95,19 +95,21 @@ function showApiKeyDialog(parentWindow, appDir) {
 
 /**
  * Register IPC handlers for API key management.
- * @param {import('electron').IpcMain} ipcMain
- * @param {object} opts
- * @param {() => string}   opts.getUserData
- * @param {() => import('electron').BrowserWindow|null} opts.getMainWindow
- * @param {string}          opts.appDir
- * @param {() => void}      opts.onKeyStored   Called after a key is successfully stored
+ *
+ * Currently a no-op hook point: the dialog flow is handled entirely by
+ * showApiKeyDialog above.  This function exists for API symmetry and to
+ * provide a natural place to add future key-related IPC (e.g. deleteApiKey).
+ *
+ * @param {import('electron').IpcMain} _ipcMain
+ * @param {object} _opts
+ * @param {() => string}   _opts.getUserData
+ * @param {() => import('electron').BrowserWindow|null} _opts.getMainWindow
+ * @param {string}          _opts.appDir
+ * @param {() => void}      _opts.onKeyStored   Called after a key is successfully stored
  */
-function registerApiKeyHandlers(ipcMain, { getUserData, getMainWindow, appDir, onKeyStored }) {
-    // These are exposed via the dialog-preload / renderer flow — handled by showApiKeyDialog above.
-    // No extra ipcMain.on handlers needed here; the dialog promise resolves in showApiKeyDialog.
-    // This function is a hook point for future key-related IPC (e.g. deleteApiKey).
-    void ipcMain; // kept for API symmetry
-    void { getUserData, getMainWindow, appDir, onKeyStored };
+// eslint-disable-next-line no-unused-vars
+function registerApiKeyHandlers(_ipcMain, _opts) {
+    // Reserved for future ipcMain.on/handle registrations.
 }
 
 module.exports = { storeApiKey, loadApiKey, showApiKeyDialog, registerApiKeyHandlers };

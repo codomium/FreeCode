@@ -27,13 +27,15 @@ const fs = require('fs');
 const { CodebaseIndexer } = require('./indexer');
 const { FreeCodeLogger } = require('./logger');
 const { setupModules } = require('./activate');
+const { registerChatCommands } = require('./commands/chatCommands');
+const { registerEditCommands } = require('./commands/editCommands');
+const { registerProviderCommands, MIN_MULTI_AGENT_PROVIDERS } = require('./commands/providerCommands');
 
 const PARTICIPANT_ID = 'open-claude-code.claude';
 const BRIDGE_SCRIPT  = path.join(__dirname, 'agent-bridge.mjs');
 // Maximum number of user/assistant messages kept in a persisted session.
 // Applies to both the in-progress activeSession and updated history entries.
 const MAX_SESSION_MESSAGES = 200;
-const MIN_MULTI_AGENT_PROVIDERS = 3;
 
 // ── Rate-limit retry ─────────────────────────────────────────────────────────
 /** Backoff delays (ms) for successive retry attempts */
@@ -1136,40 +1138,6 @@ async function handleChatRequest(request, _context, stream, token) {
     flushText();
 }
 
-const PROVIDER_PRESETS = [
-    ['anthropic', 'Anthropic (Claude)', 'https://api.anthropic.com/v1'],
-    ['openai', 'OpenAI', 'https://api.openai.com/v1'],
-    ['gemini', 'Google Gemini', 'https://generativelanguage.googleapis.com/v1beta/openai'],
-    ['nvidia', 'NVIDIA NIM', 'https://integrate.api.nvidia.com/v1'],
-    ['groq', 'Groq', 'https://api.groq.com/openai/v1'],
-    ['together', 'Together AI', 'https://api.together.xyz/v1'],
-    ['openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1'],
-    ['mistral', 'Mistral AI', 'https://api.mistral.ai/v1'],
-    ['cohere', 'Cohere', 'https://api.cohere.ai/compatibility/v1'],
-    ['deepseek', 'DeepSeek', 'https://api.deepseek.com/v1'],
-    ['perplexity', 'Perplexity', 'https://api.perplexity.ai'],
-    ['xai', 'xAI (Grok)', 'https://api.x.ai/v1'],
-    ['fireworks', 'Fireworks AI', 'https://api.fireworks.ai/inference/v1'],
-    ['cerebras', 'Cerebras', 'https://api.cerebras.ai/v1'],
-    ['custom', 'Custom', ''],
-];
-
-async function testProviderConnection(provider) {
-    const url = String(provider.baseUrl || '').replace(/\/+$/, '') + '/models';
-    const headers = { Authorization: `Bearer ${provider.apiKey || ''}` };
-    const res = await fetch(url, { method: 'GET', headers });
-    if (!res.ok) {
-        const providerLabel = provider?.name || provider?.id || 'Unknown provider';
-        throw new Error(`HTTP ${res.status} ${res.statusText} when testing ${providerLabel}`);
-    }
-    return true;
-}
-
-function extractCodeBlockText(text) {
-    const m = String(text || '').match(/```(?:[\w+-]+)?\n([\s\S]*?)```/);
-    return (m ? m[1] : text || '').trim();
-}
-
 // ── Activation / deactivation ────────────────────────────────────────────────
 
 function activate(context) {
@@ -1197,217 +1165,16 @@ function activate(context) {
     participant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
     context.subscriptions.push(participant);
 
-    // Commands
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.setApiKey', async () => {
-            const key = await vscode.window.showInputBox({
-                prompt: 'Enter your API key for Anthropic (sk-ant-...), OpenAI (sk-...) or any other provider',
-                password: true,
-                placeHolder: 'sk-ant-api03-... or sk-... or nvapi-...',
-                validateInput: (v) => (v && v.trim().length > 10) ? null : 'API key must be at least 10 characters (e.g. sk-ant-..., sk-..., nvapi-...)',
-            });
-            if (key) {
-                await context.secrets.store('openClaudeCode.apiKey', key.trim());
-                if (bridge) { bridge.dispose(); bridge = null; }
-                vscode.window.showInformationMessage('API key saved. Bridge will restart on next message.');
-                // Notify webview so it can hide the setup guide
-                if (viewProvider) {
-                    viewProvider.postMessage({ type: 'apiKeySet' });
-                }
-            }
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.clearSession', async () => {
-            if (bridge && bridge.isRunning) {
-                await bridge.reset();
-                if (viewProvider) viewProvider.postMessage({ type: 'sessionCleared' });
-                vscode.window.showInformationMessage('Open Claude Code session cleared.');
-            } else {
-                vscode.window.showInformationMessage('No active session to clear.');
-            }
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.showStatus', async () => {
-            const config = vscode.workspace.getConfiguration('openClaudeCode');
-            const model          = config.get('model') || 'claude-sonnet-4-6';
-            const permissionMode = config.get('permissionMode') || 'default';
-            const hasKey = !!(
-                (await context.secrets.get('openClaudeCode.apiKey')) ||
-                process.env.ANTHROPIC_API_KEY
-            );
-            const status = (bridge && bridge.isRunning) ? '🟢 running' : '⚪ idle';
-            vscode.window.showInformationMessage(
-                'Open Claude Code — bridge: ' + status +
-                ' | model: ' + model +
-                ' | permission: ' + permissionMode +
-                ' | API key: ' + (hasKey ? '✅ set' : '❌ missing')
-            );
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.openChat', () => {
-            vscode.commands.executeCommand('claudeCode.chatView.focus');
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.applyCode', async () => {
-            const code = await vscode.window.showInputBox({
-                prompt: 'Paste code to apply to the active editor',
-                placeHolder: '// paste code here',
-            });
-            if (code && viewProvider) {
-                await viewProvider._applyCodeToActiveEditor(code);
-            }
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.inlineEdit', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) {
-                vscode.window.showWarningMessage('Open Claude Code: No active editor for inline edit.');
-                return;
-            }
-            const selection = editor.selection;
-            const selectedText = editor.document.getText(selection.isEmpty ? undefined : selection);
-            const editInstruction = await vscode.window.showInputBox({
-                prompt: 'Inline edit instruction',
-                placeHolder: 'e.g., optimize this function and add error handling',
-            });
-            if (!editInstruction) return;
-            let cancelled = false;
-            let proposed = '';
-            await vscode.window.withProgress({
-                location: vscode.ProgressLocation.Notification,
-                title: 'Open Claude Code: generating inline edit…',
-                cancellable: true,
-            }, async (_progress, token) => {
-                token.onCancellationRequested(() => { cancelled = true; });
-                const bridge = await getBridge();
-                const prompt = [
-                    'Rewrite the provided code according to the instruction.',
-                    'Return only the edited code.',
-                    `Instruction: ${editInstruction}`,
-                    'Code:',
-                    '```',
-                    selectedText,
-                    '```',
-                ].join('\n');
-                await bridge.run(prompt, (event) => {
-                    if (cancelled) return;
-                    if (event.type === 'stream_event' && event.text) proposed += event.text;
-                    if (event.type === 'assistant' && event.content && !event._streamed) proposed += event.content;
-                });
-            });
-            if (cancelled || !proposed.trim()) return;
-            const editedCode = extractCodeBlockText(proposed);
-            if (!editedCode) return;
-            const originalDoc = editor.document;
-            const before = selectedText;
-            const after = editedCode;
-            const left = await vscode.workspace.openTextDocument({ content: before, language: originalDoc.languageId });
-            const right = await vscode.workspace.openTextDocument({ content: after, language: originalDoc.languageId });
-            await vscode.commands.executeCommand(
-                'vscode.diff',
-                left.uri,
-                right.uri,
-                `Inline Edit Diff: ${path.basename(originalDoc.fileName)}`
-            );
-            const choice = await vscode.window.showInformationMessage(
-                'Inline edit ready',
-                '✅ Accept',
-                '❌ Reject'
-            );
-            if (choice === '✅ Accept') {
-                await editor.edit((eb) => {
-                    const range = selection.isEmpty
-                        ? new vscode.Range(originalDoc.positionAt(0), originalDoc.positionAt(originalDoc.getText().length))
-                        : selection;
-                    eb.replace(range, editedCode);
-                });
-            }
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.manageProviders', async () => {
-            const key = 'openClaudeCode.providers';
-            let providers = context.globalState.get(key, []);
-            while (true) {
-                const choice = await vscode.window.showQuickPick(
-                    ['Add Provider', 'Remove Provider', 'Test Provider', 'Done'],
-                    { title: `Providers configured: ${providers.length}` }
-                );
-                if (!choice || choice === 'Done') break;
-                if (choice === 'Add Provider') {
-                    const preset = await vscode.window.showQuickPick(
-                        PROVIDER_PRESETS.map(([id, label, url]) => ({ label, id, url })),
-                        { title: 'Select provider preset' }
-                    );
-                    if (!preset) continue;
-                    const apiKey = await vscode.window.showInputBox({ prompt: `${preset.label} API key`, password: true });
-                    if (!apiKey) continue;
-                    let baseUrl = preset.url;
-                    if (preset.id === 'custom') {
-                        baseUrl = await vscode.window.showInputBox({ prompt: 'Custom provider base URL (OpenAI-compatible)' }) || '';
-                    }
-                    const model = await vscode.window.showInputBox({ prompt: 'Default model ID for this provider' });
-                    if (!model) continue;
-                    providers.push({
-                        id: `${preset.id}-${Date.now()}`,
-                        name: preset.label,
-                        baseUrl,
-                        apiKey,
-                        models: [{ id: model, name: model }],
-                        headers: [],
-                    });
-                    await context.globalState.update(key, providers);
-                } else if (choice === 'Remove Provider') {
-                    if (!providers.length) { vscode.window.showInformationMessage('No providers to remove.'); continue; }
-                    const pick = await vscode.window.showQuickPick(
-                        providers.map((p, i) => ({ label: p.name || p.id, description: p.baseUrl, i }))
-                    );
-                    if (pick) {
-                        providers.splice(pick.i, 1);
-                        await context.globalState.update(key, providers);
-                    }
-                } else if (choice === 'Test Provider') {
-                    if (!providers.length) { vscode.window.showInformationMessage('No providers to test.'); continue; }
-                    const pick = await vscode.window.showQuickPick(
-                        providers.map((p, i) => ({ label: p.name || p.id, description: p.baseUrl, i }))
-                    );
-                    if (!pick) continue;
-                    try {
-                        await testProviderConnection(providers[pick.i]);
-                        vscode.window.showInformationMessage(`✅ ${providers[pick.i].name || providers[pick.i].id} connected.`);
-                    } catch (err) {
-                        vscode.window.showErrorMessage(`❌ Provider test failed: ${err.message}`);
-                    }
-                }
-            }
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('openClaudeCode.toggleMultiAgent', async () => {
-            const providers = context.globalState.get('openClaudeCode.providers', []);
-            if (providers.length < MIN_MULTI_AGENT_PROVIDERS) {
-                vscode.window.showErrorMessage(`Configure at least ${MIN_MULTI_AGENT_PROVIDERS} providers in "Open Claude Code: Manage Providers" before enabling Multi-Agent Mode.`);
-                return;
-            }
-            const config = vscode.workspace.getConfiguration('openClaudeCode');
-            const next = !config.get('multiAgentEnabled');
-            await config.update('multiAgentEnabled', next, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`Multi-Agent Mode ${next ? 'enabled' : 'disabled'}.`);
-            if (bridge) { bridge.dispose(); bridge = null; }
-        })
-    );
+    // ── Commands (split into cohesive modules) ───────────────────────────────
+    const bridgeDeps = {
+        getActiveBridge: () => bridge,
+        resetBridge:     () => { bridge = null; },
+        viewProvider,
+        logger,
+    };
+    registerChatCommands(context, bridgeDeps);
+    registerEditCommands(context, { getBridge, viewProvider, logger });
+    registerProviderCommands(context, bridgeDeps);
 
     // Reload bridge when settings change
     context.subscriptions.push(
