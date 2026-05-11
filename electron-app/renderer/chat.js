@@ -267,6 +267,12 @@
     const settingsOpenFolderBtn = document.getElementById('settings-open-folder-btn');
     const settingsGhLink       = document.getElementById('settings-gh-link');
 
+    // ── Per-provider API key UI ───────────────────────────────────────────────
+    const apiKeyProviderSelect = document.getElementById('api-key-provider-select');
+    const apiKeyInput          = document.getElementById('api-key-input');
+    const apiKeySaveBtn        = document.getElementById('api-key-save-btn');
+    const apiKeysListEl        = document.getElementById('api-keys-list');
+
     // ── File explorer panel refs ─────────────────────────────────────────────
     const explorerBtn          = document.getElementById('explorer-btn');   // may be null
     const explorerPanel        = document.getElementById('explorer-panel'); // may be null (removed as overlay)
@@ -2336,6 +2342,7 @@
                     settingsKeyStatus.textContent = '✓ API key saved';
                     settingsKeyStatus.style.color = 'var(--success)';
                 }
+                if (apiKeysListEl && msg.providerKeyStatus) renderApiKeysList(msg.providerKeyStatus);
                 break;
 
             case 'gitContext':
@@ -4123,6 +4130,7 @@
         if (settingPersona)        settingPersona.value = msg.systemPromptPreset || 'expert-engineer';
         if (personaQuickSelect)    personaQuickSelect.value = msg.systemPromptPreset || 'auto';
         if (settingNvidiaKey)      settingNvidiaKey.placeholder = msg.hasNvidiaKey ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
+        if (apiKeysListEl && msg.providerKeyStatus) renderApiKeysList(msg.providerKeyStatus);
         multiAgentEnabled = !!msg.multiAgentEnabled;
         multiAgentStrategy = msg.multiAgentStrategy || 'parallel';
         if (settingMultiAgentEnabled) settingMultiAgentEnabled.checked = multiAgentEnabled;
@@ -4429,6 +4437,45 @@
                 settingNvidiaKey.placeholder = val ? '••••••• (set — enter to change)' : 'nvapi-… (leave blank to clear)';
             }
         });
+    }
+
+    /**
+     * Render the API Keys list in the settings panel.
+     * @param {{ anthropic: boolean, openai: boolean, google: boolean, nvidia: boolean }} status
+     */
+    function renderApiKeysList(status) {
+        if (!apiKeysListEl) return;
+        const labels = { anthropic: 'Anthropic', openai: 'OpenAI', google: 'Google (Gemini)', nvidia: 'NVIDIA NIM' };
+        const entries = Object.entries(labels).filter(([k]) => status[k]);
+        if (entries.length === 0) {
+            apiKeysListEl.innerHTML = '<div class="settings-note" style="opacity:0.6">No API keys saved yet.</div>';
+            return;
+        }
+        apiKeysListEl.innerHTML = entries.map(([provider, label]) => `
+            <div class="settings-row" style="padding:4px 0;gap:8px;align-items:center">
+              <span style="font-size:12px;flex:1">✓ <strong>${label}</strong> — key saved</span>
+              <button class="settings-action-btn api-key-clear-btn" data-provider="${provider}"
+                      style="font-size:11px;padding:3px 10px">Clear</button>
+            </div>`).join('');
+        apiKeysListEl.querySelectorAll('.api-key-clear-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'saveProviderKey', provider: btn.dataset.provider, key: '' });
+            });
+        });
+    }
+
+    if (apiKeySaveBtn) {
+        const doSave = () => {
+            const provider = apiKeyProviderSelect ? apiKeyProviderSelect.value : 'anthropic';
+            const key      = apiKeyInput ? apiKeyInput.value.trim() : '';
+            if (!key) return;
+            vscode.postMessage({ type: 'saveProviderKey', provider, key });
+            if (apiKeyInput) { apiKeyInput.value = ''; apiKeyInput.placeholder = 'Enter API key…'; }
+        };
+        apiKeySaveBtn.addEventListener('click', doSave);
+        if (apiKeyInput) {
+            apiKeyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSave(); });
+        }
     }
 
     if (settingsOpenFolderBtn) {
