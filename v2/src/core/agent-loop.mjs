@@ -24,15 +24,19 @@ let _idCounter = 0;
 function nextId() { return ++_idCounter; }
 
 /**
- * NVIDIA NIM models that CAN use chat_template_kwargs.thinking=true for
- * extended reasoning — but only when NVIDIA_THINKING_MODE=true is set.
+ * NVIDIA NIM models that support extended reasoning (thinking mode).
  *
  * By default (NVIDIA_THINKING_MODE unset / false) these models work in
  * standard tool-calling mode: Read, Write, Bash, Grep, etc. all work.
  *
- * When NVIDIA_THINKING_MODE=true the thinking flag is added and tools are
- * omitted (NVIDIA NIM rejects the combination), falling back to workspace
+ * When NVIDIA_THINKING_MODE=true tools are omitted (NVIDIA NIM rejects
+ * the combination of thinking + tool-calling), falling back to workspace
  * snapshot injection.
+ *
+ * NOTE: Do NOT send chat_template_kwargs in the request body. The NVIDIA
+ * NIM backend serialises request parameters using Python's hash mechanism;
+ * a dict value (i.e. the chat_template_kwargs object) is unhashable and
+ * causes a server-side HTTP 500 "unhashable type: 'dict'" error.
  */
 const NVIDIA_THINKING_CAPABLE_MODELS = new Set([
     'moonshotai/kimi-k2.5',
@@ -767,9 +771,12 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
  * Uses the same message format as OpenAI but targets
  * https://integrate.api.nvidia.com/v1/chat/completions.
  *
- * For thinking-capable models (kimi-k2.5, deepseek-r1) the
- * `chat_template_kwargs: { thinking: true }` parameter is added
- * automatically so the model returns its reasoning trace.
+ * For thinking-capable models (kimi-k2.5, kimi-k2.6, deepseek-r1) extended
+ * reasoning is activated by setting NVIDIA_THINKING_MODE=true, which omits
+ * tool definitions (NVIDIA NIM rejects thinking + tools together).
+ *
+ * NOTE: chat_template_kwargs must NOT be sent — its dict value causes a
+ * server-side HTTP 500 "unhashable type: 'dict'" in NVIDIA's Python backend.
  *
  * Streaming uses the standard OpenAI SSE format (data: {...} / data: [DONE]).
  * The thinking content is surfaced as a "thinking" text block so the existing
@@ -811,16 +818,8 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         temperature: 1.00,
         top_p: 1.00,
         stream: !!stream,
-        // Explicitly set thinking mode for models that support it.
-        // kimi-k2.6 (and kimi-k2.5) enable thinking BY DEFAULT; without an
-        // explicit chat_template_kwargs.thinking=false the backend will run in
-        // thinking mode even when not requested, and the combination of
-        // thinking + tools causes a server-side "unhashable type: 'dict'" 500.
-        ...(NVIDIA_THINKING_CAPABLE_MODELS.has(model) && {
-            chat_template_kwargs: { thinking: supportsThinking },
-        }),
         // Include tools unless thinking mode is active (NVIDIA NIM rejects
-        // the combination of chat_template_kwargs.thinking + tools).
+        // the combination of thinking + tools).
         ...(!supportsThinking && toolDefs.length > 0 && {
             tools: toolDefs.map(t => ({
                 type: 'function',
@@ -895,13 +894,12 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
     if (!baseUrl) throw new Error(`Custom provider "${providerCfg.id}": baseUrl is required`);
     if (!apiKey)  throw new Error(`Custom provider "${providerCfg.id}": apiKey is required`);
 
-    // kimi-k2.6 (and kimi-k2.5 / deepseek-r1) enable thinking BY DEFAULT on the
-    // NVIDIA NIM backend.  The backend fails with "unhashable type: 'dict'" (HTTP 500)
-    // whenever thinking mode and tools are active at the same time.  We must therefore
-    // explicitly send chat_template_kwargs: { thinking: false } to suppress the
-    // model's default thinking behaviour unless the user has opted in via
-    // NVIDIA_THINKING_MODE=true.  When thinking IS enabled we still exclude tools for
-    // the same reason.  Also respect an explicit providerCfg.disableTools flag.
+    // kimi-k2.5 / kimi-k2.6 / deepseek-r1 on the NVIDIA NIM backend support
+    // extended thinking. When NVIDIA_THINKING_MODE=true we exclude tools because
+    // NVIDIA NIM rejects the combination of thinking + tool-calling.
+    // Do NOT send chat_template_kwargs — its dict value causes a server-side
+    // HTTP 500 "unhashable type: 'dict'" error in NVIDIA's Python backend.
+    // Also respect an explicit providerCfg.disableTools flag.
     const isNvidiaThinkingModel = NVIDIA_THINKING_CAPABLE_MODELS.has(model);
     const thinkingEnabled = process.env.NVIDIA_THINKING_MODE === 'true';
     const disableTools = providerCfg.disableTools || (isNvidiaThinkingModel && thinkingEnabled);
@@ -915,12 +913,6 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
         temperature: 1.00,
         top_p: 1.00,
         stream: !!stream,
-        // Explicitly control thinking for models that support it.
-        // Without an explicit false the NVIDIA backend defaults to thinking=true,
-        // which combined with tools produces a 500 "unhashable type: 'dict'" error.
-        ...(isNvidiaThinkingModel && {
-            chat_template_kwargs: { thinking: thinkingEnabled },
-        }),
         ...(toolDefs.length > 0 && !disableTools && {
             tools: toolDefs.map(t => ({
                 type: 'function',
