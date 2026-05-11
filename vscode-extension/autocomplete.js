@@ -8,7 +8,7 @@
  *
  * Features:
  *   - 300 ms debounce to avoid hammering the API
- *   - Prefix (last 2 000 chars) + suffix (next 500 chars) sent to the model
+ *   - Prefix (last 2000 chars) + suffix (next 500 chars) sent to the model
  *   - AbortController cancellation when the user types again
  *   - LRU cache (50 entries) keyed by `${uri}:${offset}:${prefixHash}`
  *   - Works with Anthropic (Messages API) and OpenAI-compatible APIs
@@ -163,7 +163,7 @@ class TabAutocompleteProvider {
     constructor(context, logger) {
         this._context    = context;
         this._logger     = logger || null;
-        this._cache      = new LRUCache(50, 120000);  // 50 entries, 2-min TTL
+        this._cache      = new LRUCache(50, 120000);  // 50 entries, 120s (2-minute) TTL
         this._debounceTimer = null;
         this._abortCtrl  = null;
     }

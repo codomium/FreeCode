@@ -3,7 +3,7 @@
  * indexer.js — Content-aware TF-IDF semantic codebase indexer.
  *
  * Replaces the naive path-token-only indexer with one that:
- *   - Reads file content (first 4 000 bytes, async via vscode.workspace.fs)
+ *   - Reads file content (first 4000 bytes, async via vscode.workspace.fs)
  *   - Extracts function/class/export symbols with regex
  *   - Builds a TF-IDF index: term frequency per file × IDF across all files
  *   - Supports incremental rebuild (onFileChanged / onFileDeleted)
