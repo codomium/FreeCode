@@ -169,6 +169,7 @@ const PROVIDERS = {
         },
         models: [
             'moonshotai/kimi-k2.5',
+            'moonshotai/kimi-k2.6',
             'nvidia/llama-3.1-nemotron-70b-instruct',
             'meta/llama-3.1-405b-instruct',
             'meta/llama-3.3-70b-instruct',
@@ -178,7 +179,7 @@ const PROVIDERS = {
             'deepseek-ai/deepseek-r1',
         ],
         /** Models that support extended thinking via chat_template_kwargs */
-        thinkingModels: ['moonshotai/kimi-k2.5', 'deepseek-ai/deepseek-r1'],
+        thinkingModels: ['moonshotai/kimi-k2.5', 'moonshotai/kimi-k2.6', 'deepseek-ai/deepseek-r1'],
     },
 
     bedrock: {

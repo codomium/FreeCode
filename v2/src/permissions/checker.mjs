@@ -51,12 +51,19 @@ export function createPermissionChecker(config = {}) {
             if (['WebSearch', 'WebFetch'].includes(toolName)) return true;
 
             switch (mode) {
-                case 'bypassPermissions': return true;
+                case 'bypassPermissions':
+                case 'agent':     return true; // Agent: full autonomy, execute everything
                 case 'acceptEdits':
                     // Allow file ops and Bash in acceptEdits mode — user accepted all edits
                     return true;
-                case 'auto': return true; // AI decides
+                case 'auto':
+                case 'debug':     return true; // Debug: same permissions as auto, debugger-focused
+                case 'multitask': return true; // MultiTask: auto-approve everything, parallel tasks
                 case 'dontAsk': return false; // deny everything not pre-approved
+                case 'ask':
+                    // Ask: Q&A only — allow safe read-only tools, block all writes and commands
+                    if (['Bash', 'Write', 'Edit', 'MultiEdit'].includes(toolName)) return false;
+                    return !requiresPermission(toolName);
                 case 'plan': return true; // All tools are allowed in plan mode
                 case 'default':
                 default:

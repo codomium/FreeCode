@@ -36,6 +36,7 @@ function nextId() { return ++_idCounter; }
  */
 const NVIDIA_THINKING_CAPABLE_MODELS = new Set([
     'moonshotai/kimi-k2.5',
+    'moonshotai/kimi-k2.6',
     'deepseek-ai/deepseek-r1',
 ]);
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
@@ -889,6 +890,15 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
     if (!baseUrl) throw new Error(`Custom provider "${providerCfg.id}": baseUrl is required`);
     if (!apiKey)  throw new Error(`Custom provider "${providerCfg.id}": apiKey is required`);
 
+    // For thinking-capable NVIDIA models routed via a custom provider (e.g. kimi-k2.6
+    // pointed at integrate.api.nvidia.com), tools must be excluded when thinking mode
+    // is active — the NVIDIA NIM backend fails with "unhashable type: 'dict'" when
+    // chat_template_kwargs.thinking=true and tools are combined in the same request.
+    // Also respect an explicit providerCfg.disableTools flag for other no-tools models.
+    const isNvidiaThinkingModel = NVIDIA_THINKING_CAPABLE_MODELS.has(model);
+    const thinkingEnabled = process.env.NVIDIA_THINKING_MODE === 'true';
+    const disableTools = providerCfg.disableTools || (isNvidiaThinkingModel && thinkingEnabled);
+
     const messages = buildOpenAIMessages(state);
 
     const body = {
@@ -898,7 +908,11 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
         temperature: 1.00,
         top_p: 1.00,
         stream: !!stream,
-        ...(toolDefs.length > 0 && {
+        // Add chat_template_kwargs for NVIDIA thinking models when thinking is enabled
+        ...(isNvidiaThinkingModel && thinkingEnabled && {
+            chat_template_kwargs: { thinking: true },
+        }),
+        ...(toolDefs.length > 0 && !disableTools && {
             tools: toolDefs.map(t => ({
                 type: 'function',
                 function: { name: t.name, description: t.description, parameters: t.input_schema },

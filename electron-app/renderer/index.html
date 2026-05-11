@@ -32,6 +32,7 @@
       </optgroup>
       <optgroup label="NVIDIA NIM">
         <option value="moonshotai/kimi-k2.5">Kimi K2.5 ✦</option>
+        <option value="moonshotai/kimi-k2.6">Kimi K2.6 ✦</option>
         <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
         <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B</option>
         <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
@@ -45,6 +46,10 @@
       <option value="default">default</option>
       <option value="auto">auto</option>
       <option value="plan">plan</option>
+      <option value="agent">agent</option>
+      <option value="debug">debug</option>
+      <option value="ask">ask</option>
+      <option value="multitask">multitask</option>
       <option value="acceptEdits">acceptEdits</option>
       <option value="bypassPermissions">bypass</option>
     </select>
@@ -639,6 +644,7 @@
           </optgroup>
           <optgroup label="NVIDIA NIM">
             <option value="moonshotai/kimi-k2.5">Kimi K2.5</option>
+            <option value="moonshotai/kimi-k2.6">Kimi K2.6</option>
             <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
             <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B</option>
             <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
@@ -654,6 +660,10 @@
           <option value="default">default — ask before edits/commands</option>
           <option value="auto">auto — approve safe reads</option>
           <option value="plan">plan — read-only, no changes</option>
+          <option value="agent">agent — full autonomy, execute everything</option>
+          <option value="debug">debug — auto-approve, debugging focus</option>
+          <option value="ask">ask — Q&amp;A only, no writes or commands</option>
+          <option value="multitask">multitask — parallel task coordination</option>
           <option value="acceptEdits">acceptEdits — auto-apply file edits</option>
           <option value="bypassPermissions">bypass — skip all checks</option>
         </select>
