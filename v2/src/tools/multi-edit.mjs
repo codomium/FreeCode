@@ -14,6 +14,7 @@ import {
     findSimilarLinesHint,
     tryWhitespaceNormalizedMatch,
 } from './edit-utils.mjs';
+import { WriteTransaction } from '../core/write-transaction.mjs';
 
 export const MultiEditTool = {
     name: 'MultiEdit',
@@ -147,12 +148,19 @@ export const MultiEditTool = {
 
         // Phase 3: Write all files (always write with LF endings for consistency)
         const applied = [];
-        for (const [filePath, content] of fileContents) {
-            fs.writeFileSync(filePath, content);
-            invalidateCache(filePath); // E2: clear stale cached Read output
-            // Keep the file tracked as read so subsequent Edit calls work without re-reading
-            markRead(filePath);
-            applied.push(filePath);
+        const filePaths = [...fileContents.keys()];
+        const snapshotId = WriteTransaction.begin(filePaths);
+        try {
+            for (const [filePath, content] of fileContents) {
+                fs.writeFileSync(filePath, content);
+                invalidateCache(filePath); // E2: clear stale cached Read output
+                markRead(filePath);
+                applied.push(filePath);
+            }
+            WriteTransaction.commit(snapshotId);
+        } catch (e) {
+            WriteTransaction.rollback(snapshotId);
+            return `Error writing files: ${e.message}`;
         }
 
         return `Applied ${input.edits.length} edits to ${applied.length} file(s):\n${applied.join('\n')}\n\n${editSummaries.join('\n')}`;

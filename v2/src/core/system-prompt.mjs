@@ -13,6 +13,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { MemoryFile } from './memory-file.mjs';
 
 // Directories to skip when building the workspace snapshot.
 const SNAPSHOT_EXCLUDE = new Set([
@@ -204,7 +205,8 @@ export function loadClaudeMdFiles(cwd = process.cwd()) {
     const globalPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
     if (fs.existsSync(globalPath)) {
         try {
-            files.push({ source: 'global', content: fs.readFileSync(globalPath, 'utf-8') });
+            const content = new MemoryFile(globalPath).read();
+            if (content) files.push({ source: 'global', content });
         } catch { /* skip */ }
     }
 
@@ -220,7 +222,8 @@ export function loadClaudeMdFiles(cwd = process.cwd()) {
         for (const f of candidates) {
             if (fs.existsSync(f)) {
                 try {
-                    projectFiles.push({ source: dir, content: fs.readFileSync(f, 'utf-8'), path: f });
+                    const content = new MemoryFile(f).read();
+                    if (content) projectFiles.push({ source: dir, content, path: f });
                 } catch { /* skip */ }
             }
         }
@@ -306,7 +309,39 @@ function detectProjectLanguage(root) {
     return indicators.join(', ');
 }
 
-export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
+/**
+ * Build persona-specific instruction text.
+ * @param {string} [persona] - 'precise' | 'creative' | 'cautious'
+ * @returns {string}
+ */
+function buildPersonaInstructions(persona) {
+    if (!persona) return '';
+    const personas = {
+        precise: [
+            '## Persona: Precise',
+            'Be terse. No filler text, no pleasantries, no meta-commentary.',
+            'Output only what was asked for. Omit preamble and postamble.',
+            'Use exact technical terms. Never pad responses.',
+        ],
+        creative: [
+            '## Persona: Creative',
+            'Think broadly. Consider unconventional approaches and alternatives.',
+            'Suggest multiple solutions when the best path is unclear.',
+            'Explore adjacent ideas that may improve the overall design.',
+        ],
+        cautious: [
+            '## Persona: Cautious',
+            'Double-check every assumption before acting.',
+            'Ask before performing destructive or irreversible actions.',
+            'Prefer reversible approaches. Always confirm intent on ambiguous requests.',
+            'If unsure, do the safer thing and report what you did.',
+        ],
+    };
+    const lines = personas[persona];
+    return lines ? lines.join('\n') : '';
+}
+
+export function buildSystemPrompt({ cwd, tools, override, addDirs, settings, reasoningLog } = {}) {
     if (override) {
         return { staticPrefix: override, dynamicSuffix: '', full: override };
     }
@@ -531,6 +566,10 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
 
     const parts = [basePreamble];
 
+    if (personaInstructions) {
+        parts.push(personaInstructions);
+    }
+
     // Load CLAUDE.md files
     const mdFiles = loadClaudeMdFiles(cwd);
 
@@ -559,10 +598,20 @@ export function buildSystemPrompt({ cwd, tools, override, addDirs } = {}) {
     // Removing it saves ~300 input tokens per request with no information loss.
     const dynamicSuffix = '';
 
+    // v4.0-C: Inject last 5 reasoning log entries before the user message
+    let reasoningSection = '';
+    if (Array.isArray(reasoningLog) && reasoningLog.length > 0) {
+        const entries = reasoningLog.slice(-5);
+        const lines = entries.map(e =>
+            `- Turn ${e.turn}: ${e.decision}(${(e.filesInvolved || []).join(', ')}) → ${e.outcomeType}`
+        );
+        reasoningSection = `\n\n## REASONING LOG\n${lines.join('\n')}`;
+    }
+
     return {
         staticPrefix,
         dynamicSuffix,
-        full: staticPrefix,
+        full: staticPrefix + reasoningSection,
     };
 }
 

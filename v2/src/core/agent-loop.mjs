@@ -17,6 +17,7 @@ import { TurnClassifier } from './turn-classifier.mjs';
 import { Router } from './router.mjs';
 import fs from 'fs';
 import path from 'path';
+import { checkInjection } from '../permissions/injection-check.mjs';
 
 // Monotonic counter for generating unique IDs within this process (e.g. Gemini tool-call IDs).
 let _idCounter = 0;
@@ -73,6 +74,19 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
     };
 
     async function* run(userMessage, options = {}) {
+        // Injection check on new user messages
+        if (userMessage && !options.continuation) {
+            const injectionResult = checkInjection(userMessage);
+            if (!injectionResult.safe) {
+                yield {
+                    type: 'injection_detected',
+                    severity: 'high',
+                    details: injectionResult.label || injectionResult.pattern || 'suspicious input',
+                };
+                return;
+            }
+        }
+
         // Add user message (skip for continuation turns)
         if (userMessage && !options.continuation) {
             // Auto-extract session goal from the very first user message when none is set
@@ -116,6 +130,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 planGraph: state.planGraph.serialize(),
             };
             yield { type: 'error', message: `Max turns (${settings.maxTurns}) reached.` };
+            yield { type: 'max_turns_reached', suggestion: 'Continue from where you left off' };
             yield { type: 'stop', reason: 'max_turns' };
             return;
         }
@@ -405,7 +420,14 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     }
                     // v4.4-A: Emit diff annotation for file edits
                     for (const fp of filePaths) {
-                        yield { type: 'diff_annotation', filePath: fp, annotation: { rationale: `${block.name} applied`, confidence: 0.9, risk: 'low' } };
+                        const fileContent = (() => { try { return require('fs').readFileSync(fp, 'utf8'); } catch { return ''; } })();
+                        const linesChanged = fileContent ? fileContent.split('\n').length : 0;
+                        yield {
+                            type: 'diff_annotation',
+                            file: fp,
+                            linesChanged,
+                            summary: `+${linesChanged} lines to ${require('path').basename(fp)}`,
+                        };
                     }
                 }
 
@@ -475,6 +497,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 state.sessionId,
                 '',
                 state.sessionGoal || '',
+                state._reasoningLog || [],
             );
 
             // v5.0-B: Record completed session events in memory graph (if enabled)

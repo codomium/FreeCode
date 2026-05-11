@@ -34,8 +34,9 @@ const MICRO_COMPACT_KEEP_CHARS = 300;
  * @param {string} sessionId - unique session identifier
  * @param {string} summary - text summary to save
  * @param {string} [goal] - optional session goal to persist alongside the summary
+ * @param {Array} [reasoningLog] - optional last reasoning log entries to persist
  */
-export function saveSessionSummary(sessionId, summary, goal = '') {
+export function saveSessionSummary(sessionId, summary, goal = '', reasoningLog = []) {
     try {
         fs.mkdirSync(SESSIONS_DIR, { recursive: true });
         const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
@@ -44,6 +45,7 @@ export function saveSessionSummary(sessionId, summary, goal = '') {
             savedAt: new Date().toISOString(),
             summary,
             goal: goal || '',
+            reasoningLog: Array.isArray(reasoningLog) ? reasoningLog.slice(-10) : [],
         };
         fs.writeFileSync(file, JSON.stringify(data, null, 2));
     } catch { /* best effort */ }
@@ -52,13 +54,17 @@ export function saveSessionSummary(sessionId, summary, goal = '') {
 /**
  * Load a previously saved session summary from disk.
  * @param {string} sessionId
- * @returns {{ summary: string, goal: string }|null} session data or null if not found
+ * @returns {{ summary: string, goal: string, reasoningLog: Array }|null} session data or null if not found
  */
 export function loadSessionSummary(sessionId) {
     try {
         const file = path.join(SESSIONS_DIR, `${sessionId}.json`);
         const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-        return { summary: data.summary || '', goal: data.goal || '' };
+        return {
+            summary: data.summary || '',
+            goal: data.goal || '',
+            reasoningLog: Array.isArray(data.reasoningLog) ? data.reasoningLog : [],
+        };
     } catch { return null; }
 }
 
@@ -383,28 +389,29 @@ export class ContextManager {
      * @param {string} sessionId
      * @param {string} [title]
      * @param {string} [goal]
+     * @param {Array} [reasoningLog]
      */
-    persistSession(messages, sessionId, title = '', goal = '') {
+    persistSession(messages, sessionId, title = '', goal = '', reasoningLog = []) {
         const summary = this.buildSessionSummary(messages, title, goal);
-        saveSessionSummary(sessionId, summary, goal);
+        saveSessionSummary(sessionId, summary, goal, reasoningLog);
     }
 
     /**
      * Inject a previously saved session summary as the first user message,
      * so the agent can recall prior context on resume.
-     * Also returns the saved goal so the caller can restore it.
+     * Also returns the saved goal and reasoningLog so the caller can restore them.
      * @param {Array} messages - current message array (may be empty)
      * @param {string} sessionId
-     * @returns {{ messages: Array, goal: string }} messages with summary prepended (if found), and the prior goal
+     * @returns {{ messages: Array, goal: string, reasoningLog: Array }} messages with summary prepended (if found), and the prior goal
      */
     injectSavedContext(messages, sessionId) {
         const saved = loadSessionSummary(sessionId);
-        if (!saved || !saved.summary) return { messages, goal: '' };
+        if (!saved || !saved.summary) return { messages, goal: '', reasoningLog: [] };
         const recall = {
             role: 'user',
             content: `[Resuming session — prior context summary]\n${saved.summary}`,
         };
-        return { messages: [recall, ...messages], goal: saved.goal || '' };
+        return { messages: [recall, ...messages], goal: saved.goal || '', reasoningLog: saved.reasoningLog || [] };
     }
 
     /**

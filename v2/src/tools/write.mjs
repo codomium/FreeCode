@@ -9,6 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { hasBeenRead, markRead, invalidateCache } from './read.mjs';
+import { WriteTransaction } from '../core/write-transaction.mjs';
 
 const MAX_WRITE_PREVIEW = 300;
 
@@ -55,7 +56,14 @@ export const WriteTool = {
         }
 
         try {
-            fs.writeFileSync(filePath, input.content);
+            const snapshotId = WriteTransaction.begin([filePath]);
+            try {
+                fs.writeFileSync(filePath, input.content);
+                WriteTransaction.commit(snapshotId);
+            } catch (e) {
+                WriteTransaction.rollback(snapshotId);
+                throw e;
+            }
             invalidateCache(filePath); // E2: clear stale cached Read output
             markRead(filePath); // Mark as read after writing
             return formatWriteSuccess(filePath, input.content);

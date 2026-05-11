@@ -115,6 +115,14 @@
       </svg>
       Terminal
     </button>
+    <button class="header-btn" id="plugins-btn" title="Plugin Manager">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="2" y="2" width="5" height="5" rx="1"/>
+        <rect x="9" y="2" width="5" height="5" rx="1"/>
+        <rect x="2" y="9" width="5" height="5" rx="1"/>
+        <rect x="9" y="9" width="5" height="5" rx="1"/>
+      </svg>
+    </button>
   </div>
 
   <!-- Mode description bar (full width) -->
@@ -870,6 +878,10 @@
   </div>
 </div>
 
+<!-- Plugins panel -->
+<div id="plugins-panel" style="display:none; position:fixed; top:0; right:0; width:360px; height:100vh; background:var(--bg-secondary,#1e1e1e); border-left:1px solid var(--border,#444); z-index:200; flex-direction:column; overflow:hidden;"></div>
+
 <script src="chat.js"></script>
+<script src="plugins-panel.js"></script>
 </body>
 </html>
