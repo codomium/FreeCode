@@ -178,7 +178,7 @@ const PROVIDERS = {
             'google/gemma-3-27b-it',
             'deepseek-ai/deepseek-r1',
         ],
-        /** Models that support extended thinking via chat_template_kwargs */
+        /** Models that support extended thinking (NVIDIA_THINKING_MODE=true opt-in) */
         thinkingModels: ['moonshotai/kimi-k2.5', 'moonshotai/kimi-k2.6', 'deepseek-ai/deepseek-r1'],
     },
 
