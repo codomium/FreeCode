@@ -310,7 +310,7 @@ class WorkerAgentBridge {
 }
 
 // ── InProcessAgentBridge ──────────────────────────────────────────────────────
-
+class InProcessAgentBridge {
     constructor() {
         this._loop        = null;
         this._isCancelled = false;
