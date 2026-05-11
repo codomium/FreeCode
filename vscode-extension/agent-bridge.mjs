@@ -41,6 +41,13 @@ import path from 'path';
 import { existsSync } from 'fs';
 import readline from 'readline';
 
+// ── Version contract ─────────────────────────────────────────────────────────
+export const BRIDGE_VERSION      = '2.1.0';
+export const BRIDGE_CAPABILITIES = ['exec', 'read', 'write', 'index', 'multiAgent', 'tabComplete', 'semanticSearch'];
+
+/** Milliseconds since process start — used for heartbeat uptime. */
+const _startTime = Date.now();
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
@@ -155,6 +162,9 @@ async function init() {
         } else if (msg.type === 'bashStdin') {
             // Interactive stdin for a running Bash job — not serialized in the queue
             sendBashStdin(msg.jobId, msg.text || '');
+        } else if (msg.type === 'ping') {
+            // Heartbeat — respond immediately (not queued)
+            emit({ type: 'pong', version: BRIDGE_VERSION, uptime: Date.now() - _startTime });
         }
     });
 

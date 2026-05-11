@@ -25,6 +25,8 @@ const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { CodebaseIndexer } = require('./indexer');
+const { FreeCodeLogger } = require('./logger');
+const { setupModules } = require('./activate');
 
 const PARTICIPANT_ID = 'open-claude-code.claude';
 const BRIDGE_SCRIPT  = path.join(__dirname, 'agent-bridge.mjs');
@@ -237,6 +239,9 @@ let bridge = null;
 
 /** @type {vscode.ExtensionContext | null} */
 let extensionContext = null;
+
+/** @type {FreeCodeLogger | null} */
+let logger = null;
 
 /** @type {ClaudeCodeViewProvider | null} */
 let viewProvider = null;
@@ -1169,6 +1174,12 @@ function extractCodeBlockText(text) {
 
 function activate(context) {
     extensionContext = context;
+
+    // Structured logger — writes JSON to VS Code Output panel "FreeCode"
+    const outputChannel = vscode.window.createOutputChannel('FreeCode');
+    logger = new FreeCodeLogger(outputChannel);
+    context.subscriptions.push(outputChannel);
+
     codeIndexer = new CodebaseIndexer();
 
     // Sidebar webview panel
@@ -1411,8 +1422,14 @@ function activate(context) {
         try {
             indexStats = await codeIndexer.build();
             if (viewProvider) viewProvider.postMessage({ type: 'workspaceIndexed', stats: indexStats });
-        } catch { /* no-op */ }
+            logger && logger.info('indexer', 'Index built', indexStats);
+        } catch (err) {
+            logger && logger.error('indexer', 'Index build failed', { error: err.message });
+        }
     }, 0);
+
+    // Wire additional modules (tab autocomplete, file watchers, etc.)
+    setupModules(context, { codeIndexer, viewProvider, logger });
 }
 
 function deactivate() {

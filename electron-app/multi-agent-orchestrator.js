@@ -5,8 +5,6 @@ const ERROR_PENALTY = 3000;
 
 /**
  * Score a provider result for quality ranking.
- * E8: extracted from _pickBest so the same heuristic is reused in the voting
- * strategy tiebreaker, replacing the raw-length sort that was there before.
  * Higher score = preferred answer.
  * @param {{ text: string }} r
  * @returns {number}
@@ -26,19 +24,28 @@ class MultiAgentOrchestrator {
         this.createBridge = createBridge;
         this._isCancelled = false;
         this._pendingMessages = null;
+        /** @type {Map<string, number>} consecutive failure count per provider id */
+        this._providerFailures = new Map();
     }
 
     get isRunning() { return true; }
 
     cancel() { this._isCancelled = true; }
     reinit() {}
-    reset() {}
+    reset() {
+        this._providerFailures.clear();
+    }
     switchModel() {}
     resume(messages) { this._pendingMessages = messages; }
     async _init() { return; }
 
     _activeProviders() {
-        return this.providers.filter((p) => p && p.baseUrl && p.apiKey && Array.isArray(p.models) && p.models.length > 0);
+        return this.providers.filter((p) => {
+            if (!p || !p.baseUrl || !p.apiKey || !Array.isArray(p.models) || p.models.length === 0) return false;
+            // Circuit-breaker: skip providers with 3+ consecutive failures
+            const failures = this._providerFailures.get(p.id || p.name) || 0;
+            return failures < 3;
+        });
     }
 
     _normalize(text) {
@@ -47,12 +54,40 @@ class MultiAgentOrchestrator {
 
     _pickBest(results) {
         if (!results.length) return null;
-        // Fix: avoid picking verbose error responses just because they are longer.
-        // E8: delegate to the module-level computeResponseScore function.
         return results.slice().sort((a, b) => computeResponseScore(b) - computeResponseScore(a))[0];
     }
 
-    async _runProvider(provider, prompt, onEvent) {
+    /**
+     * Run the provider body with a timeout guard.
+     * Renames the original _runProvider body to _runProviderInner.
+     */
+    async _runProvider(provider, prompt, onEvent, timeoutMs = 30000) {
+        const key = provider.id || provider.name || 'unknown';
+        return new Promise(async (resolve, reject) => {
+            const timer = setTimeout(() => {
+                reject(new Error(`Provider ${key} timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+            try {
+                const result = await this._runProviderInner(provider, prompt, onEvent);
+                clearTimeout(timer);
+                // Reset failure count on success
+                this._providerFailures.set(key, 0);
+                resolve(result);
+            } catch (err) {
+                clearTimeout(timer);
+                // Increment circuit-breaker counter
+                const prev = this._providerFailures.get(key) || 0;
+                const next = prev + 1;
+                this._providerFailures.set(key, next);
+                if (next >= 3) {
+                    onEvent({ type: 'info', message: `⚡ Provider ${key} circuit-broken after 3 failures` });
+                }
+                reject(err);
+            }
+        });
+    }
+
+    async _runProviderInner(provider, prompt, onEvent) {
         const modelObj = provider.models?.[0];
         const model = typeof modelObj === 'string' ? modelObj : (modelObj?.id || modelObj?.name || provider.id);
         const bridge = this.createBridge();
@@ -86,6 +121,37 @@ class MultiAgentOrchestrator {
             onEvent({ type: 'stop', reason: 'error' });
             return;
         }
+
+        // Wall-clock timeout for the entire run: 120 seconds
+        const OVERALL_TIMEOUT_MS = 120000;
+        let overallTimer = null;
+        let timedOut = false;
+
+        const overallTimeoutPromise = new Promise((_, reject) => {
+            overallTimer = setTimeout(() => {
+                timedOut = true;
+                reject(new Error('Multi-agent run exceeded 120 second wall-clock limit'));
+            }, OVERALL_TIMEOUT_MS);
+        });
+
+        try {
+            await Promise.race([
+                this._runStrategies(providers, message, onEvent),
+                overallTimeoutPromise,
+            ]);
+        } catch (err) {
+            if (timedOut) {
+                onEvent({ type: 'error', message: err.message });
+            } else {
+                onEvent({ type: 'error', message: err.message || 'Multi-agent run failed' });
+            }
+            onEvent({ type: 'stop', reason: 'error' });
+        } finally {
+            if (overallTimer) clearTimeout(overallTimer);
+        }
+    }
+
+    async _runStrategies(providers, message, onEvent) {
         try {
             let results = [];
             if (this.strategy === 'sequential') {
@@ -113,7 +179,6 @@ class MultiAgentOrchestrator {
                     const k = this._normalize(r.text);
                     buckets.set(k, (buckets.get(k) || 0) + 1);
                 }
-                // E8: use computeResponseScore as the tiebreaker instead of raw length.
                 results.sort((a, b) => {
                     const av = buckets.get(this._normalize(a.text)) || 0;
                     const bv = buckets.get(this._normalize(b.text)) || 0;
@@ -150,8 +215,7 @@ class MultiAgentOrchestrator {
             onEvent({ type: 'assistant', content: best.text });
             onEvent({ type: 'stop', reason: 'end_turn' });
         } catch (err) {
-            onEvent({ type: 'error', message: err.message || 'Multi-agent run failed' });
-            onEvent({ type: 'stop', reason: 'error' });
+            throw err;
         }
     }
 }

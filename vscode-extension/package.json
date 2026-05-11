@@ -101,6 +101,10 @@
       {
         "command": "openClaudeCode.toggleMultiAgent",
         "title": "Open Claude Code: Toggle Multi-Agent Mode"
+      },
+      {
+        "command": "openClaudeCode.toggleTabComplete",
+        "title": "Open Claude Code: Toggle Tab Autocomplete"
       }
     ],
     "keybindings": [
@@ -269,6 +273,16 @@
             "architect"
           ],
           "description": "AI persona preset used for system prompt behavior."
+        },
+        "openClaudeCode.enableTabComplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI-powered tab autocomplete (ghost text)"
+        },
+        "openClaudeCode.autocompleteModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for tab autocomplete. Defaults to the main model if empty."
         }
       }
     }

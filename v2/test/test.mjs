@@ -2090,6 +2090,27 @@ const panelThrash = renderStuckPanel({ reason: 'THRASHING_LOOP', summary: 'lib/d
 assertIncludes(panelThrash, 'THRASHING_LOOP', 'renderStuckPanel THRASHING_LOOP reason');
 assertIncludes(panelThrash, 'lib/dash.dart', 'renderStuckPanel thrash summary');
 
+// ── Smoke tests: loadSettings + createToolRegistry (v2.1 additions) ────────
+
+section('Smoke: loadSettings returns an object');
+
+{
+    const settings = await loadSettings();
+    assert(settings !== null && typeof settings === 'object', 'loadSettings returns a non-null object');
+    assertType(settings, 'object', 'loadSettings return type is object');
+}
+
+section('Smoke: createToolRegistry has .get and .list');
+
+{
+    const reg = createToolRegistry();
+    assert(typeof reg.get === 'function',  'createToolRegistry().get is a function');
+    assert(typeof reg.list === 'function', 'createToolRegistry().list is a function');
+    const list = reg.list();
+    assert(Array.isArray(list), 'createToolRegistry().list() returns an array');
+    assert(list.length > 0,    'createToolRegistry().list() is non-empty');
+}
+
 // ---------- Summary ----------
 
 console.log('\n========================================');

@@ -7,6 +7,21 @@ An open-source, **VS Code-inspired AI coding assistant** with full tool access �
 
 ---
 
+## What's New in v2.1
+
+| Feature | Status |
+|---------|--------|
+| 🤖 Tab Autocomplete (ghost text, like Cursor) | ✅ |
+| 🔍 Semantic TF-IDF Codebase Indexer | ✅ |
+| 🏗️ Modular architecture (no more monoliths) | ✅ |
+| ⏱️ Multi-agent timeout & circuit breaker | ✅ |
+| 🗄️ LRU response cache | ✅ |
+| 📝 Structured JSON logging | ✅ |
+| 🔄 CI/CD (GitHub Actions) | ✅ |
+| 💓 agent-bridge versioning & heartbeat | ✅ |
+
+---
+
 ## Repository layout
 
 | Directory | What it is |
