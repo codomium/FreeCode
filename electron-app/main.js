@@ -204,7 +204,7 @@ function storeProviderKey(provider, key) {
     if (key) {
         keys[provider] = key;
     } else {
-        delete keys[provider];
+        keys[provider] = '';
     }
     const json = JSON.stringify(keys);
     const filePath = path.join(getUserData(), PROVIDER_KEYS_FILE);

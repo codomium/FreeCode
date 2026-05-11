@@ -4465,10 +4465,11 @@
     }
 
     if (apiKeySaveBtn) {
+        // doSave is only called from the Save button / Enter key — Clear buttons post directly
         const doSave = () => {
             const provider = apiKeyProviderSelect ? apiKeyProviderSelect.value : 'anthropic';
             const key      = apiKeyInput ? apiKeyInput.value.trim() : '';
-            if (!key) return;
+            if (!key) return; // prevent saving empty key from the input field
             vscode.postMessage({ type: 'saveProviderKey', provider, key });
             if (apiKeyInput) { apiKeyInput.value = ''; apiKeyInput.placeholder = 'Enter API key…'; }
         };
