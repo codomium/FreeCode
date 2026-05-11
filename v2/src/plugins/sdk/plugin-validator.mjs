@@ -20,7 +20,7 @@ export function validateManifest(manifest) {
     if (manifest.id && !/^[a-z0-9-_]+$/.test(manifest.id)) {
         errors.push('id must be lowercase alphanumeric with hyphens/underscores');
     }
-    if (manifest.version && !/^\d+\.\d+\.\d+/.test(manifest.version)) {
+    if (manifest.version && !/^\d+\.\d+\.\d+$/.test(manifest.version)) {
         errors.push('version must follow semver (e.g. 1.0.0)');
     }
     return { valid: errors.length === 0, errors };

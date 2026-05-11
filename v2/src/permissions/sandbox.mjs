@@ -7,6 +7,7 @@
  * Other:   passthrough (no sandbox)
  */
 
+import path from 'path';
 import { WindowsSandbox } from './sandbox-windows.mjs';
 
 /**
@@ -34,7 +35,6 @@ export class WorkspaceGuard {
             return this._windowsSandbox.checkPath(filePath);
         }
         // On non-Windows, we do a simple prefix check
-        const path = require('path');
         const abs = path.resolve(filePath);
         if (!abs.startsWith(this.workspacePath)) {
             // Allow absolute paths that look like system paths (/tmp, /usr, etc.)

@@ -1762,6 +1762,11 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 try {
                     global._workspaceWatcher = fs.watch(watchPath, { recursive: true }, (event, filename) => {
                         if (!filename) return;
+                        // Purge stale agent-written entries to prevent unbounded growth
+                        const now = Date.now();
+                        for (const [p, ts] of global._agentWrittenFiles) {
+                            if (now - ts > AGENT_WRITE_GRACE_MS) global._agentWrittenFiles.delete(p);
+                        }
                         // Filter out noisy directories
                         const parts = filename.split(path.sep);
                         if (parts.some(p => WATCHER_IGNORE_DIRS.has(p))) return;
@@ -2055,6 +2060,11 @@ async function handleRunPrompt(message, contextFilePaths, fileRefs, send) {
             if (event.type === 'error' && isRateLimitError(event.message)) {
                 retryErrorMsg = event.message;
                 return;
+            }
+            // Track files written by the agent to suppress false watcher events
+            if (event.type === 'diff_annotation' && event.file) {
+                if (!global._agentWrittenFiles) global._agentWrittenFiles = new Map();
+                global._agentWrittenFiles.set(path.resolve(event.file), Date.now());
             }
             send(event);
         });
