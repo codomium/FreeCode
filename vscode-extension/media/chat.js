@@ -156,6 +156,7 @@
         'claude-haiku-4-5':                            200000,
         'gpt-4o':                                      128000,
         'gpt-4o-mini':                                 128000,
+        'gemini-3-flash-preview':                     1000000,
         'gemini-2.0-flash':                           1000000,
         'moonshotai/kimi-k2.5':                        128000,
         'deepseek-ai/deepseek-r1':                      64000,

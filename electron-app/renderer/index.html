@@ -28,6 +28,7 @@
         <option value="gpt-4o-mini">GPT-4o-mini</option>
       </optgroup>
       <optgroup label="Google">
+        <option value="gemini-3-flash-preview">Gemini 3 Flash Preview</option>
         <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
       </optgroup>
       <optgroup label="NVIDIA NIM">
@@ -735,17 +736,18 @@
 
     <div class="settings-section">
       <div class="settings-section-label">API Keys</div>
-      <div class="settings-row">
-        <label class="settings-label">Anthropic / OpenAI / Google key</label>
-        <button class="settings-action-btn" id="settings-set-key-btn">🔑 Set API Key…</button>
+      <div class="settings-row" style="gap:8px;flex-wrap:nowrap;align-items:center">
+        <select id="api-key-provider-select" class="settings-input" style="max-width:160px;flex-shrink:0">
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+          <option value="google">Google (Gemini)</option>
+          <option value="nvidia">NVIDIA NIM</option>
+        </select>
+        <input type="password" id="api-key-input" class="settings-input"
+               placeholder="Enter API key…" autocomplete="off" spellcheck="false" style="flex:1;min-width:0">
+        <button class="settings-action-btn" id="api-key-save-btn" style="flex-shrink:0">Save</button>
       </div>
-      <div class="settings-row">
-        <label class="settings-label" for="setting-nvidia-key">NVIDIA NIM API Key</label>
-        <div class="settings-path-row">
-          <input type="password" id="setting-nvidia-key" class="settings-input" placeholder="nvapi-… (leave blank to clear)">
-          <button class="settings-action-btn" id="settings-save-nvidia-btn">Save</button>
-        </div>
-      </div>
+      <div id="api-keys-list" style="margin-top:8px"></div>
       <div class="settings-note" id="settings-key-status"></div>
     </div>
 

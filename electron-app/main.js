@@ -137,7 +137,8 @@ function saveSetting(key, value) {
 
 // ── API-key storage (safeStorage for Windows Credential Store) ────────────────
 
-const API_KEY_FILE = 'apikey.enc';
+const API_KEY_FILE  = 'apikey.enc';   // legacy single-key file (Anthropic)
+const PROVIDER_KEYS_FILE = 'apikeys.enc'; // multi-provider keys (JSON blob)
 
 function storeApiKey(keyVal) {
     if (safeStorage.isEncryptionAvailable()) {
@@ -163,17 +164,77 @@ function loadApiKey() {
     return getSettings()._apiKeyPlain || '';
 }
 
+/**
+ * Load all per-provider API keys.
+ * Returns { anthropic, openai, google, nvidia } — empty string means not set.
+ * Migrates the legacy single-key file and nvidiaApiKey setting transparently.
+ */
+function loadProviderKeys() {
+    const keys = { anthropic: '', openai: '', google: '', nvidia: '' };
+    try {
+        const filePath = path.join(getUserData(), PROVIDER_KEYS_FILE);
+        if (fs.existsSync(filePath)) {
+            const enc = fs.readFileSync(filePath);
+            const json = safeStorage.isEncryptionAvailable()
+                ? safeStorage.decryptString(enc)
+                : fs.readFileSync(filePath, 'utf8');
+            Object.assign(keys, JSON.parse(json));
+        }
+    } catch { /* ignore */ }
+    // Backward compat: migrate legacy apikey.enc → anthropic slot
+    if (!keys.anthropic) {
+        const legacy = loadApiKey();
+        if (legacy) keys.anthropic = legacy;
+    }
+    // Backward compat: nvidiaApiKey in settings → nvidia slot
+    if (!keys.nvidia) {
+        const s = getSettings();
+        if (s.nvidiaApiKey) keys.nvidia = s.nvidiaApiKey;
+    }
+    return keys;
+}
+
+/**
+ * Persist a per-provider API key.
+ * @param {string} provider - 'anthropic' | 'openai' | 'google' | 'nvidia'
+ * @param {string} key      - key value; empty string clears the entry
+ */
+function storeProviderKey(provider, key) {
+    const keys = loadProviderKeys();
+    if (key) {
+        keys[provider] = key;
+    } else {
+        keys[provider] = '';
+    }
+    const json = JSON.stringify(keys);
+    const filePath = path.join(getUserData(), PROVIDER_KEYS_FILE);
+    if (safeStorage.isEncryptionAvailable()) {
+        fs.writeFileSync(filePath, safeStorage.encryptString(json));
+    } else {
+        fs.writeFileSync(filePath, json, 'utf8');
+    }
+    // Keep nvidiaApiKey in settings in sync for backward compat
+    if (provider === 'nvidia') {
+        saveSetting('nvidiaApiKey', key);
+    }
+}
+
+/**
+ * Return which providers have a key configured (from storage or environment).
+ */
+function getProviderKeyStatus() {
+    const keys = loadProviderKeys();
+    return {
+        anthropic: !!(keys.anthropic || process.env.ANTHROPIC_API_KEY),
+        openai:    !!(keys.openai    || process.env.OPENAI_API_KEY),
+        google:    !!(keys.google    || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
+        nvidia:    !!(keys.nvidia    || process.env.NVIDIA_API_KEY),
+    };
+}
+
 function hasApiKey() {
-    const storedKey = loadApiKey();
-    if (storedKey) return true;
-    return !!(
-        process.env.ANTHROPIC_API_KEY ||
-        process.env.OPENAI_API_KEY    ||
-        process.env.GOOGLE_API_KEY    ||
-        process.env.GEMINI_API_KEY    ||
-        process.env.NVIDIA_API_KEY    ||
-        getSettings().nvidiaApiKey
-    );
+    const status = getProviderKeyStatus();
+    return status.anthropic || status.openai || status.google || status.nvidia;
 }
 
 // ── In-Process Agent Bridge ───────────────────────────────────────────────────
@@ -632,9 +693,11 @@ function getBridge() {
 
 function applyEnvFromSettings() {
     const s = getSettings();
-    const key = loadApiKey() || process.env.ANTHROPIC_API_KEY || '';
-    if (key) process.env.ANTHROPIC_API_KEY = key;
-    if (s.nvidiaApiKey) process.env.NVIDIA_API_KEY = s.nvidiaApiKey;
+    const keys = loadProviderKeys();
+    if (keys.anthropic) process.env.ANTHROPIC_API_KEY = keys.anthropic;
+    if (keys.openai)    process.env.OPENAI_API_KEY    = keys.openai;
+    if (keys.google)  { process.env.GOOGLE_API_KEY    = keys.google; process.env.GEMINI_API_KEY = keys.google; }
+    if (keys.nvidia)    process.env.NVIDIA_API_KEY    = keys.nvidia;
     process.env.ANTHROPIC_MODEL             = s.model || 'claude-sonnet-4-6';
     process.env.CLAUDE_CODE_PERMISSION_MODE = s.permissionMode || 'default';
     process.env.CLAUDE_CODE_MAX_TURNS       = String(s.maxTurns || 20);
@@ -783,7 +846,7 @@ async function handleSetApiKey() {
         storeApiKey(result.trim());
         applyEnvFromSettings();
         if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
-        mainWindow && mainWindow.webContents.send('main-message', { type: 'apiKeySet' });
+        mainWindow && mainWindow.webContents.send('main-message', { type: 'apiKeySet', providerKeyStatus: getProviderKeyStatus() });
         dialog.showMessageBoxSync(mainWindow, {
             type:    'info',
             title:   'API Key Saved',
@@ -891,6 +954,7 @@ ipcMain.on('renderer-message', async (event, msg) => {
                 multiAgentStrategy: s.multiAgentStrategy || 'parallel',
                 systemPromptPreset: s.systemPromptPreset || 'expert-engineer',
                 mcpServers:         (s.mcpServers && typeof s.mcpServers === 'object') ? s.mcpServers : {},
+                providerKeyStatus:  getProviderKeyStatus(),
             });
 
             // Report which shell the integrated terminal will use
@@ -1441,6 +1505,18 @@ ipcMain.on('renderer-message', async (event, msg) => {
         // ── Integrated terminal: execute a command and stream output ──────────
         case 'terminalRun': {
             handleTerminalRun(String(msg.command || ''), msg.reqId || null, send);
+            break;
+        }
+
+        // ── Save a per-provider API key ───────────────────────────────────────
+        case 'saveProviderKey': {
+            const validProviders = ['anthropic', 'openai', 'google', 'nvidia'];
+            if (msg.provider && validProviders.includes(msg.provider)) {
+                storeProviderKey(msg.provider, (msg.key || '').trim());
+                applyEnvFromSettings();
+                if (agentBridge) { captureAgentMessages(); agentBridge.reinit(); agentBridge = null; }
+                send({ type: 'apiKeySet', providerKeyStatus: getProviderKeyStatus() });
+            }
             break;
         }
 
