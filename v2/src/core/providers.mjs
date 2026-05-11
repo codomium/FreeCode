@@ -103,7 +103,7 @@ const PROVIDERS = {
         authHeader(key) {
             return { 'Content-Type': 'application/json' };
         },
-        models: ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash'],
+        models: ['gemini-3-flash-preview', 'gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash'],
         transformRequest(body) {
             const contents = [];
             for (const msg of body.messages || []) {

@@ -45,6 +45,7 @@ const COST_TABLE = {
     'claude-haiku-4-5':  { input: 0.25, output: 1.25 },
     'gpt-4o':            { input: 5,   output: 15  },
     'gpt-4o-mini':       { input: 0.15, output: 0.6  },
+    'gemini-3-flash-preview': { input: 0, output: 0 },
     'gemini-1.5-flash':  { input: 0.075, output: 0.3 },
 };
 
@@ -134,7 +135,7 @@ export class Router {
         const defaults = {
             anthropic: 'claude-sonnet-4-5',
             openai:    'gpt-4o-mini',
-            google:    'gemini-1.5-flash',
+            google:    'gemini-3-flash-preview',
         };
         return defaults[provider] || 'claude-sonnet-4-5';
     }
