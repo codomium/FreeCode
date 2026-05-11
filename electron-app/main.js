@@ -1982,6 +1982,10 @@ function searchFiles(query) {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
+const { startHeartbeat, reconnectWithBackoff } = require('./ipc/agentHandlers');
+
+let _heartbeat = null;
+
 app.whenReady().then(() => {
     // Apply settings to process.env before anything else
     applyEnvFromSettings();
@@ -1989,11 +1993,29 @@ app.whenReady().then(() => {
     buildMenu();
     createWindow();
 
+    // Start heartbeat once the main window is ready
+    mainWindow && mainWindow.once('ready-to-show', () => {
+        _heartbeat = startHeartbeat({
+            getBridge: () => agentBridge,
+            onReconnect: () => {
+                reconnectWithBackoff({
+                    captureMessages: captureAgentMessages,
+                    reinitBridge: () => { if (agentBridge) { agentBridge.reinit(); agentBridge = null; } },
+                    getBridge: getBridge,
+                    notifyRenderer: (msg) => mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('main-message', msg),
+                    log: (msg) => console.warn(msg),
+                });
+            },
+            log: (msg) => console.warn(msg),
+        });
+    });
+
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
 });
 
 app.on('window-all-closed', () => {
+    if (_heartbeat) _heartbeat.stop();
     if (process.platform !== 'darwin') app.quit();
 });

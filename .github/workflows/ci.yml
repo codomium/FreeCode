@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [vscode-extension, v2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ matrix.package }}
+      - name: Run tests
+        run: npm test --if-present
+        working-directory: ${{ matrix.package }}
+
+  build-electron:
+    name: Build Electron App (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: electron-app/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: electron-app
+      - name: Build (dir only, no installer)
+        run: npm run build:dir
+        working-directory: electron-app
+
+  validate-extension:
+    name: Validate VS Code Extension Manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install vsce
+        run: npm install -g @vscode/vsce
+      - name: Install deps
+        run: npm ci
+        working-directory: vscode-extension
+      - name: Validate package.json
+        run: vsce ls --no-dependencies
+        working-directory: vscode-extension
