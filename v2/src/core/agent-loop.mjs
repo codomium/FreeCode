@@ -1294,6 +1294,7 @@ function detectRepetition(text) {
 }
 
 function resolveMaxOutputTokens(settings) {
+    // Precedence: maxOutputTokens (new) -> maxTokens (legacy alias) -> default.
     // Keep maxTokens as a backward-compatible fallback for older configs.
     const configured = Number(settings?.maxOutputTokens ?? settings?.maxTokens);
     if (Number.isFinite(configured) && configured > 0) return configured;
