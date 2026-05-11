@@ -110,6 +110,8 @@ class CodebaseIndexer {
         this._index    = new Map();
         /** Map<term, number> — document frequency for IDF computation */
         this._df       = new Map();
+        /** Map<term, number> — cached IDF values; invalidated when _df or _numDocs changes */
+        this._idfCache = new Map();
         this._numDocs  = 0;
         this._ready    = false;
         this._buildMs  = 0;
@@ -135,6 +137,7 @@ class CodebaseIndexer {
         // Rebuild in batches to stay non-blocking
         this._index.clear();
         this._df.clear();
+        this._idfCache.clear();
         this._numDocs = 0;
 
         const BATCH = 50;
@@ -147,6 +150,7 @@ class CodebaseIndexer {
 
         this._numDocs = this._index.size;
         this._buildMs = Date.now() - t0;
+        this._idfCache.clear();  // invalidate IDF cache after full rebuild
         this._ready   = true;
 
         return this.getStats();
@@ -189,9 +193,7 @@ class CodebaseIndexer {
             // TF-IDF content score
             for (const qt of qTokens) {
                 const tf  = entry.contentTF.get(qt) || 0;
-                const df  = this._df.get(qt) || 0;
-                const idf = df > 0 ? Math.log((this._numDocs + 1) / (df + 1)) + 1 : 0;
-                score += tf * idf * 2;
+                score += tf * this._idf(qt) * 2;
             }
 
             if (score > 0) scored.push({ fsPath, score });
@@ -213,6 +215,7 @@ class CodebaseIndexer {
     async onFileChanged(uri) {
         await this._indexOne(uri);
         this._numDocs = this._index.size;
+        this._idfCache.clear();
     }
 
     /**
@@ -230,6 +233,7 @@ class CodebaseIndexer {
         }
         this._index.delete(fsPath);
         this._numDocs = this._index.size;
+        this._idfCache.clear();
     }
 
     /**
@@ -245,6 +249,19 @@ class CodebaseIndexer {
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
+
+    /**
+     * Compute and cache the IDF for a term.
+     * @param {string} term
+     * @returns {number}
+     */
+    _idf(term) {
+        if (this._idfCache.has(term)) return this._idfCache.get(term);
+        const df  = this._df.get(term) || 0;
+        const idf = df > 0 ? Math.log((this._numDocs + 1) / (df + 1)) + 1 : 0;
+        this._idfCache.set(term, idf);
+        return idf;
+    }
 
     async _indexOne(uri) {
         const fsPath = uri.fsPath;
@@ -276,9 +293,16 @@ class CodebaseIndexer {
         const contentTF   = termFreq(contentToks);
         const symbols     = extractSymbols(content);
 
-        // Update DF
+        // Update DF and invalidate IDF cache for affected terms
+        let dfChanged = false;
         for (const [term] of contentTF) {
             this._df.set(term, (this._df.get(term) || 0) + 1);
+            this._idfCache.delete(term); // invalidate cached IDF for this term
+            dfChanged = true;
+        }
+        // If numDocs changes, all IDF values shift — clear the whole cache
+        if (dfChanged && this._index.size !== this._numDocs) {
+            this._idfCache.clear();
         }
 
         this._index.set(fsPath, { pathTokens, contentTF, symbols, mtime });

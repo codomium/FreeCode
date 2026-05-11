@@ -61,30 +61,35 @@ class MultiAgentOrchestrator {
      * Run the provider body with a timeout guard.
      * Renames the original _runProvider body to _runProviderInner.
      */
-    async _runProvider(provider, prompt, onEvent, timeoutMs = 30000) {
+    _runProvider(provider, prompt, onEvent, timeoutMs = 30000) {
         const key = provider.id || provider.name || 'unknown';
-        return new Promise(async (resolve, reject) => {
-            const timer = setTimeout(() => {
-                reject(new Error(`Provider ${key} timed out after ${timeoutMs}ms`));
-            }, timeoutMs);
-            try {
-                const result = await this._runProviderInner(provider, prompt, onEvent);
-                clearTimeout(timer);
-                // Reset failure count on success
-                this._providerFailures.set(key, 0);
-                resolve(result);
-            } catch (err) {
-                clearTimeout(timer);
-                // Increment circuit-breaker counter
-                const prev = this._providerFailures.get(key) || 0;
-                const next = prev + 1;
-                this._providerFailures.set(key, next);
-                if (next >= 3) {
-                    onEvent({ type: 'info', message: `⚡ Provider ${key} circuit-broken after 3 failures` });
-                }
-                reject(err);
-            }
+        let timer;
+        const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(
+                () => reject(new Error(`Provider ${key} timed out after ${timeoutMs}ms`)),
+                timeoutMs
+            );
         });
+        return Promise.race([
+            this._runProviderInner(provider, prompt, onEvent).then(
+                (result) => {
+                    clearTimeout(timer);
+                    this._providerFailures.set(key, 0);
+                    return result;
+                },
+                (err) => {
+                    clearTimeout(timer);
+                    const prev = this._providerFailures.get(key) || 0;
+                    const next = prev + 1;
+                    this._providerFailures.set(key, next);
+                    if (next >= 3) {
+                        onEvent({ type: 'info', message: `⚡ Provider ${key} circuit-broken after 3 failures` });
+                    }
+                    throw err;
+                }
+            ),
+            timeoutPromise,
+        ]);
     }
 
     async _runProviderInner(provider, prompt, onEvent) {
