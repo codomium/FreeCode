@@ -255,7 +255,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 break;
             } catch (err) {
                 // Detect rate-limit / overload errors and auto-retry with back-off
-                const isRetryable = /rate.?limit|overload|too.?many.?request|capacity|429|529|503|502|504|bad.?gateway|service.?unavailable|quota/i.test(err.message || '');
+                const isRetryable = /rate.?limit|overload|too.?many.?request|capacity|429|529|500|503|502|504|bad.?gateway|service.?unavailable|quota/i.test(err.message || '');
                 if (isRetryable && apiAttempt < MAX_API_RETRIES) {
                     apiAttempt++;
                     // Honour Retry-After if the error carries it; otherwise exponential back-off
@@ -626,22 +626,34 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
         body.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget || 10000 };
     }
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify(body),
-    });
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    let res;
+    for (;;) {
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify(body),
+        });
 
-    if (!res.ok) {
-        const retryAfter = res.headers?.get?.('retry-after');
-        const err = await res.text();
-        const errMsg = `Anthropic API error ${res.status}: ${err}`;
-        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
-        throw new Error(errMsg);
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] Anthropic API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const retryAfter = res.headers?.get?.('retry-after');
+            const err = await res.text();
+            const errMsg = `Anthropic API error ${res.status}: ${err}`;
+            if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+            throw new Error(errMsg);
+        }
+        break;
     }
 
     if (stream) {
@@ -695,25 +707,57 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     const body = {
         model,
         messages,
+        stream: !!stream,
         ...(tools.length > 0 && { tools }),
     };
 
-    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(body),
-    });
+    const reqHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        ...(stream && { 'Accept': 'text/event-stream' }),
+    };
 
-    if (!res.ok) {
-        const retryAfter = res.headers?.get?.('retry-after');
-        const err = await res.text();
-        const errMsg = `OpenAI API error ${res.status}: ${err}`;
-        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
-        throw new Error(errMsg);
+    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    let res;
+    for (;;) {
+        res = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: reqHeaders,
+            body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] OpenAI API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const retryAfter = res.headers?.get?.('retry-after');
+            const err = await res.text();
+            const errMsg = `OpenAI API error ${res.status}: ${err}`;
+            if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+            throw new Error(errMsg);
+        }
+        break;
+    }
+
+    if (stream) {
+        const collected = [];
+        const eventGenerator = async function* () {
+            for await (const event of streamOpenAIResponse(res)) {
+                collected.push(event);
+                yield event;
+            }
+        };
+        return {
+            events: eventGenerator(),
+            get accumulated() {
+                return accumulateOpenAIStream(collected);
+            },
+        };
     }
 
     const data = await res.json();
@@ -776,21 +820,33 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
         ...(googleTools && { tools: googleTools }),
     };
 
-    const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:${stream ? 'streamGenerateContent?alt=sse&' : 'generateContent?'}key=${apiKey}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        }
-    );
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    let res;
+    for (;;) {
+        res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:${stream ? 'streamGenerateContent?alt=sse&' : 'generateContent?'}key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }
+        );
 
-    if (!res.ok) {
-        const retryAfter = res.headers?.get?.('retry-after') || res.headers?.get?.('x-ratelimit-reset-requests');
-        const err = await res.text();
-        const errMsg = `Google API error ${res.status}: ${err}`;
-        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
-        throw new Error(errMsg);
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] Google API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const retryAfter = res.headers?.get?.('retry-after') || res.headers?.get?.('x-ratelimit-reset-requests');
+            const err = await res.text();
+            const errMsg = `Google API error ${res.status}: ${err}`;
+            if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+            throw new Error(errMsg);
+        }
+        break;
     }
 
     if (stream) {

@@ -145,8 +145,8 @@ export class RateLimiter {
             return 'retry';
         }
 
-        if (response.status === 502 || response.status === 503 || response.status === 504) {
-            // Bad Gateway / Service Unavailable / Gateway Timeout — transient server-side errors
+        if (response.status === 500 || response.status === 502 || response.status === 503 || response.status === 504) {
+            // Internal Server Error / Bad Gateway / Service Unavailable / Gateway Timeout — transient server-side errors
             if (this.retryCount >= this.maxRetries) return 'fail';
 
             const delay = this.calculateBackoff();

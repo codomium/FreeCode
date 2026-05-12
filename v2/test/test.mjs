@@ -1579,6 +1579,28 @@ limiter.retryCount = 0;
 const backoff1 = limiter.calculateBackoff();
 assert(backoff1 >= 10 && backoff1 <= 110, 'Backoff is within range');
 
+// 5xx transient errors
+const limiter5xx = new RateLimiter({ maxRetries: 3, baseDelay: 10, maxDelay: 100 });
+const noHeaders = { get: () => null };
+const r500 = await limiter5xx.handleResponse({ status: 500, headers: noHeaders });
+assertEqual(r500, 'retry', '500 returns retry');
+assertEqual(limiter5xx.retryCount, 1, 'Retry count increments on 500');
+
+const r502 = await limiter5xx.handleResponse({ status: 502, headers: noHeaders });
+assertEqual(r502, 'retry', '502 returns retry');
+assertEqual(limiter5xx.retryCount, 2, 'Retry count increments on 502');
+
+const r503 = await limiter5xx.handleResponse({ status: 503, headers: noHeaders });
+assertEqual(r503, 'retry', '503 returns retry');
+assertEqual(limiter5xx.retryCount, 3, 'Retry count increments on 503');
+
+const r503fail = await limiter5xx.handleResponse({ status: 503, headers: noHeaders });
+assertEqual(r503fail, 'fail', '5xx returns fail after max retries');
+
+limiter5xx.reset();
+const r504 = await limiter5xx.handleResponse({ status: 504, headers: noHeaders });
+assertEqual(r504, 'retry', '504 returns retry');
+
 section('Phase 4: OAuth Client');
 
 import { OAuthClient } from '../src/auth/oauth.mjs';
