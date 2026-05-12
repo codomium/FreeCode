@@ -37,12 +37,44 @@ function nextId() { return ++_idCounter; }
  * NIM backend serialises request parameters using Python's hash mechanism;
  * a dict value (i.e. the chat_template_kwargs object) is unhashable and
  * causes a server-side HTTP 500 "unhashable type: 'dict'" error.
+ *
+ * kimi-k2.5 and deepseek-r1 support standard tool-calling by default;
+ * thinking mode is only activated when NVIDIA_THINKING_MODE=true.
+ * kimi-k2.6 ALWAYS operates in thinking mode on NVIDIA NIM and never
+ * accepts tool definitions — see NVIDIA_ALWAYS_DISABLE_TOOLS below.
  */
 const NVIDIA_THINKING_CAPABLE_MODELS = new Set([
     'moonshotai/kimi-k2.5',
-    'moonshotai/kimi-k2.6',
     'deepseek-ai/deepseek-r1',
 ]);
+
+/**
+ * Models that ALWAYS require tools to be omitted regardless of
+ * NVIDIA_THINKING_MODE.  kimi-k2.6 runs exclusively in thinking mode on
+ * NVIDIA NIM; sending tool definitions causes an HTTP 500
+ * "unhashable type: 'dict'" error in the Python backend.
+ *
+ * nvModelBase() is used so that both the namespaced form
+ * ("moonshotai/kimi-k2.6") and any short-name alias ("kimi-k2.6") match.
+ */
+const NVIDIA_ALWAYS_DISABLE_TOOLS = new Set([
+    'moonshotai/kimi-k2.6',
+]);
+
+/**
+ * Strip the "publisher/" namespace prefix from an NVIDIA NIM model ID so
+ * that short-name aliases ("kimi-k2.6") match the same set entries as the
+ * fully-qualified form ("moonshotai/kimi-k2.6").
+ *
+ * @param {string} model
+ * @returns {string}
+ */
+function nvModelBase(model) {
+    if (!model) return '';
+    const slash = model.indexOf('/');
+    return slash !== -1 ? model.slice(slash + 1) : model;
+}
+
 const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 export function createAgentLoop({ model, tools, permissions, settings, hooks }) {
@@ -223,7 +255,7 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                 break;
             } catch (err) {
                 // Detect rate-limit / overload errors and auto-retry with back-off
-                const isRetryable = /rate.?limit|overload|too.?many.?request|capacity|429|529|503|502|504|bad.?gateway|service.?unavailable|quota/i.test(err.message || '');
+                const isRetryable = /rate.?limit|overload|too.?many.?request|capacity|429|529|500|503|502|504|bad.?gateway|service.?unavailable|quota/i.test(err.message || '');
                 if (isRetryable && apiAttempt < MAX_API_RETRIES) {
                     apiAttempt++;
                     // Honour Retry-After if the error carries it; otherwise exponential back-off
@@ -594,22 +626,34 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
         body.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget || 10000 };
     }
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify(body),
-    });
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    let res;
+    for (;;) {
+        res = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify(body),
+        });
 
-    if (!res.ok) {
-        const retryAfter = res.headers?.get?.('retry-after');
-        const err = await res.text();
-        const errMsg = `Anthropic API error ${res.status}: ${err}`;
-        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
-        throw new Error(errMsg);
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] Anthropic API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const retryAfter = res.headers?.get?.('retry-after');
+            const err = await res.text();
+            const errMsg = `Anthropic API error ${res.status}: ${err}`;
+            if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+            throw new Error(errMsg);
+        }
+        break;
     }
 
     if (stream) {
@@ -663,25 +707,57 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     const body = {
         model,
         messages,
+        ...(stream && { stream: true }),
         ...(tools.length > 0 && { tools }),
     };
 
-    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(body),
-    });
+    const reqHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        ...(stream && { 'Accept': 'text/event-stream' }),
+    };
 
-    if (!res.ok) {
-        const retryAfter = res.headers?.get?.('retry-after');
-        const err = await res.text();
-        const errMsg = `OpenAI API error ${res.status}: ${err}`;
-        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
-        throw new Error(errMsg);
+    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    let res;
+    for (;;) {
+        res = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: reqHeaders,
+            body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] OpenAI API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const retryAfter = res.headers?.get?.('retry-after');
+            const err = await res.text();
+            const errMsg = `OpenAI API error ${res.status}: ${err}`;
+            if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+            throw new Error(errMsg);
+        }
+        break;
+    }
+
+    if (stream) {
+        const collected = [];
+        const eventGenerator = async function* () {
+            for await (const event of streamOpenAIResponse(res)) {
+                collected.push(event);
+                yield event;
+            }
+        };
+        return {
+            events: eventGenerator(),
+            get accumulated() {
+                return accumulateOpenAIStream(collected);
+            },
+        };
     }
 
     const data = await res.json();
@@ -744,25 +820,181 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
         ...(googleTools && { tools: googleTools }),
     };
 
-    const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        }
-    );
+    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    let res;
+    for (;;) {
+        res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:${stream ? 'streamGenerateContent?alt=sse&' : 'generateContent?'}key=${apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }
+        );
 
-    if (!res.ok) {
-        const retryAfter = res.headers?.get?.('retry-after') || res.headers?.get?.('x-ratelimit-reset-requests');
-        const err = await res.text();
-        const errMsg = `Google API error ${res.status}: ${err}`;
-        if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
-        throw new Error(errMsg);
+        if (!res.ok) {
+            const action = await rateLimiter.handleResponse(res);
+            if (action === 'retry') {
+                process.stderr.write(
+                    `[open-claude-code] Google API ${res.status} - retrying (attempt ${rateLimiter.retryCount}/${rateLimiter.maxRetries})...\n`
+                );
+                continue;
+            }
+            const retryAfter = res.headers?.get?.('retry-after') || res.headers?.get?.('x-ratelimit-reset-requests');
+            const err = await res.text();
+            const errMsg = `Google API error ${res.status}: ${err}`;
+            if (retryAfter) throw Object.assign(new Error(errMsg), { retryAfterSeconds: parseInt(retryAfter, 10) });
+            throw new Error(errMsg);
+        }
+        break;
+    }
+
+    if (stream) {
+        const collected = [];
+        const eventGenerator = async function* () {
+            for await (const event of streamGoogleResponse(res)) {
+                collected.push(event);
+                yield event;
+            }
+        };
+        return {
+            events: eventGenerator(),
+            get accumulated() {
+                return accumulateGoogleStream(collected);
+            },
+        };
     }
 
     const data = await res.json();
     return convertGoogleResponse(data);
+}
+
+/**
+ * Parse a Gemini SSE stream (`streamGenerateContent?alt=sse`) into agent-loop
+ * events that the existing streaming handler understands.
+ *
+ * Gemini SSE lines look like:
+ *   data: { "candidates": [{ "content": { "parts": [...] }, "finishReason": "STOP" }], ... }
+ *
+ * Each data chunk may contain text parts, functionCall parts, or a finishReason.
+ *
+ * @param {Response} response - fetch Response with streaming body
+ * @yields {object} Agent-loop-compatible events
+ */
+async function* streamGoogleResponse(response) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    /**
+     * Parse a single Gemini SSE data payload and yield agent-loop events.
+     * @param {string} raw - JSON string after the "data:" prefix
+     */
+    async function* yieldChunkEvents(raw) {
+        if (!raw || raw === '[DONE]') {
+            yield { type: 'done' };
+            return;
+        }
+        let chunk;
+        try { chunk = JSON.parse(raw); } catch { return; }
+        if (chunk.error) {
+            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+        }
+        const candidate = chunk.candidates?.[0];
+        if (!candidate) return;
+        for (const part of candidate.content?.parts || []) {
+            if (part.text) {
+                yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
+            }
+            if (part.functionCall) {
+                yield { type: 'google_function_call', functionCall: part.functionCall };
+            }
+        }
+        if (candidate.finishReason) {
+            yield {
+                type: 'message_delta',
+                delta: { stop_reason: candidate.finishReason === 'STOP' ? 'end_turn' : candidate.finishReason },
+            };
+        }
+    }
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); // keep incomplete last line
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data:')) continue;
+                const raw = trimmed.slice(5).trim();
+                for await (const event of yieldChunkEvents(raw)) {
+                    if (event.type === 'done') return;
+                    yield event;
+                }
+            }
+        }
+
+        // Flush any remaining buffer content
+        const trimmed = buffer.trim();
+        if (trimmed.startsWith('data:')) {
+            const raw = trimmed.slice(5).trim();
+            for await (const event of yieldChunkEvents(raw)) {
+                if (event.type === 'done') return;
+                yield event;
+            }
+        }
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+/**
+ * Accumulate streamed Gemini events (from streamGoogleResponse) into the
+ * same internal message shape used by the rest of the agent loop.
+ *
+ * @param {Array} events - collected events from streamGoogleResponse
+ * @returns {object} Internal message with content array and stop_reason
+ */
+function accumulateGoogleStream(events) {
+    const message = {
+        content: [],
+        stop_reason: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+    };
+
+    let textContent = '';
+
+    for (const event of events) {
+        if (event.type === 'content_block_delta') {
+            if (event.delta?.type === 'text_delta') {
+                textContent += event.delta.text || '';
+            }
+        } else if (event.type === 'google_function_call') {
+            const fc = event.functionCall;
+            message.content.push({
+                type: 'tool_use',
+                id: `${fc.name}_${nextId()}`,
+                name: fc.name,
+                input: fc.args ?? {},
+            });
+        } else if (event.type === 'message_delta') {
+            if (event.delta?.stop_reason) {
+                message.stop_reason = event.delta.stop_reason;
+            }
+        }
+    }
+
+    if (textContent) {
+        // Insert text before any tool_use blocks to preserve natural order
+        message.content.unshift({ type: 'text', text: textContent });
+    }
+
+    if (!message.stop_reason) message.stop_reason = 'end_turn';
+    return message;
 }
 
 /**
@@ -771,9 +1003,10 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
  * Uses the same message format as OpenAI but targets
  * https://integrate.api.nvidia.com/v1/chat/completions.
  *
- * For thinking-capable models (kimi-k2.5, kimi-k2.6, deepseek-r1) extended
+ * For thinking-capable models (kimi-k2.5, deepseek-r1) extended
  * reasoning is activated by setting NVIDIA_THINKING_MODE=true, which omits
  * tool definitions (NVIDIA NIM rejects thinking + tools together).
+ * kimi-k2.6 always runs in thinking mode and never accepts tool definitions.
  *
  * NOTE: chat_template_kwargs must NOT be sent — its dict value causes a
  * server-side HTTP 500 "unhashable type: 'dict'" in NVIDIA's Python backend.
@@ -792,11 +1025,16 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
     const thinkingEnabled = process.env.NVIDIA_THINKING_MODE === 'true';
     const supportsThinking = thinkingEnabled && NVIDIA_THINKING_CAPABLE_MODELS.has(model);
 
-    // When thinking mode is active the tool-list suffix would be misleading
-    // (NVIDIA NIM rejects tools + thinking together), so swap in a special
-    // system prompt with a rich workspace snapshot instead.
+    // kimi-k2.6 always requires tools to be omitted (it runs exclusively in
+    // thinking mode on NVIDIA NIM regardless of NVIDIA_THINKING_MODE).
+    const nvBase = nvModelBase(model);
+    const alwaysDisableTools = NVIDIA_ALWAYS_DISABLE_TOOLS.has(model) || NVIDIA_ALWAYS_DISABLE_TOOLS.has(nvBase);
+
+    // When thinking mode (or always-disable-tools) is active, swap in a
+    // special system prompt with a rich workspace snapshot instead of the
+    // normal tool-list suffix (NVIDIA NIM rejects tools + thinking together).
     let systemPrompt = state.systemPrompt;
-    if (supportsThinking) {
+    if (supportsThinking || alwaysDisableTools) {
         if (!state.systemPromptStatic) {
             process.stderr.write('[open-claude-code] Warning: systemPromptStatic missing - falling back to full system prompt for ' + model + '\n');
         }
@@ -804,7 +1042,7 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         const workspaceContent = buildWorkspaceContent(process.cwd());
         systemPrompt = buildThinkingModelSystemPrompt(base, workspaceContent.summary);
     }
-    const effectiveState = supportsThinking
+    const effectiveState = (supportsThinking || alwaysDisableTools)
         ? { ...state, systemPrompt }
         : state;
 
@@ -818,9 +1056,9 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         temperature: 1.00,
         top_p: 1.00,
         stream: !!stream,
-        // Include tools unless thinking mode is active (NVIDIA NIM rejects
-        // the combination of thinking + tools).
-        ...(!supportsThinking && toolDefs.length > 0 && {
+        // Include tools unless thinking mode is active or the model always
+        // disables tools (e.g. kimi-k2.6 — NVIDIA NIM rejects thinking + tools).
+        ...(!supportsThinking && !alwaysDisableTools && toolDefs.length > 0 && {
             tools: toolDefs.map(t => ({
                 type: 'function',
                 function: { name: t.name, description: t.description, parameters: t.input_schema },
@@ -894,15 +1132,20 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
     if (!baseUrl) throw new Error(`Custom provider "${providerCfg.id}": baseUrl is required`);
     if (!apiKey)  throw new Error(`Custom provider "${providerCfg.id}": apiKey is required`);
 
-    // kimi-k2.5 / kimi-k2.6 / deepseek-r1 on the NVIDIA NIM backend support
-    // extended thinking. When NVIDIA_THINKING_MODE=true we exclude tools because
+    // kimi-k2.5 / deepseek-r1 on the NVIDIA NIM backend support extended
+    // thinking. When NVIDIA_THINKING_MODE=true we exclude tools because
     // NVIDIA NIM rejects the combination of thinking + tool-calling.
+    // kimi-k2.6 ALWAYS requires tools to be omitted — it runs exclusively in
+    // thinking mode on NVIDIA NIM.  We match both the fully-qualified form
+    // ("moonshotai/kimi-k2.6") and any short-name alias ("kimi-k2.6").
     // Do NOT send chat_template_kwargs — its dict value causes a server-side
     // HTTP 500 "unhashable type: 'dict'" error in NVIDIA's Python backend.
     // Also respect an explicit providerCfg.disableTools flag.
-    const isNvidiaThinkingModel = NVIDIA_THINKING_CAPABLE_MODELS.has(model);
+    const baseModel = nvModelBase(model);
+    const isNvidiaThinkingModel = NVIDIA_THINKING_CAPABLE_MODELS.has(model) || NVIDIA_THINKING_CAPABLE_MODELS.has(baseModel);
+    const isAlwaysNoTools = NVIDIA_ALWAYS_DISABLE_TOOLS.has(model) || NVIDIA_ALWAYS_DISABLE_TOOLS.has(baseModel);
     const thinkingEnabled = process.env.NVIDIA_THINKING_MODE === 'true';
-    const disableTools = providerCfg.disableTools || (isNvidiaThinkingModel && thinkingEnabled);
+    const disableTools = providerCfg.disableTools || isAlwaysNoTools || (isNvidiaThinkingModel && thinkingEnabled);
 
     const messages = buildOpenAIMessages(state);
 
