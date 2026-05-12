@@ -1598,6 +1598,13 @@ const r503fail = await limiter5xx.handleResponse({ status: 503, headers: noHeade
 assertEqual(r503fail, 'fail', '5xx returns fail after max retries');
 
 limiter5xx.reset();
+const r500b = await limiter5xx.handleResponse({ status: 500, headers: noHeaders });
+assertEqual(r500b, 'retry', '500 retries after reset');
+limiter5xx.retryCount = 3; // exhaust retries
+const r500fail = await limiter5xx.handleResponse({ status: 500, headers: noHeaders });
+assertEqual(r500fail, 'fail', '500 returns fail after max retries');
+
+limiter5xx.reset();
 const r504 = await limiter5xx.handleResponse({ status: 504, headers: noHeaders });
 assertEqual(r504, 'retry', '504 returns retry');
 

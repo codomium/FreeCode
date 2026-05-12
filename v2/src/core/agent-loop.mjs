@@ -707,7 +707,7 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     const body = {
         model,
         messages,
-        stream: !!stream,
+        ...(stream && { stream: true }),
         ...(tools.length > 0 && { tools }),
     };
 
@@ -1027,7 +1027,8 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
 
     // kimi-k2.6 always requires tools to be omitted (it runs exclusively in
     // thinking mode on NVIDIA NIM regardless of NVIDIA_THINKING_MODE).
-    const alwaysDisableTools = NVIDIA_ALWAYS_DISABLE_TOOLS.has(model) || NVIDIA_ALWAYS_DISABLE_TOOLS.has(nvModelBase(model));
+    const nvBase = nvModelBase(model);
+    const alwaysDisableTools = NVIDIA_ALWAYS_DISABLE_TOOLS.has(model) || NVIDIA_ALWAYS_DISABLE_TOOLS.has(nvBase);
 
     // When thinking mode (or always-disable-tools) is active, swap in a
     // special system prompt with a rich workspace snapshot instead of the
