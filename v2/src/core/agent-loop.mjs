@@ -23,10 +23,75 @@ import { checkInjection } from '../permissions/injection-check.mjs';
 let _idCounter = 0;
 function nextId() { return ++_idCounter; }
 
+// ── Module-level RateLimiter instances (one per provider) ──────────────────
+// Hoisted out of the per-call API functions so the objects are reused across
+// turns rather than being allocated fresh on every API request.  The reset()
+// call at the start of each function restores a clean retry state without
+// creating GC pressure.
+const _rlAnthropic = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlOpenAI    = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlGoogle    = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlNvidia    = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlCustom    = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
+
+// ── CUSTOM_PROVIDERS_JSON parse cache ───────────────────────────────────────
+// Parsing the env string on every turn (up to 3× per turn) is wasteful.
+// We cache the result and re-parse only when the env value changes.
+let _customProvidersCache = null;   // parsed Array or null
+let _customProvidersJson  = null;   // the env string that produced the cache
+
+/**
+ * Find a custom provider definition (from CUSTOM_PROVIDERS_JSON) that owns
+ * the given model ID.  Returns the provider object or null.
+ */
+function findCustomProvider(model) {
+    const json = process.env.CUSTOM_PROVIDERS_JSON;
+    if (!json) return null;
+    // Re-parse only when the env value has changed (e.g. dynamic reconfiguration).
+    if (json !== _customProvidersJson) {
+        try {
+            const parsed = JSON.parse(json);
+            _customProvidersCache = Array.isArray(parsed) ? parsed : null;
+        } catch {
+            _customProvidersCache = null;
+        }
+        _customProvidersJson = json;
+    }
+    if (!_customProvidersCache) return null;
+    for (const p of _customProvidersCache) {
+        const models = p.models || [];
+        if (models.some(m => (typeof m === 'string' ? m : m.id) === model)) return p;
+    }
+    return null;
+}
+
+// ── OpenAI tool-definition format cache ──────────────────────────────────────
+// callOpenAI / callNvidia / callCustomProvider all convert toolDefs to the
+// OpenAI `{type:'function', function:{...}}` format on every API call.
+// Since tools.list() returns a stable cached array, we can cache the
+// converted result keyed by that array identity and avoid repeated map()s.
+let _openAIToolDefsRef  = null;   // the toolDefs array from the last conversion
+let _openAIToolDefsOut  = null;   // the converted result
+
+/**
+ * Return toolDefs converted to OpenAI function-calling format.
+ * Result is cached by array identity — no re-allocation unless tools change.
+ * @param {Array} toolDefs
+ * @returns {Array}
+ */
+function toOpenAITools(toolDefs) {
+    if (toolDefs === _openAIToolDefsRef) return _openAIToolDefsOut;
+    _openAIToolDefsRef = toolDefs;
+    _openAIToolDefsOut = toolDefs.map(t => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.input_schema },
+    }));
+    return _openAIToolDefsOut;
+}
+
 /**
  * NVIDIA NIM models that support extended reasoning (thinking mode).
  *
- * By default (NVIDIA_THINKING_MODE unset / false) these models work in
  * standard tool-calling mode: Read, Write, Bash, Grep, etc. all work.
  *
  * When NVIDIA_THINKING_MODE=true tools are omitted (NVIDIA NIM rejects
@@ -172,8 +237,11 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
             return;
         }
 
-        // Auto-compact if needed (pass session goal so it's re-injected in compaction summary)
-        if (contextManager.shouldCompact(state.messages)) {
+        // Auto-compact if needed (pass session goal so it's re-injected in compaction summary).
+        // For new user-message turns, addMessage() above already ran shouldCompact() and
+        // compacted if necessary.  Only run it again on continuation turns (tool-result
+        // pushes bypass addMessage and may have grown the array past the threshold).
+        if (options.continuation && contextManager.shouldCompact(state.messages)) {
             yield { type: 'compaction', count: contextManager.compactionCount + 1 };
             state.messages = contextManager.compact(state.messages, 6, state.sessionGoal);
         }
@@ -588,7 +656,8 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 }
 
 function detectProvider(model) {
-    // Check user-configured custom providers first
+    // Check user-configured custom providers first.
+    // findCustomProvider is now cached — calling it once here is cheap.
     if (findCustomProvider(model)) return 'custom';
     if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) return 'openai';
     if (model.startsWith('gemini')) return 'google';
@@ -597,26 +666,9 @@ function detectProvider(model) {
 }
 
 /**
- * Find a custom provider definition (from CUSTOM_PROVIDERS_JSON) that owns
- * the given model ID.  Returns the provider object or null.
+ * Resolve provider + custom config once and pass both into the caller,
+ * so each call path doesn't need to repeat findCustomProvider().
  */
-function findCustomProvider(model) {
-    const json = process.env.CUSTOM_PROVIDERS_JSON;
-    if (!json) return null;
-    try {
-        const providers = JSON.parse(json);
-        if (!Array.isArray(providers)) return null;
-        for (const p of providers) {
-            const models = p.models || [];
-            const matches = models.some(m =>
-                (typeof m === 'string' ? m : m.id) === model
-            );
-            if (matches) return p;
-        }
-    } catch { /* ignore malformed JSON */ }
-    return null;
-}
-
 async function callApi(provider, model, state, toolDefs, settings) {
     if (provider === 'custom') {
         return callCustomProvider(findCustomProvider(model), model, state, toolDefs, settings, false);
@@ -655,7 +707,8 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
         body.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget || 10000 };
     }
 
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlAnthropic;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -733,10 +786,7 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
         }
     }
 
-    const tools = toolDefs.map(t => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.input_schema },
-    }));
+    const tools = toOpenAITools(toolDefs);
 
     const body = {
         model,
@@ -752,7 +802,8 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     };
 
     const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlOpenAI;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch(`${baseUrl}/chat/completions`, {
@@ -854,7 +905,8 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
         ...(googleTools && { tools: googleTools }),
     };
 
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlGoogle;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch(
@@ -1093,14 +1145,12 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         // Include tools unless thinking mode is active or the model always
         // disables tools (e.g. kimi-k2.6 — NVIDIA NIM rejects thinking + tools).
         ...(!supportsThinking && !alwaysDisableTools && toolDefs.length > 0 && {
-            tools: toolDefs.map(t => ({
-                type: 'function',
-                function: { name: t.name, description: t.description, parameters: t.input_schema },
-            })),
+            tools: toOpenAITools(toolDefs),
         }),
     };
 
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlNvidia;
+    rateLimiter.reset();
 
     let res;
     for (;;) {
@@ -1191,10 +1241,7 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
         top_p: 1.00,
         stream: !!stream,
         ...(toolDefs.length > 0 && !disableTools && {
-            tools: toolDefs.map(t => ({
-                type: 'function',
-                function: { name: t.name, description: t.description, parameters: t.input_schema },
-            })),
+            tools: toOpenAITools(toolDefs),
         }),
     };
 
@@ -1212,7 +1259,8 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
         }
     }
 
-    const rateLimiter = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
+    const rateLimiter = _rlCustom;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch(`${baseUrl}/chat/completions`, {
