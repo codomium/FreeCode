@@ -659,7 +659,9 @@ function detectProvider(model) {
     // Check user-configured custom providers first.
     // findCustomProvider is now cached — calling it once here is cheap.
     if (findCustomProvider(model)) return 'custom';
-    if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) return 'openai';
+    // OpenAI models: gpt-* family and the o-reasoning series (o1, o3, o4, …).
+    // Match any "o" followed by a digit so future releases (o5, o6…) work too.
+    if (model.startsWith('gpt-') || /^o\d/.test(model)) return 'openai';
     if (model.startsWith('gemini')) return 'google';
     if (isNvidiaModel(model)) return 'nvidia';
     return 'anthropic';
@@ -709,9 +711,10 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
 
     const rateLimiter = _rlAnthropic;
     rateLimiter.reset();
+    const anthropicBaseUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
     let res;
     for (;;) {
-        res = await fetch('https://api.anthropic.com/v1/messages', {
+        res = await fetch(`${anthropicBaseUrl}/v1/messages`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -766,32 +769,22 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY not set');
 
-    const messages = [];
-    if (state.systemPrompt) {
-        messages.push({ role: 'system', content: state.systemPrompt });
-    }
-    for (const msg of state.messages) {
-        if (typeof msg.content === 'string') {
-            messages.push({ role: msg.role, content: msg.content });
-        } else if (Array.isArray(msg.content)) {
-            for (const block of msg.content) {
-                if (block.type === 'tool_result') {
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: block.tool_use_id,
-                        content: block.content,
-                    });
-                }
-            }
-        }
-    }
+    // Use the shared message builder so assistant tool_use blocks are correctly
+    // converted to tool_calls and tool_result blocks become 'tool' role messages.
+    // The old inline builder skipped assistant tool_calls entirely, breaking
+    // multi-turn conversations whenever the model invoked any tool.
+    const messages = buildOpenAIMessages(state);
 
     const tools = toOpenAITools(toolDefs);
 
     const body = {
         model,
         messages,
+        max_tokens: resolveMaxOutputTokens(settings),
         ...(stream && { stream: true }),
+        // Request usage data in the final chunk when streaming so token
+        // counts are available for cost tracking and context management.
+        ...(stream && { stream_options: { include_usage: true } }),
         ...(tools.length > 0 && { tools }),
     };
 
@@ -868,13 +861,20 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
                     // assistant called a tool → Gemini functionCall part
                     parts.push({ functionCall: { name: block.name, args: block.input ?? {} } });
                 } else if (block.type === 'tool_result') {
-                    // user returned tool result → Gemini functionResponse part
+                    // user returned tool result → Gemini functionResponse part.
+                    // Gemini requires functionResponse.name to equal the
+                    // functionCall.name (the tool name), not the call ID.
+                    // Our IDs for Gemini calls are generated as `${name}_${counter}`
+                    // (see convertGoogleResponse / accumulateGoogleStream), so we
+                    // strip the trailing `_<digits>` suffix to recover the name.
+                    const rawId = block.tool_use_id || '';
+                    const fnName = rawId.replace(/_\d+$/, '') || rawId;
                     const responseContent = typeof block.content === 'string'
                         ? block.content
                         : JSON.stringify(block.content);
                     parts.push({
                         functionResponse: {
-                            name: block.tool_use_id || '',
+                            name: fnName,
                             response: { output: responseContent },
                         },
                     });
@@ -1593,11 +1593,13 @@ function convertOpenAIResponse(data) {
 
     if (choice.message?.tool_calls) {
         for (const tc of choice.message.tool_calls) {
+            let input = {};
+            try { input = JSON.parse(tc.function.arguments || '{}'); } catch { input = {}; }
             content.push({
                 type: 'tool_use',
                 id: tc.id,
                 name: tc.function.name,
-                input: JSON.parse(tc.function.arguments || '{}'),
+                input,
             });
         }
     }
