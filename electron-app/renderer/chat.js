@@ -1221,8 +1221,8 @@
                 if (el._rawText) {
                     el.innerHTML = renderMarkdown(el._rawText);
                     el.classList.add('streaming-cursor');
-                    // Scroll in the same synchronous batch to avoid a second layout pass
-                    if (autoScroll) messagesEl.scrollTop = messagesEl.scrollHeight;
+                    // Scroll in the same batch; scrollToBottom() already checks autoScroll
+                    scrollToBottom();
                 }
             }, delay);
         }

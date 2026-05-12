@@ -243,6 +243,14 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                         }
                     }
 
+                    // Final trailing check: catch repetition in the last <50 chars
+                    // that the throttled in-loop check may have skipped.
+                    if (!repetitionDetected && currentText.length > textLenAtLastRepCheck) {
+                        if (detectRepetition(currentText)) {
+                            repetitionDetected = true;
+                        }
+                    }
+
                     if (repetitionDetected) {
                         yield {
                             type: 'error',
