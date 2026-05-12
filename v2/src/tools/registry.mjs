@@ -66,13 +66,40 @@ export function createToolRegistry() {
         tools.set(Tool.name, Tool);
     }
 
+    // Cached tool definitions list — rebuilt whenever new tools are registered.
+    // tools.list() is called on every API turn; avoiding the O(n) map+rebuild
+    // on each call shaves a small but consistent amount of latency.
+    let _listCache = null;
+    // Cached OpenAI-format tool definitions (type:'function' wrappers).
+    // Rebuilt alongside _listCache so both stay in sync.
+    let _listOpenAICache = null;
+    function invalidateListCache() { _listCache = null; _listOpenAICache = null; }
+
     const registry = {
         list() {
-            return [...tools.values()].map(t => ({
+            if (_listCache) return _listCache;
+            _listCache = [...tools.values()].map(t => ({
                 name: t.name,
                 description: t.description,
                 input_schema: t.inputSchema,
             }));
+            _listOpenAICache = null; // reset so listOpenAI() rebuilds from new _listCache
+            return _listCache;
+        },
+
+        /**
+         * Return tool definitions pre-formatted for OpenAI-compatible providers.
+         * Cached alongside list() — only rebuilt when tools are registered/deregistered.
+         * Avoids a toolDefs.map() allocation on every API call in callOpenAI/callNvidia/callCustomProvider.
+         */
+        listOpenAI() {
+            if (_listOpenAICache) return _listOpenAICache;
+            const base = this.list();
+            _listOpenAICache = base.map(t => ({
+                type: 'function',
+                function: { name: t.name, description: t.description, parameters: t.input_schema },
+            }));
+            return _listOpenAICache;
         },
 
         async call(name, input) {
@@ -85,6 +112,7 @@ export function createToolRegistry() {
 
         register(tool) {
             tools.set(tool.name, tool);
+            invalidateListCache();
         },
 
         get(name) {
@@ -108,6 +136,7 @@ export function createToolRegistry() {
                 };
                 tools.set(mcpTool.name, wrapper);
             }
+            invalidateListCache();
         },
     };
 

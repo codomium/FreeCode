@@ -17,7 +17,18 @@ const PROVIDERS = {
                 'Content-Type': 'application/json',
             };
         },
-        models: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-6'],
+        models: [
+            'claude-opus-4-5',
+            'claude-sonnet-4-5',
+            'claude-haiku-4-5',
+            'claude-opus-4-6',
+            'claude-sonnet-4-6',
+            'claude-haiku-4-6',
+            // Legacy
+            'claude-3-5-sonnet-20241022',
+            'claude-3-5-haiku-20241022',
+            'claude-3-opus-20240229',
+        ],
     },
 
     openai: {
@@ -30,7 +41,21 @@ const PROVIDERS = {
                 'Content-Type': 'application/json',
             };
         },
-        models: ['gpt-4o', 'gpt-4o-mini', 'o1-preview', 'o1-mini', 'o3-mini'],
+        models: [
+            // GPT-4.x family
+            'gpt-4.1',
+            'gpt-4.1-mini',
+            'gpt-4.1-nano',
+            'gpt-4o',
+            'gpt-4o-mini',
+            // Reasoning series (o1/o3/o4)
+            'o4-mini',
+            'o3',
+            'o3-mini',
+            'o1',
+            'o1-mini',
+            'o1-preview',
+        ],
         transformRequest(body) {
             const messages = [];
             if (body.system) {
@@ -103,7 +128,14 @@ const PROVIDERS = {
         authHeader(key) {
             return { 'Content-Type': 'application/json' };
         },
-        models: ['gemini-3-flash-preview', 'gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash'],
+        models: [
+            'gemini-2.5-pro',
+            'gemini-2.5-flash',
+            'gemini-2.0-flash',
+            'gemini-2.0-pro',
+            'gemini-1.5-pro',
+            'gemini-1.5-flash',
+        ],
         transformRequest(body) {
             const contents = [];
             for (const msg of body.messages || []) {
@@ -218,7 +250,12 @@ const PROVIDERS = {
  */
 export function getProvider(model) {
     if (model.startsWith('claude') || model.startsWith('anthropic')) return PROVIDERS.anthropic;
-    if (model.startsWith('gpt') || model.startsWith('o1') || model.startsWith('o3')) return PROVIDERS.openai;
+    // OpenAI GPT family and reasoning series (o1, o3, o4…).
+    // /^o\d+(-|$)/ matches 'o1', 'o3-mini', 'o4-mini' etc. while preventing
+    // false-positives on names like 'output-formatter' or 'optimization-v2'.
+    // The pattern is intentionally future-proof: any single 'o' + digits model
+    // (e.g. o5, o6) will automatically route to OpenAI without code changes.
+    if (model.startsWith('gpt') || /^o\d+(-|$)/.test(model)) return PROVIDERS.openai;
     if (model.startsWith('gemini')) return PROVIDERS.google;
     // NVIDIA-hosted models use a namespaced format: "publisher/model-name"
     if (isNvidiaModel(model)) return PROVIDERS.nvidia;

@@ -66,9 +66,12 @@ export class TurnClassifier {
      * @returns {{ type: TurnType, confidence: number }}
      */
     classify(messages, currentTurn) {
-        // Take the last user message for classification
-        const userMessages = messages.filter(m => m.role === 'user');
-        const lastUser = userMessages[userMessages.length - 1];
+        // Take the last user message for classification.
+        // Reverse scan avoids allocating a filtered array on every turn.
+        let lastUser = null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') { lastUser = messages[i]; break; }
+        }
         if (!lastUser) return { type: 'explanation', confidence: 0.3 };
 
         const text = this._extractText(lastUser).toLowerCase();
@@ -110,10 +113,15 @@ export class TurnClassifier {
     _extractText(message) {
         if (typeof message.content === 'string') return message.content;
         if (Array.isArray(message.content)) {
-            return message.content
-                .filter(b => b.type === 'text')
-                .map(b => b.text || '')
-                .join(' ');
+            // Avoid allocating two intermediate arrays from filter+map.
+            let out = '';
+            for (const b of message.content) {
+                if (b.type === 'text' && b.text) {
+                    if (out) out += ' ';
+                    out += b.text;
+                }
+            }
+            return out;
         }
         return '';
     }

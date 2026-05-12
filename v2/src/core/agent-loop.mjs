@@ -23,10 +23,104 @@ import { checkInjection } from '../permissions/injection-check.mjs';
 let _idCounter = 0;
 function nextId() { return ++_idCounter; }
 
+// ── Module-level RateLimiter instances (one per provider) ──────────────────
+// Hoisted out of the per-call API functions so the objects are reused across
+// turns rather than being allocated fresh on every API request.  The reset()
+// call at the start of each function restores a clean retry state without
+// creating GC pressure.
+const _rlAnthropic = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlOpenAI    = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlGoogle    = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlNvidia    = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+const _rlCustom    = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
+
+// ── CUSTOM_PROVIDERS_JSON parse cache ───────────────────────────────────────
+// Parsing the env string on every turn (up to 3× per turn) is wasteful.
+// We cache the result and re-parse only when the env value changes.
+let _customProvidersCache = null;   // parsed Array or null
+let _customProvidersJson  = null;   // the env string that produced the cache
+
+// ── Provider base-URL cache ──────────────────────────────────────────────────
+// Evaluated once at module load; refreshed only when the env var is absent
+// (empty string → default) so changes in long-lived processes are still
+// picked up without paying repeated string ops on every API call.
+function _resolveAnthropicBaseUrl() {
+    return (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
+}
+// Snapshot at load time — process.env.ANTHROPIC_BASE_URL is effectively
+// static in normal usage (set before the process starts).
+let _anthropicBaseUrl = _resolveAnthropicBaseUrl();
+
+/**
+ * Find a custom provider definition (from CUSTOM_PROVIDERS_JSON) that owns
+ * the given model ID.  Returns the provider object or null.
+ */
+function findCustomProvider(model) {
+    const json = process.env.CUSTOM_PROVIDERS_JSON;
+    if (!json) return null;
+    // Re-parse only when the env value has changed (e.g. dynamic reconfiguration).
+    if (json !== _customProvidersJson) {
+        try {
+            const parsed = JSON.parse(json);
+            _customProvidersCache = Array.isArray(parsed) ? parsed : null;
+        } catch {
+            _customProvidersCache = null;
+        }
+        _customProvidersJson = json;
+    }
+    if (!_customProvidersCache) return null;
+    for (const p of _customProvidersCache) {
+        const models = p.models || [];
+        if (models.some(m => (typeof m === 'string' ? m : m.id) === model)) return p;
+    }
+    return null;
+}
+
+// ── OpenAI tool-definition format cache ──────────────────────────────────────
+// callOpenAI / callNvidia / callCustomProvider all convert toolDefs to the
+// OpenAI `{type:'function', function:{...}}` format on every API call.
+// Since tools.list() returns a stable cached array, we can cache the
+// converted result keyed by that array identity and avoid repeated map()s.
+let _openAIToolDefsRef  = null;   // the toolDefs array from the last conversion
+let _openAIToolDefsOut  = null;   // the converted result
+
+/**
+ * Return toolDefs converted to OpenAI function-calling format.
+ * Result is cached by array identity — no re-allocation unless tools change.
+ * @param {Array} toolDefs
+ * @returns {Array}
+ */
+function toOpenAITools(toolDefs) {
+    if (toolDefs === _openAIToolDefsRef) return _openAIToolDefsOut;
+    _openAIToolDefsRef = toolDefs;
+    _openAIToolDefsOut = toolDefs.map(t => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.input_schema },
+    }));
+    return _openAIToolDefsOut;
+}
+
+/**
+ * Extract the function/tool name from a Gemini call ID.
+ *
+ * Gemini does not provide stable call IDs; we generate them as
+ * `${functionName}_${counter}` (see convertGoogleResponse / accumulateGoogleStream).
+ * When building a functionResponse we need the original function name, which
+ * is recovered by stripping the trailing `_<digits>` counter suffix.
+ *
+ * @param {string} toolUseId — e.g. "Read_1", "Bash_42", "my_tool_runner_7"
+ * @returns {string} — e.g. "Read", "Bash", "my_tool_runner"
+ */
+function extractGoogleToolName(toolUseId) {
+    if (!toolUseId) return '';
+    // Strip a trailing `_<pure-digits>` suffix.
+    // String.replace() always returns a string, so no fallback is needed.
+    return toolUseId.replace(/_\d+$/, '');
+}
+
 /**
  * NVIDIA NIM models that support extended reasoning (thinking mode).
  *
- * By default (NVIDIA_THINKING_MODE unset / false) these models work in
  * standard tool-calling mode: Read, Write, Bash, Grep, etc. all work.
  *
  * When NVIDIA_THINKING_MODE=true tools are omitted (NVIDIA NIM rejects
@@ -172,8 +266,11 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
             return;
         }
 
-        // Auto-compact if needed (pass session goal so it's re-injected in compaction summary)
-        if (contextManager.shouldCompact(state.messages)) {
+        // Auto-compact if needed (pass session goal so it's re-injected in compaction summary).
+        // For new user-message turns, addMessage() above already ran shouldCompact() and
+        // compacted if necessary.  Only run it again on continuation turns (tool-result
+        // pushes bypass addMessage and may have grown the array past the threshold).
+        if (options.continuation && contextManager.shouldCompact(state.messages)) {
             yield { type: 'compaction', count: contextManager.compactionCount + 1 };
             state.messages = contextManager.compact(state.messages, 6, state.sessionGoal);
         }
@@ -211,6 +308,9 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     let currentText = '';
                     let currentThinking = '';
                     let repetitionDetected = false;
+                    // Only run the expensive repetition check every 50 chars of
+                    // new text (not on every token) to keep the streaming hot path lean.
+                    let textLenAtLastRepCheck = 0;
 
                     for await (const event of response.events) {
                         if (event.type === 'content_block_start') {
@@ -221,10 +321,15 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                             if (event.delta?.type === 'text_delta') {
                                 currentText += event.delta.text;
                                 yield { type: 'stream_event', text: event.delta.text };
-                                // Abort stream if the model is stuck repeating itself
-                                if (detectRepetition(currentText)) {
-                                    repetitionDetected = true;
-                                    break;
+                                // Abort stream if the model is stuck repeating itself.
+                                // Throttled: only check after 50+ new chars to avoid
+                                // O(n²) substring work on every single streaming token.
+                                if (currentText.length - textLenAtLastRepCheck >= 50) {
+                                    textLenAtLastRepCheck = currentText.length;
+                                    if (detectRepetition(currentText)) {
+                                        repetitionDetected = true;
+                                        break;
+                                    }
                                 }
                             } else if (event.delta?.type === 'thinking_delta') {
                                 currentThinking += event.delta.thinking;
@@ -232,6 +337,14 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                             }
                         } else if (event.type === 'ping') {
                             // Keepalive, ignore
+                        }
+                    }
+
+                    // Final trailing check: catch repetition in the last <50 chars
+                    // that the throttled in-loop check may have skipped.
+                    if (!repetitionDetected && currentText.length > textLenAtLastRepCheck) {
+                        if (detectRepetition(currentText)) {
+                            repetitionDetected = true;
                         }
                     }
 
@@ -308,6 +421,10 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         if (toolUseBlocks.length > 0) {
             const toolResults = [];
 
+            // ── Phase 1: sequential pre-checks (hooks + permissions) ──────────
+            // Permission dialogs may require user interaction, so these must run
+            // one at a time.  We collect the blocks that are approved for execution.
+            const approvedBlocks = [];
             for (const block of toolUseBlocks) {
                 // Run pre-tool hooks
                 if (hooks) {
@@ -339,9 +456,15 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     continue;
                 }
 
-                // Execute tool
                 yield { type: 'tool_progress', tool: block.name, status: 'running', input: block.input };
+                approvedBlocks.push(block);
+            }
 
+            // ── Phase 2: execute all approved tools in parallel ───────────────
+            // For streaming tools (e.g. Bash), we buffer the events so they can
+            // be yielded in deterministic order in Phase 3.
+            const execResults = await Promise.all(approvedBlocks.map(async (block) => {
+                const streamEvents = []; // buffered tool_meta / tool_stream events
                 let result;
                 let isToolError = false;
                 try {
@@ -349,12 +472,8 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     // Detect async-generator tools (e.g. Bash with live streaming)
                     if (callResult !== null && typeof callResult === 'object' && typeof callResult[Symbol.asyncIterator] === 'function') {
                         for await (const event of callResult) {
-                            if (event.type === 'meta') {
-                                // Forward metadata (e.g. bash jobId for stdin)
-                                yield { type: 'tool_meta', tool: block.name, ...event };
-                            } else if (event.type === 'chunk') {
-                                // Live output chunk
-                                yield { type: 'tool_stream', tool: block.name, chunk: event.data, stream: event.stream };
+                            if (event.type === 'meta' || event.type === 'chunk') {
+                                streamEvents.push(event);
                             } else if (event.type === 'done') {
                                 result = event.result;
                             }
@@ -372,6 +491,54 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     result = await hooks.runPostToolUse(block.name, result);
                 }
 
+                // Compute verifyWrites data while we're still in the parallel phase
+                // (reads are cheap and don't mutate shared state)
+                const verifyWarnings = [];
+                if (settings.verifyWrites && !isToolError && typeof result === 'string') {
+                    if (block.name === 'Write' && result.startsWith('File written:')) {
+                        const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
+                        if (filePath && typeof block.input?.content === 'string') {
+                            const { match, diff } = verifyWrite(filePath, block.input.content);
+                            if (!match) {
+                                verifyWarnings.push(`Write verification failed for ${filePath} — on-disk content differs from what was written:\n${diff}`);
+                            }
+                        }
+                    } else if (block.name === 'Edit' && result.startsWith('File updated:')) {
+                        const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
+                        if (filePath && typeof block.input?.new_string === 'string') {
+                            const { match, message } = verifyEdit(filePath, block.input.old_string || '', block.input.new_string);
+                            if (!match) verifyWarnings.push(message);
+                        }
+                    } else if (block.name === 'MultiEdit' && result.startsWith('Applied')) {
+                        const edits = Array.isArray(block.input?.edits) ? block.input.edits : [];
+                        for (const edit of edits) {
+                            if (!edit.file_path || typeof edit.new_string !== 'string') continue;
+                            const filePath = path.resolve(edit.file_path);
+                            const { match, message } = verifyEdit(filePath, edit.old_string || '', edit.new_string);
+                            if (!match) verifyWarnings.push(message);
+                        }
+                    }
+                }
+
+                return { block, result, isToolError, streamEvents, verifyWarnings };
+            }));
+
+            // ── Phase 3: yield events + post-process in original order ────────
+            // Stateful operations (stuck detector, PlanGraph, reasoning log) run
+            // sequentially here so their ordering remains deterministic.
+            for (const execResult of execResults) {
+                const { block, streamEvents, verifyWarnings } = execResult;
+                let { result, isToolError } = execResult;
+
+                // Replay buffered streaming events (tool_meta / tool_stream)
+                for (const event of streamEvents) {
+                    if (event.type === 'meta') {
+                        yield { type: 'tool_meta', tool: block.name, ...event };
+                    } else if (event.type === 'chunk') {
+                        yield { type: 'tool_stream', tool: block.name, chunk: event.data, stream: event.stream };
+                    }
+                }
+
                 // Also treat result strings that are tool-error messages as errors
                 if (!isToolError && typeof result === 'string' &&
                     (result.startsWith('Tool error:') || result.startsWith('Error:') ||
@@ -379,50 +546,9 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     isToolError = true;
                 }
 
-                // Verify write: after a successful Write call, read the file back and
-                // diff it against the intended content.  Emit a warning if they diverge.
-                // F2: gated behind settings.verifyWrites (default false) to avoid
-                //     redundant fs reads — the tool result already includes a preview.
-                if (settings.verifyWrites && block.name === 'Write' && !isToolError && typeof result === 'string' && result.startsWith('File written:')) {
-                    const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
-                    if (filePath && typeof block.input?.content === 'string') {
-                        const { match, diff } = verifyWrite(filePath, block.input.content);
-                        if (!match) {
-                            yield {
-                                type: 'warning',
-                                tool: block.name,
-                                message: `Write verification failed for ${filePath} — on-disk content differs from what was written:\n${diff}`,
-                            };
-                        }
-                    }
-                }
-
-                // Verify edit: after a successful Edit call, read the file back and
-                // confirm new_string is present and old_string is gone.
-                // F2: gated behind settings.verifyWrites (default false).
-                if (settings.verifyWrites && block.name === 'Edit' && !isToolError && typeof result === 'string' && result.startsWith('File updated:')) {
-                    const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
-                    if (filePath && typeof block.input?.new_string === 'string') {
-                        const { match, message } = verifyEdit(filePath, block.input.old_string || '', block.input.new_string);
-                        if (!match) {
-                            yield { type: 'warning', tool: block.name, message };
-                        }
-                    }
-                }
-
-                // Verify multi-edit: after a successful MultiEdit call, verify each
-                // edit's new_string is present in the corresponding file.
-                // F2: gated behind settings.verifyWrites (default false).
-                if (settings.verifyWrites && block.name === 'MultiEdit' && !isToolError && typeof result === 'string' && result.startsWith('Applied')) {
-                    const edits = Array.isArray(block.input?.edits) ? block.input.edits : [];
-                    for (const edit of edits) {
-                        if (!edit.file_path || typeof edit.new_string !== 'string') continue;
-                        const filePath = path.resolve(edit.file_path);
-                        const { match, message } = verifyEdit(filePath, edit.old_string || '', edit.new_string);
-                        if (!match) {
-                            yield { type: 'warning', tool: block.name, message };
-                        }
-                    }
+                // Emit any verifyWrites warnings collected during parallel execution
+                for (const msg of verifyWarnings) {
+                    yield { type: 'warning', tool: block.name, message: msg };
                 }
 
                 // Loop-detection: record this tool call and check for stuck conditions.
@@ -559,35 +685,22 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
 }
 
 function detectProvider(model) {
-    // Check user-configured custom providers first
+    // Check user-configured custom providers first.
+    // findCustomProvider is now cached — calling it once here is cheap.
     if (findCustomProvider(model)) return 'custom';
-    if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) return 'openai';
+    // OpenAI GPT family and reasoning series (o1, o3, o4, o5…).
+    // Use /^o\d+(-|$)/ rather than /^o\d/ to avoid false-positives like
+    // 'output-formatter' or 'optimization-v2' matching the OpenAI branch.
+    if (model.startsWith('gpt-') || /^o\d+(-|$)/.test(model)) return 'openai';
     if (model.startsWith('gemini')) return 'google';
     if (isNvidiaModel(model)) return 'nvidia';
     return 'anthropic';
 }
 
 /**
- * Find a custom provider definition (from CUSTOM_PROVIDERS_JSON) that owns
- * the given model ID.  Returns the provider object or null.
+ * Resolve provider + custom config once and pass both into the caller,
+ * so each call path doesn't need to repeat findCustomProvider().
  */
-function findCustomProvider(model) {
-    const json = process.env.CUSTOM_PROVIDERS_JSON;
-    if (!json) return null;
-    try {
-        const providers = JSON.parse(json);
-        if (!Array.isArray(providers)) return null;
-        for (const p of providers) {
-            const models = p.models || [];
-            const matches = models.some(m =>
-                (typeof m === 'string' ? m : m.id) === model
-            );
-            if (matches) return p;
-        }
-    } catch { /* ignore malformed JSON */ }
-    return null;
-}
-
 async function callApi(provider, model, state, toolDefs, settings) {
     if (provider === 'custom') {
         return callCustomProvider(findCustomProvider(model), model, state, toolDefs, settings, false);
@@ -626,15 +739,21 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
         body.thinking = { type: 'enabled', budget_tokens: settings.thinkingBudget || 10000 };
     }
 
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlAnthropic;
+    rateLimiter.reset();
     let res;
     for (;;) {
-        res = await fetch('https://api.anthropic.com/v1/messages', {
+        res = await fetch(`${_anthropicBaseUrl}/v1/messages`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'x-api-key': apiKey,
                 'anthropic-version': '2023-06-01',
+                // Enable prompt caching so cache_control blocks on the system
+                // prompt are honoured.  Without this header Anthropic silently
+                // ignores cache_control and re-processes the full system prompt
+                // on every turn, adding hundreds of ms to TTFT in multi-turn sessions.
+                'anthropic-beta': 'prompt-caching-2024-07-31',
             },
             body: JSON.stringify(body),
         });
@@ -679,35 +798,24 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY not set');
 
-    const messages = [];
-    if (state.systemPrompt) {
-        messages.push({ role: 'system', content: state.systemPrompt });
-    }
-    for (const msg of state.messages) {
-        if (typeof msg.content === 'string') {
-            messages.push({ role: msg.role, content: msg.content });
-        } else if (Array.isArray(msg.content)) {
-            for (const block of msg.content) {
-                if (block.type === 'tool_result') {
-                    messages.push({
-                        role: 'tool',
-                        tool_call_id: block.tool_use_id,
-                        content: block.content,
-                    });
-                }
-            }
-        }
-    }
+    // Use the shared message builder so multi-turn tool conversations are
+    // correctly serialised for OpenAI-compatible APIs:
+    //   • assistant turns with tool_use blocks → {role:'assistant', tool_calls:[…]}
+    //   • user turns with tool_result blocks  → {role:'tool', tool_call_id:…}
+    // The old inline builder emitted only tool_result messages and omitted the
+    // preceding assistant tool_calls, which OpenAI rejects (400 Bad Request).
+    const messages = buildOpenAIMessages(state);
 
-    const tools = toolDefs.map(t => ({
-        type: 'function',
-        function: { name: t.name, description: t.description, parameters: t.input_schema },
-    }));
+    const tools = toOpenAITools(toolDefs);
 
     const body = {
         model,
         messages,
+        max_tokens: resolveMaxOutputTokens(settings),
         ...(stream && { stream: true }),
+        // Request usage data in the final chunk when streaming so token
+        // counts are available for cost tracking and context management.
+        ...(stream && { stream_options: { include_usage: true } }),
         ...(tools.length > 0 && { tools }),
     };
 
@@ -718,7 +826,8 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     };
 
     const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlOpenAI;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch(`${baseUrl}/chat/completions`, {
@@ -783,13 +892,16 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
                     // assistant called a tool → Gemini functionCall part
                     parts.push({ functionCall: { name: block.name, args: block.input ?? {} } });
                 } else if (block.type === 'tool_result') {
-                    // user returned tool result → Gemini functionResponse part
+                    // user returned tool result → Gemini functionResponse part.
+                    // Gemini requires functionResponse.name to equal the
+                    // functionCall.name (the tool name), not the call ID.
+                    const fnName = extractGoogleToolName(block.tool_use_id);
                     const responseContent = typeof block.content === 'string'
                         ? block.content
                         : JSON.stringify(block.content);
                     parts.push({
                         functionResponse: {
-                            name: block.tool_use_id || '',
+                            name: fnName,
                             response: { output: responseContent },
                         },
                     });
@@ -818,9 +930,17 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
             systemInstruction: { parts: [{ text: state.systemPrompt }] },
         }),
         ...(googleTools && { tools: googleTools }),
+        // Without generationConfig.maxOutputTokens, Gemini defaults to ~8192
+        // tokens and silently truncates long agent responses / thinking output.
+        // Setting it explicitly to the configured limit lets agents complete
+        // large tasks without hitting the model's conservative default.
+        generationConfig: {
+            maxOutputTokens: resolveMaxOutputTokens(settings),
+        },
     };
 
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlGoogle;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch(
@@ -904,7 +1024,14 @@ async function* streamGoogleResponse(response) {
         if (!candidate) return;
         for (const part of candidate.content?.parts || []) {
             if (part.text) {
-                yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
+                // Gemini 2.5 models mark internal reasoning with part.thought === true.
+                // Route these as thinking_delta events so the agent loop displays them
+                // correctly and doesn't confuse thinking with response text.
+                if (part.thought) {
+                    yield { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: part.text } };
+                } else {
+                    yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
+                }
             }
             if (part.functionCall) {
                 yield { type: 'google_function_call', functionCall: part.functionCall };
@@ -967,11 +1094,15 @@ function accumulateGoogleStream(events) {
     };
 
     let textContent = '';
+    let thinkingContent = '';
 
     for (const event of events) {
         if (event.type === 'content_block_delta') {
             if (event.delta?.type === 'text_delta') {
                 textContent += event.delta.text || '';
+            } else if (event.delta?.type === 'thinking_delta') {
+                // Gemini 2.5 thinking tokens arrive as thinking_delta events
+                thinkingContent += event.delta.thinking || '';
             }
         } else if (event.type === 'google_function_call') {
             const fc = event.functionCall;
@@ -988,9 +1119,17 @@ function accumulateGoogleStream(events) {
         }
     }
 
+    if (thinkingContent) {
+        message.content.unshift({ type: 'thinking', thinking: thinkingContent });
+    }
     if (textContent) {
-        // Insert text before any tool_use blocks to preserve natural order
-        message.content.unshift({ type: 'text', text: textContent });
+        // Insert text after any thinking block but before tool_use blocks
+        const insertAt = message.content.findIndex(b => b.type !== 'thinking');
+        if (insertAt === -1) {
+            message.content.push({ type: 'text', text: textContent });
+        } else {
+            message.content.splice(insertAt, 0, { type: 'text', text: textContent });
+        }
     }
 
     if (!message.stop_reason) message.stop_reason = 'end_turn';
@@ -1059,14 +1198,12 @@ async function callNvidia(model, state, toolDefs, settings, stream) {
         // Include tools unless thinking mode is active or the model always
         // disables tools (e.g. kimi-k2.6 — NVIDIA NIM rejects thinking + tools).
         ...(!supportsThinking && !alwaysDisableTools && toolDefs.length > 0 && {
-            tools: toolDefs.map(t => ({
-                type: 'function',
-                function: { name: t.name, description: t.description, parameters: t.input_schema },
-            })),
+            tools: toOpenAITools(toolDefs),
         }),
     };
 
-    const rateLimiter = new RateLimiter({ maxRetries: 5, baseDelay: 5000 });
+    const rateLimiter = _rlNvidia;
+    rateLimiter.reset();
 
     let res;
     for (;;) {
@@ -1149,18 +1286,25 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
 
     const messages = buildOpenAIMessages(state);
 
+    // Some OpenAI-compatible providers (notably several OpenRouter free models)
+    // reject explicit sampling fields and require provider defaults instead.
+    // Send temperature/top_p only when explicitly configured for this provider.
+    const customTemperature = typeof providerCfg.temperature === 'number'
+        ? providerCfg.temperature
+        : null;
+    const customTopP = typeof providerCfg.top_p === 'number'
+        ? providerCfg.top_p
+        : (typeof providerCfg.topP === 'number' ? providerCfg.topP : null);
+
     const body = {
         model,
         messages,
         max_tokens: resolveMaxOutputTokens(settings),
-        temperature: 1.00,
-        top_p: 1.00,
+        ...(customTemperature !== null && { temperature: customTemperature }),
+        ...(customTopP !== null && { top_p: customTopP }),
         stream: !!stream,
         ...(toolDefs.length > 0 && !disableTools && {
-            tools: toolDefs.map(t => ({
-                type: 'function',
-                function: { name: t.name, description: t.description, parameters: t.input_schema },
-            })),
+            tools: toOpenAITools(toolDefs),
         }),
     };
 
@@ -1178,7 +1322,8 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
         }
     }
 
-    const rateLimiter = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
+    const rateLimiter = _rlCustom;
+    rateLimiter.reset();
     let res;
     for (;;) {
         res = await fetch(`${baseUrl}/chat/completions`, {
@@ -1372,6 +1517,19 @@ async function* streamOpenAIResponse(response) {
                     throw new Error(chunk.error.message || JSON.stringify(chunk.error));
                 }
 
+                // Usage-only chunk produced by stream_options:{include_usage:true}.
+                // These have an empty choices array and a populated usage object.
+                // The check is: choices is missing or empty AND usage is present.
+                const hasChoices = Array.isArray(chunk.choices) && chunk.choices.length > 0;
+                if (!hasChoices && chunk.usage) {
+                    yield {
+                        type: 'usage',
+                        input_tokens: chunk.usage.prompt_tokens || 0,
+                        output_tokens: chunk.usage.completion_tokens || 0,
+                    };
+                    continue;
+                }
+
                 const delta = chunk.choices?.[0]?.delta;
                 if (!delta) continue;
 
@@ -1432,12 +1590,51 @@ async function* streamOpenAIResponse(response) {
                 if (raw && raw !== '[DONE]') {
                     try {
                         const chunk = JSON.parse(raw);
-                        const delta = chunk.choices?.[0]?.delta;
-                        if (delta?.content) {
+                        if (chunk.error) {
+                            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+                        }
+                        const hasChoices = Array.isArray(chunk.choices) && chunk.choices.length > 0;
+                        if (!hasChoices && chunk.usage) {
                             yield {
-                                type: 'content_block_delta',
-                                delta: { type: 'text_delta', text: delta.content },
+                                type: 'usage',
+                                input_tokens: chunk.usage.prompt_tokens || 0,
+                                output_tokens: chunk.usage.completion_tokens || 0,
                             };
+                        } else {
+                            const delta = chunk.choices?.[0]?.delta;
+                            if (delta?.reasoning_content || delta?.thinking) {
+                                yield {
+                                    type: 'content_block_delta',
+                                    delta: { type: 'thinking_delta', thinking: delta.reasoning_content || delta.thinking },
+                                };
+                            }
+                            if (delta?.content) {
+                                yield {
+                                    type: 'content_block_delta',
+                                    delta: { type: 'text_delta', text: delta.content },
+                                };
+                            }
+                            if (delta?.tool_calls) {
+                                for (const tc of delta.tool_calls) {
+                                    yield {
+                                        type: 'content_block_delta',
+                                        delta: {
+                                            type: 'tool_call_delta',
+                                            index: tc.index,
+                                            id: tc.id,
+                                            name: tc.function?.name,
+                                            partial_json: tc.function?.arguments || '',
+                                        },
+                                    };
+                                }
+                            }
+                            const finishReason = chunk.choices?.[0]?.finish_reason;
+                            if (finishReason) {
+                                yield {
+                                    type: 'message_delta',
+                                    delta: { stop_reason: finishReason === 'stop' ? 'end_turn' : finishReason },
+                                };
+                            }
                         }
                     } catch {
                         // ignore malformed final chunk
@@ -1481,6 +1678,11 @@ function accumulateOpenAIStream(events) {
             }
         } else if (event.type === 'message_delta') {
             if (event.delta?.stop_reason) message.stop_reason = event.delta.stop_reason;
+        } else if (event.type === 'usage') {
+            // Produced when stream_options:{include_usage:true} is set.
+            // Overwrite the zero placeholders with the real token counts.
+            message.usage.input_tokens = event.input_tokens;
+            message.usage.output_tokens = event.output_tokens;
         }
     }
 
@@ -1511,11 +1713,21 @@ function convertOpenAIResponse(data) {
 
     if (choice.message?.tool_calls) {
         for (const tc of choice.message.tool_calls) {
+            let input = {};
+            try {
+                input = JSON.parse(tc.function.arguments || '{}');
+            } catch (e) {
+                // Log only length to avoid accidentally exposing secrets or PII.
+                const argLen = (tc.function.arguments || '').length;
+                process.stderr.write(
+                    `[open-claude-code] Warning: could not parse tool arguments for "${tc.function.name}": ${e.message} (${argLen} chars)\n`
+                );
+            }
             content.push({
                 type: 'tool_use',
                 id: tc.id,
                 name: tc.function.name,
-                input: JSON.parse(tc.function.arguments || '{}'),
+                input,
             });
         }
     }
@@ -1536,7 +1748,15 @@ function convertGoogleResponse(data) {
 
     const content = [];
     for (const part of candidate.content?.parts || []) {
-        if (part.text) content.push({ type: 'text', text: part.text });
+        // Gemini 2.5 models return internal reasoning as parts with
+        // part.thought === true.  Promote these to thinking blocks so
+        // the agent loop can display them correctly rather than treating
+        // them as regular response text.
+        if (part.thought && part.text) {
+            content.push({ type: 'thinking', thinking: part.text });
+        } else if (part.text) {
+            content.push({ type: 'text', text: part.text });
+        }
         // F4: surface function calls (tool_use) from Gemini responses
         if (part.functionCall) {
             content.push({

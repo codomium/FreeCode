@@ -1190,6 +1190,9 @@
         return currentStreamMsg;
     }
 
+    /** Minimum ms between full markdown re-renders while streaming (~10 fps). */
+    const STREAM_RENDER_INTERVAL_MS = 100;
+
     function appendStreamText(text) {
         const el = getOrCreateAssistantMessage();
         // Accumulate raw text on element, re-render markdown periodically
@@ -1205,17 +1208,23 @@
             if (tps > 0) setLoading(true, `Generating… (${tps} t/s)`);
         }
 
-        // Throttle rendering to avoid layout thrashing
+        // Throttle rendering: re-render markdown at most every STREAM_RENDER_INTERVAL_MS.
+        // This caps CPU at ~10 re-renders/s regardless of token arrival rate, which is
+        // still visually smooth while avoiding expensive full-text regex passes at 60fps.
         if (!el._renderPending) {
             el._renderPending = true;
-            requestAnimationFrame(() => {
+            const sinceLastRender = Date.now() - (el._lastRenderTime || 0);
+            const delay = Math.max(0, STREAM_RENDER_INTERVAL_MS - sinceLastRender);
+            setTimeout(() => {
                 el._renderPending = false;
+                el._lastRenderTime = Date.now();
                 if (el._rawText) {
                     el.innerHTML = renderMarkdown(el._rawText);
                     el.classList.add('streaming-cursor');
+                    // Scroll in the same batch; scrollToBottom() already checks autoScroll
+                    scrollToBottom();
                 }
-                scrollToBottom();
-            });
+            }, delay);
         }
     }
 
