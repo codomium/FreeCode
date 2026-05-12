@@ -886,7 +886,11 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
         } else if (Array.isArray(msg.content)) {
             const parts = [];
             for (const block of msg.content) {
-                if (block.type === 'text') {
+                if (block.type === 'thinking' && block._googleThoughtSignature) {
+                    // Re-emit the thought signature required by Gemini thinking models.
+                    // Without this, the API returns 400 "missing thought_signature".
+                    parts.push({ thought: true, thoughtSignature: block._googleThoughtSignature });
+                } else if (block.type === 'text') {
                     parts.push({ text: block.text || '' });
                 } else if (block.type === 'tool_use') {
                     // assistant called a tool → Gemini functionCall part
@@ -1023,15 +1027,18 @@ async function* streamGoogleResponse(response) {
         const candidate = chunk.candidates?.[0];
         if (!candidate) return;
         for (const part of candidate.content?.parts || []) {
-            if (part.text) {
+            if (part.thought) {
                 // Gemini 2.5 models mark internal reasoning with part.thought === true.
                 // Route these as thinking_delta events so the agent loop displays them
                 // correctly and doesn't confuse thinking with response text.
-                if (part.thought) {
-                    yield { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: part.text } };
-                } else {
-                    yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
-                }
+                // Carry thoughtSignature so it can be preserved for subsequent turns.
+                yield {
+                    type: 'content_block_delta',
+                    delta: { type: 'thinking_delta', thinking: part.text || '' },
+                    ...(part.thoughtSignature && { _googleThoughtSignature: part.thoughtSignature }),
+                };
+            } else if (part.text) {
+                yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
             }
             if (part.functionCall) {
                 yield { type: 'google_function_call', functionCall: part.functionCall };
@@ -1095,6 +1102,7 @@ function accumulateGoogleStream(events) {
 
     let textContent = '';
     let thinkingContent = '';
+    let googleThoughtSignature = null;
 
     for (const event of events) {
         if (event.type === 'content_block_delta') {
@@ -1103,6 +1111,8 @@ function accumulateGoogleStream(events) {
             } else if (event.delta?.type === 'thinking_delta') {
                 // Gemini 2.5 thinking tokens arrive as thinking_delta events
                 thinkingContent += event.delta.thinking || '';
+                // Capture the thought signature if present (may arrive on any chunk)
+                if (event._googleThoughtSignature) googleThoughtSignature = event._googleThoughtSignature;
             }
         } else if (event.type === 'google_function_call') {
             const fc = event.functionCall;
@@ -1119,8 +1129,12 @@ function accumulateGoogleStream(events) {
         }
     }
 
-    if (thinkingContent) {
-        message.content.unshift({ type: 'thinking', thinking: thinkingContent });
+    if (thinkingContent || googleThoughtSignature) {
+        message.content.unshift({
+            type: 'thinking',
+            thinking: thinkingContent,
+            ...(googleThoughtSignature && { _googleThoughtSignature: googleThoughtSignature }),
+        });
     }
     if (textContent) {
         // Insert text after any thinking block but before tool_use blocks
@@ -1751,9 +1765,14 @@ function convertGoogleResponse(data) {
         // Gemini 2.5 models return internal reasoning as parts with
         // part.thought === true.  Promote these to thinking blocks so
         // the agent loop can display them correctly rather than treating
-        // them as regular response text.
-        if (part.thought && part.text) {
-            content.push({ type: 'thinking', thinking: part.text });
+        // them as regular response text.  Preserve thoughtSignature so it
+        // can be re-sent in subsequent turns (required by thinking models).
+        if (part.thought) {
+            content.push({
+                type: 'thinking',
+                thinking: part.text || '',
+                ...(part.thoughtSignature && { _googleThoughtSignature: part.thoughtSignature }),
+            });
         } else if (part.text) {
             content.push({ type: 'text', text: part.text });
         }
