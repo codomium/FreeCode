@@ -250,8 +250,11 @@ const PROVIDERS = {
  */
 export function getProvider(model) {
     if (model.startsWith('claude') || model.startsWith('anthropic')) return PROVIDERS.anthropic;
-    // OpenAI GPT family and reasoning series (o1, o3, o4, o5…).
-    // Use /^o\d+(-|$)/ to avoid false-positives like 'output-formatter'.
+    // OpenAI GPT family and reasoning series (o1, o3, o4…).
+    // /^o\d+(-|$)/ matches 'o1', 'o3-mini', 'o4-mini' etc. while preventing
+    // false-positives on names like 'output-formatter' or 'optimization-v2'.
+    // The pattern is intentionally future-proof: any single 'o' + digits model
+    // (e.g. o5, o6) will automatically route to OpenAI without code changes.
     if (model.startsWith('gpt') || /^o\d+(-|$)/.test(model)) return PROVIDERS.openai;
     if (model.startsWith('gemini')) return PROVIDERS.google;
     // NVIDIA-hosted models use a namespaced format: "publisher/model-name"

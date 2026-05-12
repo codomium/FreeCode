@@ -114,8 +114,8 @@ function toOpenAITools(toolDefs) {
 function extractGoogleToolName(toolUseId) {
     if (!toolUseId) return '';
     // Strip a trailing `_<pure-digits>` suffix.
-    // Regex: underscore, one-or-more digits, end-of-string.
-    return toolUseId.replace(/_\d+$/, '') || toolUseId;
+    // String.replace() always returns a string, so no fallback is needed.
+    return toolUseId.replace(/_\d+$/, '');
 }
 
 /**
@@ -798,10 +798,12 @@ async function callOpenAI(model, state, toolDefs, settings, stream) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY not set');
 
-    // Use the shared message builder so assistant tool_use blocks are correctly
-    // converted to tool_calls and tool_result blocks become 'tool' role messages.
-    // The old inline builder skipped assistant tool_calls entirely, breaking
-    // multi-turn conversations whenever the model invoked any tool.
+    // Use the shared message builder so multi-turn tool conversations are
+    // correctly serialised for OpenAI-compatible APIs:
+    //   • assistant turns with tool_use blocks → {role:'assistant', tool_calls:[…]}
+    //   • user turns with tool_result blocks  → {role:'tool', tool_call_id:…}
+    // The old inline builder emitted only tool_result messages and omitted the
+    // preceding assistant tool_calls, which OpenAI rejects (400 Bad Request).
     const messages = buildOpenAIMessages(state);
 
     const tools = toOpenAITools(toolDefs);
@@ -1622,8 +1624,10 @@ function convertOpenAIResponse(data) {
             try {
                 input = JSON.parse(tc.function.arguments || '{}');
             } catch (e) {
+                // Truncate raw args to avoid accidentally logging secrets or PII.
+                const preview = (tc.function.arguments || '').slice(0, 80);
                 process.stderr.write(
-                    `[open-claude-code] Warning: could not parse tool arguments for "${tc.function.name}": ${e.message} — args: ${tc.function.arguments}\n`
+                    `[open-claude-code] Warning: could not parse tool arguments for "${tc.function.name}": ${e.message} — args (truncated): ${preview}\n`
                 );
             }
             content.push({
