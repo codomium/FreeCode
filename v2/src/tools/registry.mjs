@@ -66,13 +66,21 @@ export function createToolRegistry() {
         tools.set(Tool.name, Tool);
     }
 
+    // Cached tool definitions list — rebuilt whenever new tools are registered.
+    // tools.list() is called on every API turn; avoiding the O(n) map+rebuild
+    // on each call shaves a small but consistent amount of latency.
+    let _listCache = null;
+    function invalidateListCache() { _listCache = null; }
+
     const registry = {
         list() {
-            return [...tools.values()].map(t => ({
+            if (_listCache) return _listCache;
+            _listCache = [...tools.values()].map(t => ({
                 name: t.name,
                 description: t.description,
                 input_schema: t.inputSchema,
             }));
+            return _listCache;
         },
 
         async call(name, input) {
@@ -85,6 +93,7 @@ export function createToolRegistry() {
 
         register(tool) {
             tools.set(tool.name, tool);
+            invalidateListCache();
         },
 
         get(name) {
@@ -108,6 +117,7 @@ export function createToolRegistry() {
                 };
                 tools.set(mcpTool.name, wrapper);
             }
+            invalidateListCache();
         },
     };
 

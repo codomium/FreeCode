@@ -211,6 +211,9 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     let currentText = '';
                     let currentThinking = '';
                     let repetitionDetected = false;
+                    // Only run the expensive repetition check every 50 chars of
+                    // new text (not on every token) to keep the streaming hot path lean.
+                    let textLenAtLastRepCheck = 0;
 
                     for await (const event of response.events) {
                         if (event.type === 'content_block_start') {
@@ -221,10 +224,15 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                             if (event.delta?.type === 'text_delta') {
                                 currentText += event.delta.text;
                                 yield { type: 'stream_event', text: event.delta.text };
-                                // Abort stream if the model is stuck repeating itself
-                                if (detectRepetition(currentText)) {
-                                    repetitionDetected = true;
-                                    break;
+                                // Abort stream if the model is stuck repeating itself.
+                                // Throttled: only check after 50+ new chars to avoid
+                                // O(n²) substring work on every single streaming token.
+                                if (currentText.length - textLenAtLastRepCheck >= 50) {
+                                    textLenAtLastRepCheck = currentText.length;
+                                    if (detectRepetition(currentText)) {
+                                        repetitionDetected = true;
+                                        break;
+                                    }
                                 }
                             } else if (event.delta?.type === 'thinking_delta') {
                                 currentThinking += event.delta.thinking;
@@ -648,6 +656,11 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
                 'Content-Type': 'application/json',
                 'x-api-key': apiKey,
                 'anthropic-version': '2023-06-01',
+                // Enable prompt caching so cache_control blocks on the system
+                // prompt are honoured.  Without this header Anthropic silently
+                // ignores cache_control and re-processes the full system prompt
+                // on every turn, adding hundreds of ms to TTFT in multi-turn sessions.
+                'anthropic-beta': 'prompt-caching-2024-07-31',
             },
             body: JSON.stringify(body),
         });
