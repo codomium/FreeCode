@@ -308,6 +308,10 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
         if (toolUseBlocks.length > 0) {
             const toolResults = [];
 
+            // ── Phase 1: sequential pre-checks (hooks + permissions) ──────────
+            // Permission dialogs may require user interaction, so these must run
+            // one at a time.  We collect the blocks that are approved for execution.
+            const approvedBlocks = [];
             for (const block of toolUseBlocks) {
                 // Run pre-tool hooks
                 if (hooks) {
@@ -339,9 +343,15 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     continue;
                 }
 
-                // Execute tool
                 yield { type: 'tool_progress', tool: block.name, status: 'running', input: block.input };
+                approvedBlocks.push(block);
+            }
 
+            // ── Phase 2: execute all approved tools in parallel ───────────────
+            // For streaming tools (e.g. Bash), we buffer the events so they can
+            // be yielded in deterministic order in Phase 3.
+            const execResults = await Promise.all(approvedBlocks.map(async (block) => {
+                const streamEvents = []; // buffered tool_meta / tool_stream events
                 let result;
                 let isToolError = false;
                 try {
@@ -349,12 +359,8 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     // Detect async-generator tools (e.g. Bash with live streaming)
                     if (callResult !== null && typeof callResult === 'object' && typeof callResult[Symbol.asyncIterator] === 'function') {
                         for await (const event of callResult) {
-                            if (event.type === 'meta') {
-                                // Forward metadata (e.g. bash jobId for stdin)
-                                yield { type: 'tool_meta', tool: block.name, ...event };
-                            } else if (event.type === 'chunk') {
-                                // Live output chunk
-                                yield { type: 'tool_stream', tool: block.name, chunk: event.data, stream: event.stream };
+                            if (event.type === 'meta' || event.type === 'chunk') {
+                                streamEvents.push(event);
                             } else if (event.type === 'done') {
                                 result = event.result;
                             }
@@ -372,6 +378,54 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     result = await hooks.runPostToolUse(block.name, result);
                 }
 
+                // Compute verifyWrites data while we're still in the parallel phase
+                // (reads are cheap and don't mutate shared state)
+                const verifyWarnings = [];
+                if (settings.verifyWrites && !isToolError && typeof result === 'string') {
+                    if (block.name === 'Write' && result.startsWith('File written:')) {
+                        const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
+                        if (filePath && typeof block.input?.content === 'string') {
+                            const { match, diff } = verifyWrite(filePath, block.input.content);
+                            if (!match) {
+                                verifyWarnings.push(`Write verification failed for ${filePath} — on-disk content differs from what was written:\n${diff}`);
+                            }
+                        }
+                    } else if (block.name === 'Edit' && result.startsWith('File updated:')) {
+                        const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
+                        if (filePath && typeof block.input?.new_string === 'string') {
+                            const { match, message } = verifyEdit(filePath, block.input.old_string || '', block.input.new_string);
+                            if (!match) verifyWarnings.push(message);
+                        }
+                    } else if (block.name === 'MultiEdit' && result.startsWith('Applied')) {
+                        const edits = Array.isArray(block.input?.edits) ? block.input.edits : [];
+                        for (const edit of edits) {
+                            if (!edit.file_path || typeof edit.new_string !== 'string') continue;
+                            const filePath = path.resolve(edit.file_path);
+                            const { match, message } = verifyEdit(filePath, edit.old_string || '', edit.new_string);
+                            if (!match) verifyWarnings.push(message);
+                        }
+                    }
+                }
+
+                return { block, result, isToolError, streamEvents, verifyWarnings };
+            }));
+
+            // ── Phase 3: yield events + post-process in original order ────────
+            // Stateful operations (stuck detector, PlanGraph, reasoning log) run
+            // sequentially here so their ordering remains deterministic.
+            for (const execResult of execResults) {
+                const { block, streamEvents, verifyWarnings } = execResult;
+                let { result, isToolError } = execResult;
+
+                // Replay buffered streaming events (tool_meta / tool_stream)
+                for (const event of streamEvents) {
+                    if (event.type === 'meta') {
+                        yield { type: 'tool_meta', tool: block.name, ...event };
+                    } else if (event.type === 'chunk') {
+                        yield { type: 'tool_stream', tool: block.name, chunk: event.data, stream: event.stream };
+                    }
+                }
+
                 // Also treat result strings that are tool-error messages as errors
                 if (!isToolError && typeof result === 'string' &&
                     (result.startsWith('Tool error:') || result.startsWith('Error:') ||
@@ -379,50 +433,9 @@ export function createAgentLoop({ model, tools, permissions, settings, hooks }) 
                     isToolError = true;
                 }
 
-                // Verify write: after a successful Write call, read the file back and
-                // diff it against the intended content.  Emit a warning if they diverge.
-                // F2: gated behind settings.verifyWrites (default false) to avoid
-                //     redundant fs reads — the tool result already includes a preview.
-                if (settings.verifyWrites && block.name === 'Write' && !isToolError && typeof result === 'string' && result.startsWith('File written:')) {
-                    const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
-                    if (filePath && typeof block.input?.content === 'string') {
-                        const { match, diff } = verifyWrite(filePath, block.input.content);
-                        if (!match) {
-                            yield {
-                                type: 'warning',
-                                tool: block.name,
-                                message: `Write verification failed for ${filePath} — on-disk content differs from what was written:\n${diff}`,
-                            };
-                        }
-                    }
-                }
-
-                // Verify edit: after a successful Edit call, read the file back and
-                // confirm new_string is present and old_string is gone.
-                // F2: gated behind settings.verifyWrites (default false).
-                if (settings.verifyWrites && block.name === 'Edit' && !isToolError && typeof result === 'string' && result.startsWith('File updated:')) {
-                    const filePath = block.input?.file_path ? path.resolve(block.input.file_path) : null;
-                    if (filePath && typeof block.input?.new_string === 'string') {
-                        const { match, message } = verifyEdit(filePath, block.input.old_string || '', block.input.new_string);
-                        if (!match) {
-                            yield { type: 'warning', tool: block.name, message };
-                        }
-                    }
-                }
-
-                // Verify multi-edit: after a successful MultiEdit call, verify each
-                // edit's new_string is present in the corresponding file.
-                // F2: gated behind settings.verifyWrites (default false).
-                if (settings.verifyWrites && block.name === 'MultiEdit' && !isToolError && typeof result === 'string' && result.startsWith('Applied')) {
-                    const edits = Array.isArray(block.input?.edits) ? block.input.edits : [];
-                    for (const edit of edits) {
-                        if (!edit.file_path || typeof edit.new_string !== 'string') continue;
-                        const filePath = path.resolve(edit.file_path);
-                        const { match, message } = verifyEdit(filePath, edit.old_string || '', edit.new_string);
-                        if (!match) {
-                            yield { type: 'warning', tool: block.name, message };
-                        }
-                    }
+                // Emit any verifyWrites warnings collected during parallel execution
+                for (const msg of verifyWarnings) {
+                    yield { type: 'warning', tool: block.name, message: msg };
                 }
 
                 // Loop-detection: record this tool call and check for stuck conditions.
