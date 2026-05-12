@@ -40,6 +40,17 @@ const _rlCustom    = new RateLimiter({ maxRetries: 3, baseDelay: 3000 });
 let _customProvidersCache = null;   // parsed Array or null
 let _customProvidersJson  = null;   // the env string that produced the cache
 
+// ── Provider base-URL cache ──────────────────────────────────────────────────
+// Evaluated once at module load; refreshed only when the env var is absent
+// (empty string → default) so changes in long-lived processes are still
+// picked up without paying repeated string ops on every API call.
+function _resolveAnthropicBaseUrl() {
+    return (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
+}
+// Snapshot at load time — process.env.ANTHROPIC_BASE_URL is effectively
+// static in normal usage (set before the process starts).
+let _anthropicBaseUrl = _resolveAnthropicBaseUrl();
+
 /**
  * Find a custom provider definition (from CUSTOM_PROVIDERS_JSON) that owns
  * the given model ID.  Returns the provider object or null.
@@ -87,6 +98,24 @@ function toOpenAITools(toolDefs) {
         function: { name: t.name, description: t.description, parameters: t.input_schema },
     }));
     return _openAIToolDefsOut;
+}
+
+/**
+ * Extract the function/tool name from a Gemini call ID.
+ *
+ * Gemini does not provide stable call IDs; we generate them as
+ * `${functionName}_${counter}` (see convertGoogleResponse / accumulateGoogleStream).
+ * When building a functionResponse we need the original function name, which
+ * is recovered by stripping the trailing `_<digits>` counter suffix.
+ *
+ * @param {string} toolUseId — e.g. "Read_1", "Bash_42", "my_tool_runner_7"
+ * @returns {string} — e.g. "Read", "Bash", "my_tool_runner"
+ */
+function extractGoogleToolName(toolUseId) {
+    if (!toolUseId) return '';
+    // Strip a trailing `_<pure-digits>` suffix.
+    // Regex: underscore, one-or-more digits, end-of-string.
+    return toolUseId.replace(/_\d+$/, '') || toolUseId;
 }
 
 /**
@@ -659,9 +688,10 @@ function detectProvider(model) {
     // Check user-configured custom providers first.
     // findCustomProvider is now cached — calling it once here is cheap.
     if (findCustomProvider(model)) return 'custom';
-    // OpenAI models: gpt-* family and the o-reasoning series (o1, o3, o4, …).
-    // Match any "o" followed by a digit so future releases (o5, o6…) work too.
-    if (model.startsWith('gpt-') || /^o\d/.test(model)) return 'openai';
+    // OpenAI GPT family and reasoning series (o1, o3, o4, o5…).
+    // Use /^o\d+(-|$)/ rather than /^o\d/ to avoid false-positives like
+    // 'output-formatter' or 'optimization-v2' matching the OpenAI branch.
+    if (model.startsWith('gpt-') || /^o\d+(-|$)/.test(model)) return 'openai';
     if (model.startsWith('gemini')) return 'google';
     if (isNvidiaModel(model)) return 'nvidia';
     return 'anthropic';
@@ -711,10 +741,9 @@ async function callAnthropic(model, state, toolDefs, settings, stream) {
 
     const rateLimiter = _rlAnthropic;
     rateLimiter.reset();
-    const anthropicBaseUrl = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
     let res;
     for (;;) {
-        res = await fetch(`${anthropicBaseUrl}/v1/messages`, {
+        res = await fetch(`${_anthropicBaseUrl}/v1/messages`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -864,11 +893,7 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
                     // user returned tool result → Gemini functionResponse part.
                     // Gemini requires functionResponse.name to equal the
                     // functionCall.name (the tool name), not the call ID.
-                    // Our IDs for Gemini calls are generated as `${name}_${counter}`
-                    // (see convertGoogleResponse / accumulateGoogleStream), so we
-                    // strip the trailing `_<digits>` suffix to recover the name.
-                    const rawId = block.tool_use_id || '';
-                    const fnName = rawId.replace(/_\d+$/, '') || rawId;
+                    const fnName = extractGoogleToolName(block.tool_use_id);
                     const responseContent = typeof block.content === 'string'
                         ? block.content
                         : JSON.stringify(block.content);
@@ -1594,7 +1619,13 @@ function convertOpenAIResponse(data) {
     if (choice.message?.tool_calls) {
         for (const tc of choice.message.tool_calls) {
             let input = {};
-            try { input = JSON.parse(tc.function.arguments || '{}'); } catch { input = {}; }
+            try {
+                input = JSON.parse(tc.function.arguments || '{}');
+            } catch (e) {
+                process.stderr.write(
+                    `[open-claude-code] Warning: could not parse tool arguments for "${tc.function.name}": ${e.message} — args: ${tc.function.arguments}\n`
+                );
+            }
             content.push({
                 type: 'tool_use',
                 id: tc.id,

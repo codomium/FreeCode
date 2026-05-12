@@ -250,8 +250,9 @@ const PROVIDERS = {
  */
 export function getProvider(model) {
     if (model.startsWith('claude') || model.startsWith('anthropic')) return PROVIDERS.anthropic;
-    // OpenAI GPT family and reasoning series (o1, o3, o4, o5…)
-    if (model.startsWith('gpt') || /^o\d/.test(model)) return PROVIDERS.openai;
+    // OpenAI GPT family and reasoning series (o1, o3, o4, o5…).
+    // Use /^o\d+(-|$)/ to avoid false-positives like 'output-formatter'.
+    if (model.startsWith('gpt') || /^o\d+(-|$)/.test(model)) return PROVIDERS.openai;
     if (model.startsWith('gemini')) return PROVIDERS.google;
     // NVIDIA-hosted models use a namespaced format: "publisher/model-name"
     if (isNvidiaModel(model)) return PROVIDERS.nvidia;
