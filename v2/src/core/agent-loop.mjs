@@ -1286,12 +1286,22 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
 
     const messages = buildOpenAIMessages(state);
 
+    // Some OpenAI-compatible providers (notably several OpenRouter free models)
+    // reject explicit sampling fields and require provider defaults instead.
+    // Send temperature/top_p only when explicitly configured for this provider.
+    const customTemperature = typeof providerCfg.temperature === 'number'
+        ? providerCfg.temperature
+        : null;
+    const customTopP = typeof providerCfg.top_p === 'number'
+        ? providerCfg.top_p
+        : (typeof providerCfg.topP === 'number' ? providerCfg.topP : null);
+
     const body = {
         model,
         messages,
         max_tokens: resolveMaxOutputTokens(settings),
-        temperature: 1.00,
-        top_p: 1.00,
+        ...(customTemperature !== null && { temperature: customTemperature }),
+        ...(customTopP !== null && { top_p: customTopP }),
         stream: !!stream,
         ...(toolDefs.length > 0 && !disableTools && {
             tools: toOpenAITools(toolDefs),
@@ -1580,12 +1590,51 @@ async function* streamOpenAIResponse(response) {
                 if (raw && raw !== '[DONE]') {
                     try {
                         const chunk = JSON.parse(raw);
-                        const delta = chunk.choices?.[0]?.delta;
-                        if (delta?.content) {
+                        if (chunk.error) {
+                            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+                        }
+                        const hasChoices = Array.isArray(chunk.choices) && chunk.choices.length > 0;
+                        if (!hasChoices && chunk.usage) {
                             yield {
-                                type: 'content_block_delta',
-                                delta: { type: 'text_delta', text: delta.content },
+                                type: 'usage',
+                                input_tokens: chunk.usage.prompt_tokens || 0,
+                                output_tokens: chunk.usage.completion_tokens || 0,
                             };
+                        } else {
+                            const delta = chunk.choices?.[0]?.delta;
+                            if (delta?.reasoning_content || delta?.thinking) {
+                                yield {
+                                    type: 'content_block_delta',
+                                    delta: { type: 'thinking_delta', thinking: delta.reasoning_content || delta.thinking },
+                                };
+                            }
+                            if (delta?.content) {
+                                yield {
+                                    type: 'content_block_delta',
+                                    delta: { type: 'text_delta', text: delta.content },
+                                };
+                            }
+                            if (delta?.tool_calls) {
+                                for (const tc of delta.tool_calls) {
+                                    yield {
+                                        type: 'content_block_delta',
+                                        delta: {
+                                            type: 'tool_call_delta',
+                                            index: tc.index,
+                                            id: tc.id,
+                                            name: tc.function?.name,
+                                            partial_json: tc.function?.arguments || '',
+                                        },
+                                    };
+                                }
+                            }
+                            const finishReason = chunk.choices?.[0]?.finish_reason;
+                            if (finishReason) {
+                                yield {
+                                    type: 'message_delta',
+                                    delta: { stop_reason: finishReason === 'stop' ? 'end_turn' : finishReason },
+                                };
+                            }
                         }
                     } catch {
                         // ignore malformed final chunk
