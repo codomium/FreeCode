@@ -830,6 +830,38 @@ async function* streamGoogleResponse(response) {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    /**
+     * Parse a single Gemini SSE data payload and yield agent-loop events.
+     * @param {string} raw - JSON string after the "data:" prefix
+     */
+    async function* yieldChunkEvents(raw) {
+        if (!raw || raw === '[DONE]') {
+            yield { type: 'done' };
+            return;
+        }
+        let chunk;
+        try { chunk = JSON.parse(raw); } catch { return; }
+        if (chunk.error) {
+            throw new Error(chunk.error.message || JSON.stringify(chunk.error));
+        }
+        const candidate = chunk.candidates?.[0];
+        if (!candidate) return;
+        for (const part of candidate.content?.parts || []) {
+            if (part.text) {
+                yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
+            }
+            if (part.functionCall) {
+                yield { type: 'google_function_call', functionCall: part.functionCall };
+            }
+        }
+        if (candidate.finishReason) {
+            yield {
+                type: 'message_delta',
+                delta: { stop_reason: candidate.finishReason === 'STOP' ? 'end_turn' : candidate.finishReason },
+            };
+        }
+    }
+
     try {
         while (true) {
             const { done, value } = await reader.read();
@@ -841,84 +873,22 @@ async function* streamGoogleResponse(response) {
 
             for (const line of lines) {
                 const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith(':')) continue;
-                if (!trimmed.startsWith('data:')) continue;
-
+                if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data:')) continue;
                 const raw = trimmed.slice(5).trim();
-                if (!raw || raw === '[DONE]') {
-                    yield { type: 'done' };
-                    return;
-                }
-
-                let chunk;
-                try { chunk = JSON.parse(raw); } catch { continue; }
-
-                if (chunk.error) {
-                    throw new Error(chunk.error.message || JSON.stringify(chunk.error));
-                }
-
-                const candidate = chunk.candidates?.[0];
-                if (!candidate) continue;
-
-                // Surface text and function-call parts
-                for (const part of candidate.content?.parts || []) {
-                    if (part.text) {
-                        yield {
-                            type: 'content_block_delta',
-                            delta: { type: 'text_delta', text: part.text },
-                        };
-                    }
-                    if (part.functionCall) {
-                        yield { type: 'google_function_call', functionCall: part.functionCall };
-                    }
-                }
-
-                // Surface finish reason
-                if (candidate.finishReason) {
-                    yield {
-                        type: 'message_delta',
-                        delta: {
-                            stop_reason: candidate.finishReason === 'STOP' ? 'end_turn' : candidate.finishReason,
-                        },
-                    };
+                for await (const event of yieldChunkEvents(raw)) {
+                    if (event.type === 'done') return;
+                    yield event;
                 }
             }
         }
 
-        // Flush remaining buffer
-        if (buffer.trim()) {
-            const trimmed = buffer.trim();
-            if (trimmed.startsWith('data:')) {
-                const raw = trimmed.slice(5).trim();
-                if (raw && raw !== '[DONE]') {
-                    try {
-                        const chunk = JSON.parse(raw);
-                        const candidate = chunk.candidates?.[0];
-                        if (candidate) {
-                            for (const part of candidate.content?.parts || []) {
-                                if (part.text) {
-                                    yield {
-                                        type: 'content_block_delta',
-                                        delta: { type: 'text_delta', text: part.text },
-                                    };
-                                }
-                                if (part.functionCall) {
-                                    yield { type: 'google_function_call', functionCall: part.functionCall };
-                                }
-                            }
-                            if (candidate.finishReason) {
-                                yield {
-                                    type: 'message_delta',
-                                    delta: {
-                                        stop_reason: candidate.finishReason === 'STOP' ? 'end_turn' : candidate.finishReason,
-                                    },
-                                };
-                            }
-                        }
-                    } catch {
-                        // ignore malformed final chunk
-                    }
-                }
+        // Flush any remaining buffer content
+        const trimmed = buffer.trim();
+        if (trimmed.startsWith('data:')) {
+            const raw = trimmed.slice(5).trim();
+            for await (const event of yieldChunkEvents(raw)) {
+                if (event.type === 'done') return;
+                yield event;
             }
         }
     } finally {
@@ -1114,8 +1084,9 @@ async function callCustomProvider(providerCfg, model, state, toolDefs, settings,
     // Do NOT send chat_template_kwargs — its dict value causes a server-side
     // HTTP 500 "unhashable type: 'dict'" error in NVIDIA's Python backend.
     // Also respect an explicit providerCfg.disableTools flag.
-    const isNvidiaThinkingModel = NVIDIA_THINKING_CAPABLE_MODELS.has(model) || NVIDIA_THINKING_CAPABLE_MODELS.has(nvModelBase(model));
-    const isAlwaysNoTools = NVIDIA_ALWAYS_DISABLE_TOOLS.has(model) || NVIDIA_ALWAYS_DISABLE_TOOLS.has(nvModelBase(model));
+    const baseModel = nvModelBase(model);
+    const isNvidiaThinkingModel = NVIDIA_THINKING_CAPABLE_MODELS.has(model) || NVIDIA_THINKING_CAPABLE_MODELS.has(baseModel);
+    const isAlwaysNoTools = NVIDIA_ALWAYS_DISABLE_TOOLS.has(model) || NVIDIA_ALWAYS_DISABLE_TOOLS.has(baseModel);
     const thinkingEnabled = process.env.NVIDIA_THINKING_MODE === 'true';
     const disableTools = providerCfg.disableTools || isAlwaysNoTools || (isNvidiaThinkingModel && thinkingEnabled);
 
