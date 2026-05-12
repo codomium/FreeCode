@@ -889,6 +889,8 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
                 if (block.type === 'thinking' && block._googleThoughtSignature) {
                     // Re-emit the thought signature required by Gemini thinking models.
                     // Without this, the API returns 400 "missing thought_signature".
+                    // _googleThoughtSignature is an internal field (underscore = internal)
+                    // that mirrors the API field `thoughtSignature` returned by Google.
                     parts.push({ thought: true, thoughtSignature: block._googleThoughtSignature });
                 } else if (block.type === 'text') {
                     parts.push({ text: block.text || '' });
@@ -1130,6 +1132,9 @@ function accumulateGoogleStream(events) {
     }
 
     if (thinkingContent || googleThoughtSignature) {
+        // An empty thinking block with only a signature is valid: Gemini may redact
+        // the thought text while still providing a thoughtSignature that must be
+        // preserved and re-sent in subsequent turns.
         message.content.unshift({
             type: 'thinking',
             thinking: thinkingContent,
