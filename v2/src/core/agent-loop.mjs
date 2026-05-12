@@ -930,6 +930,13 @@ async function callGoogle(model, state, toolDefs, settings, stream) {
             systemInstruction: { parts: [{ text: state.systemPrompt }] },
         }),
         ...(googleTools && { tools: googleTools }),
+        // Without generationConfig.maxOutputTokens, Gemini defaults to ~8192
+        // tokens and silently truncates long agent responses / thinking output.
+        // Setting it explicitly to the configured limit lets agents complete
+        // large tasks without hitting the model's conservative default.
+        generationConfig: {
+            maxOutputTokens: resolveMaxOutputTokens(settings),
+        },
     };
 
     const rateLimiter = _rlGoogle;
@@ -1017,7 +1024,14 @@ async function* streamGoogleResponse(response) {
         if (!candidate) return;
         for (const part of candidate.content?.parts || []) {
             if (part.text) {
-                yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
+                // Gemini 2.5 models mark internal reasoning with part.thought === true.
+                // Route these as thinking_delta events so the agent loop displays them
+                // correctly and doesn't confuse thinking with response text.
+                if (part.thought) {
+                    yield { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: part.text } };
+                } else {
+                    yield { type: 'content_block_delta', delta: { type: 'text_delta', text: part.text } };
+                }
             }
             if (part.functionCall) {
                 yield { type: 'google_function_call', functionCall: part.functionCall };
@@ -1080,11 +1094,15 @@ function accumulateGoogleStream(events) {
     };
 
     let textContent = '';
+    let thinkingContent = '';
 
     for (const event of events) {
         if (event.type === 'content_block_delta') {
             if (event.delta?.type === 'text_delta') {
                 textContent += event.delta.text || '';
+            } else if (event.delta?.type === 'thinking_delta') {
+                // Gemini 2.5 thinking tokens arrive as thinking_delta events
+                thinkingContent += event.delta.thinking || '';
             }
         } else if (event.type === 'google_function_call') {
             const fc = event.functionCall;
@@ -1101,9 +1119,17 @@ function accumulateGoogleStream(events) {
         }
     }
 
+    if (thinkingContent) {
+        message.content.unshift({ type: 'thinking', thinking: thinkingContent });
+    }
     if (textContent) {
-        // Insert text before any tool_use blocks to preserve natural order
-        message.content.unshift({ type: 'text', text: textContent });
+        // Insert text after any thinking block but before tool_use blocks
+        const insertAt = message.content.findIndex(b => b.type !== 'thinking');
+        if (insertAt === -1) {
+            message.content.push({ type: 'text', text: textContent });
+        } else {
+            message.content.splice(insertAt, 0, { type: 'text', text: textContent });
+        }
     }
 
     if (!message.stop_reason) message.stop_reason = 'end_turn';
@@ -1481,6 +1507,19 @@ async function* streamOpenAIResponse(response) {
                     throw new Error(chunk.error.message || JSON.stringify(chunk.error));
                 }
 
+                // Usage-only chunk produced by stream_options:{include_usage:true}.
+                // These have an empty choices array and a populated usage object.
+                // The check is: choices is missing or empty AND usage is present.
+                const hasChoices = Array.isArray(chunk.choices) && chunk.choices.length > 0;
+                if (!hasChoices && chunk.usage) {
+                    yield {
+                        type: 'usage',
+                        input_tokens: chunk.usage.prompt_tokens || 0,
+                        output_tokens: chunk.usage.completion_tokens || 0,
+                    };
+                    continue;
+                }
+
                 const delta = chunk.choices?.[0]?.delta;
                 if (!delta) continue;
 
@@ -1590,6 +1629,11 @@ function accumulateOpenAIStream(events) {
             }
         } else if (event.type === 'message_delta') {
             if (event.delta?.stop_reason) message.stop_reason = event.delta.stop_reason;
+        } else if (event.type === 'usage') {
+            // Produced when stream_options:{include_usage:true} is set.
+            // Overwrite the zero placeholders with the real token counts.
+            message.usage.input_tokens = event.input_tokens;
+            message.usage.output_tokens = event.output_tokens;
         }
     }
 
@@ -1655,7 +1699,15 @@ function convertGoogleResponse(data) {
 
     const content = [];
     for (const part of candidate.content?.parts || []) {
-        if (part.text) content.push({ type: 'text', text: part.text });
+        // Gemini 2.5 models return internal reasoning as parts with
+        // part.thought === true.  Promote these to thinking blocks so
+        // the agent loop can display them correctly rather than treating
+        // them as regular response text.
+        if (part.thought && part.text) {
+            content.push({ type: 'thinking', thinking: part.text });
+        } else if (part.text) {
+            content.push({ type: 'text', text: part.text });
+        }
         // F4: surface function calls (tool_use) from Gemini responses
         if (part.functionCall) {
             content.push({
