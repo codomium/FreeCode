@@ -1717,10 +1717,10 @@ function convertOpenAIResponse(data) {
             try {
                 input = JSON.parse(tc.function.arguments || '{}');
             } catch (e) {
-                // Truncate raw args to avoid accidentally logging secrets or PII.
-                const preview = (tc.function.arguments || '').slice(0, 80);
+                // Log only length to avoid accidentally exposing secrets or PII.
+                const argLen = (tc.function.arguments || '').length;
                 process.stderr.write(
-                    `[open-claude-code] Warning: could not parse tool arguments for "${tc.function.name}": ${e.message} — args (truncated): ${preview}\n`
+                    `[open-claude-code] Warning: could not parse tool arguments for "${tc.function.name}": ${e.message} (${argLen} chars)\n`
                 );
             }
             content.push({
